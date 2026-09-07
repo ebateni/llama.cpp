@@ -31,6 +31,9 @@ struct htp_allreduce_kernel_params {
     int32_t rank_nelem;
     int32_t n_dsts;
     int32_t is_row_bcast;
+    int32_t fence_mode;     // 0: dual barrier, 1: single arrival barrier
+    int32_t fence_backoff;  // 0: tight spin, 1: backoff spin
+    int32_t stream_accum;   // 0: N-way buffered, 1: streaming accumulation
 };
 
 #ifdef __cplusplus

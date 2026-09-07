@@ -89,9 +89,15 @@ static int    opt_verbose = 0;
 static int    opt_profile = 0; // profiling mode (0-disabled, 1-basic, 2-pmu)
 static bool   opt_hostbuf = false;
 
-static int    opt_mm_select = 3; // 3 = HMX -> Tiled -> Flat -> CPU, 2 = Tiled -> Flat -> CPU, 1 = Flat -> CPU
-static int    opt_fa_select = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
-static int    opt_ar_select = 2; // 2 = fused ALLREDUCE+ADD (DMA, default), 1 = unfused ALLREDUCE (DMA), 0 = fallback to CPY+FENCE
+static int opt_mm_select = 3; // 3 = HMX -> Tiled -> Flat -> CPU, 2 = Tiled -> Flat -> CPU, 1 = Flat -> CPU
+static int opt_fa_select = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
+static int opt_ar_select = 2; // 2 = fused ALLREDUCE+ADD (DMA, default), 1 = unfused ALLREDUCE (DMA), 0 = fallback to CPY+FENCE
+
+// Tensor-split scaling opts, all default off
+static int opt_ar_single_fence = 0; // single arrival barrier with persistent fences
+static int opt_fence_backoff   = 0; // backoff in NPU fence spin waits
+static int opt_ar_stream       = 0; // streaming allreduce, VTCM use independent of rank count
+static int opt_ar_balanced     = 0; // balanced rank partitioning for allreduce
 
 // Default PMU events, if profiling with PMU (mode=2) is enabled
 // See https://docs.qualcomm.com/doc/80-N2040-60/topic/pmu-events.html
@@ -359,6 +365,9 @@ struct ggml_backend_hexagon_comm_context {
     std::vector<ggml_backend_t> backends;
     size_t                      n_backends = 0;
     uint32_t                    fence_seq  = 0;
+    bool                        use_single = false; // persistent single-fence protocol active
+    std::vector<ggml_backend_buffer_t> pf_bufs;     // one persistent fence buffer per rank
+    std::vector<volatile uint32_t *>   pf_words;    // one fence word per rank
 };
 
 struct ggml_hexagon_event {
@@ -411,7 +420,7 @@ struct ggml_hexagon_session {
     void enqueue_op(const htp_opnode & node);
     void enqueue_cpy(const ggml_tensor * src, ggml_tensor * dst, const ggml_tensor * sync_tensor = nullptr, uint32_t fence_seq = 0);
     void enqueue_fence(const ggml_tensor * sync_tensor, uint32_t fence_seq = 0);
-    void enqueue_allreduce(const ggml_tensor * dst, const std::vector<const ggml_tensor *> & src_tensors, const std::vector<const ggml_tensor *> & sync_tensors, uint32_t rank, uint32_t n_ranks, uint32_t fence_seq_entry = 0, uint32_t fence_seq_exit = 0);
+    void enqueue_allreduce(const ggml_tensor * dst, const std::vector<const ggml_tensor *> & src_tensors, const std::vector<const ggml_tensor *> & sync_tensors, uint32_t rank, uint32_t n_ranks, uint32_t fence_seq_entry = 0, uint32_t fence_seq_exit = 0, bool single_fence = false);
 
     void flush(bool all = true);
     void flush_pending(bool all = false);
@@ -2837,6 +2846,24 @@ void ggml_hexagon_session::enqueue_fence(const ggml_tensor * sync_tensor, uint32
     this->enqueue_op(sync_node);
 }
 
+// Rank chunk for 1D allreduce. Balanced mode spreads the tail so the
+// slowest rank holds at most 64 elems more than the fastest one.
+static void ggml_hexagon_ar_chunk_1d(uint32_t nelem, uint32_t rank, uint32_t n_ranks, uint32_t * start, uint32_t * count) {
+    if (opt_ar_balanced) {
+        const uint32_t s0 = (uint32_t) (((uint64_t) nelem * rank) / n_ranks) & ~63u;
+        uint32_t s1 = (rank + 1 == n_ranks) ? nelem : (uint32_t) (((uint64_t) nelem * (rank + 1)) / n_ranks) & ~63u;
+        if (s1 < s0) s1 = s0;
+        *start = (std::min)(s0, nelem);
+        *count = (std::min)(s1, nelem) - *start;
+        return;
+    }
+    const uint32_t rank_chunk_elems = hex_round_up((nelem + n_ranks - 1) / n_ranks, 128);
+    const uint32_t rank_elem_start  = (std::min)(rank * rank_chunk_elems, nelem);
+    const uint32_t rank_elem_end    = (std::min)(rank_elem_start + rank_chunk_elems, nelem);
+    *start = rank_elem_start;
+    *count = rank_elem_end - rank_elem_start;
+}
+
 static bool ggml_hexagon_precompute_allreduce_params(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * dst,
@@ -2847,6 +2874,7 @@ static bool ggml_hexagon_precompute_allreduce_params(
     struct htp_allreduce_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
+    kparams->fence_backoff = opt_fence_backoff ? 1 : 0;
     kparams->rank         = (int32_t) rank;
     kparams->n_ranks      = (int32_t) n_ranks;
     kparams->is_row_bcast = (has_add && is_row_bcast) ? 1 : 0;
@@ -2863,6 +2891,46 @@ static bool ggml_hexagon_precompute_allreduce_params(
 
     const bool use_1d = is_contiguous && !(has_add && is_row_bcast && ne1 > 1);
 
+    // Streaming path: one dst block plus one tmp block per thread, so VTCM
+    // use does not grow with rank count. 1D non-add only.
+    if (use_1d && !has_add && opt_ar_stream) {
+        uint32_t rank_elem_start = 0;
+        uint32_t rank_nelem      = 0;
+        ggml_hexagon_ar_chunk_1d(nelem, rank, n_ranks, &rank_elem_start, &rank_nelem);
+        kparams->rank_elem_start = (int32_t) rank_elem_start;
+        kparams->rank_nelem      = (int32_t) rank_nelem;
+        kparams->n_dsts          = (int32_t) n_ranks;
+
+        const uint32_t n_threads = (std::min)((uint32_t) sess->n_threads, (std::max)(1u, rank_nelem / 128));
+        uint32_t block_elems = hex_round_up((rank_nelem + (std::max)(1u, n_threads) - 1) / (std::max)(1u, n_threads), 128);
+        block_elems = (std::max)(128u, block_elems);
+
+        kparams->n_threads            = (int32_t) n_threads;
+        kparams->block_elems          = (int32_t) block_elems;
+        kparams->vtcm_size_per_thread = (int32_t) (2 * (size_t) block_elems * elem_size);
+        kparams->vtcm_size            = (int32_t) (n_threads * (size_t) kparams->vtcm_size_per_thread);
+
+        while ((size_t) kparams->vtcm_size > sess->vtcm_size && block_elems > 128) {
+            const size_t max_block = sess->vtcm_size / ((size_t) n_threads * 2 * elem_size);
+            block_elems = (uint32_t) hex_align_down(max_block, 128);
+            if (block_elems < 128) break;
+            kparams->block_elems          = (int32_t) block_elems;
+            kparams->vtcm_size_per_thread = (int32_t) (2 * (size_t) block_elems * elem_size);
+            kparams->vtcm_size            = (int32_t) (n_threads * (size_t) kparams->vtcm_size_per_thread);
+        }
+
+        if (sess->vtcm_size < (size_t) kparams->vtcm_size || block_elems < 128) {
+            HEX_VERBOSE("ggml-hex: %s allreduce stream solver failed to fit VTCM (%d > %zu)\n",
+                        sess->c_name(), kparams->vtcm_size, sess->vtcm_size);
+            return false;
+        }
+
+        kparams->elems_per_thread = (int32_t) hex_round_up((rank_nelem + n_threads - 1) / n_threads, block_elems);
+        kparams->stream_accum     = 1;
+        kparams->kernel_type      = HTP_ALLREDUCE_KERNEL_DMA_1D;
+        return true;
+    }
+
     if (has_add) {
         kparams->n_dsts = 1;
         if (use_1d) {
@@ -2875,12 +2943,11 @@ static bool ggml_hexagon_precompute_allreduce_params(
     } else {
         kparams->n_dsts = (int32_t) n_ranks;
         if (use_1d) {
-            const uint32_t rank_chunk_elems = hex_round_up((nelem + n_ranks - 1) / n_ranks, 128);
-            const uint32_t rank_elem_start  = (std::min)(rank * rank_chunk_elems, nelem);
-            const uint32_t rank_elem_end    = (std::min)(rank_elem_start + rank_chunk_elems, nelem);
-            const uint32_t rank_nelem       = rank_elem_end - rank_elem_start;
-            kparams->rank_elem_start        = (int32_t) rank_elem_start;
-            kparams->rank_nelem             = (int32_t) rank_nelem;
+            uint32_t rank_elem_start = 0;
+            uint32_t rank_nelem      = 0;
+            ggml_hexagon_ar_chunk_1d(nelem, rank, n_ranks, &rank_elem_start, &rank_nelem);
+            kparams->rank_elem_start = (int32_t) rank_elem_start;
+            kparams->rank_nelem      = (int32_t) rank_nelem;
         } else {
             const uint32_t rank_chunk_rows = (ne1 + n_ranks - 1) / n_ranks;
             const uint32_t rank_r0         = (std::min)(rank * rank_chunk_rows, ne1);
@@ -2969,7 +3036,8 @@ void ggml_hexagon_session::enqueue_allreduce(
     uint32_t rank,
     uint32_t n_ranks,
     uint32_t fence_seq_entry,
-    uint32_t fence_seq_exit
+    uint32_t fence_seq_exit,
+    bool single_fence
 ) {
     htp_opnode ar_node(HTP_OP_ALLREDUCE);
 
@@ -2997,6 +3065,9 @@ void ggml_hexagon_session::enqueue_allreduce(
         this, dst, rank, n_ranks, false, false,
         (struct htp_allreduce_kernel_params *) ar_node.kernel_params
     );
+
+    // Fused graph path never sets single fence, only the comm path does.
+    ((struct htp_allreduce_kernel_params *) ar_node.kernel_params)->fence_mode = single_fence ? 1 : 0;
 
     ar_node.name = "ALLREDUCE";
     this->enqueue_op(ar_node);
@@ -6098,12 +6169,49 @@ static void * ggml_backend_hexagon_comm_init(ggml_backend_t * backends, size_t n
     ctx->n_backends = n_backends;
     ctx->fence_seq  = (((uintptr_t) ctx) & 0xFFFF) | 1;
 
+    ctx->use_single = (opt_ar_single_fence != 0);
+    if (ctx->use_single) {
+        // One persistent fence word per rank. Rising seq acts as sense,
+        // so one arrival barrier per allreduce is enough.
+        for (size_t i = 0; i < n_backends; ++i) {
+            ggml_backend_buffer_t buf = nullptr;
+            uint8_t * word = nullptr;
+            ggml_backend_dev_t dev = ggml_backend_get_device(backends[i]);
+            if (dev) {
+                buf = ggml_backend_buft_alloc_buffer(ggml_backend_dev_buffer_type(dev), 4096);
+            }
+            if (buf) {
+                auto * sbuf = (ggml_hexagon_shared_buffer *) buf->context;
+                word = sbuf->alloc_fence();
+            }
+            if (!buf || !word) {
+                if (buf) ggml_backend_buffer_free(buf);
+                ctx->use_single = false;
+                break;
+            }
+            *(volatile uint32_t *) word = 0;
+            ctx->pf_bufs.push_back(buf);
+            ctx->pf_words.push_back((volatile uint32_t *) word);
+        }
+        if (!ctx->use_single) {
+            for (auto * b : ctx->pf_bufs) {
+                ggml_backend_buffer_free(b);
+            }
+            ctx->pf_bufs.clear();
+            ctx->pf_words.clear();
+        }
+    }
+
     return ctx;
 }
 
 static void ggml_backend_hexagon_comm_free(void * comm_ctx_v) {
     if (!comm_ctx_v) return;
-    delete static_cast<ggml_backend_hexagon_comm_context *>(comm_ctx_v);
+    auto * comm_ctx = static_cast<ggml_backend_hexagon_comm_context *>(comm_ctx_v);
+    for (auto * b : comm_ctx->pf_bufs) {
+        ggml_backend_buffer_free(b);
+    }
+    delete comm_ctx;
 }
 
 static bool ggml_backend_hexagon_comm_allreduce_tensor(void * comm_ctx_v, struct ggml_tensor ** tensors) {
@@ -6138,6 +6246,50 @@ static bool ggml_backend_hexagon_comm_allreduce_tensor(void * comm_ctx_v, struct
         if (!ggml_hexagon_precompute_allreduce_params(sess, tensors[r], (uint32_t) r, (uint32_t) n_backends, false, false, &kparams)) {
             return false;
         }
+    }
+
+    if (comm_ctx->use_single) {
+        if (comm_ctx->fence_seq == 0) comm_ctx->fence_seq = 1;
+        uint32_t seq = comm_ctx->fence_seq++;
+        if (comm_ctx->fence_seq == 0) comm_ctx->fence_seq = 1;
+
+        static ggml_hexagon_tensor_extra fence_extra { {}, 0, GGML_HEXAGON_TENSOR_FENCE };
+        ggml_tensor fence_tensors[GGML_HEXAGON_MAX_SESSIONS];
+        for (size_t i = 0; i < n_backends; i++) {
+            fence_tensors[i] = {};
+            fence_tensors[i].buffer = comm_ctx->pf_bufs[i];
+            fence_tensors[i].extra  = &fence_extra;
+            fence_tensors[i].data   = (void *) comm_ctx->pf_words[i];
+            fence_tensors[i].type   = GGML_TYPE_I32;
+            fence_tensors[i].ne[0]  = 4;
+            fence_tensors[i].ne[1]  = 1;
+            fence_tensors[i].ne[2]  = 1;
+            fence_tensors[i].ne[3]  = 1;
+            fence_tensors[i].nb[0]  = sizeof(int32_t);
+            fence_tensors[i].nb[1]  = sizeof(int32_t);
+            fence_tensors[i].nb[2]  = sizeof(int32_t);
+            fence_tensors[i].nb[3]  = sizeof(int32_t);
+            fence_tensors[i].op     = GGML_OP_NONE;
+        }
+
+        std::vector<const ggml_tensor *> data_tensors(n_backends);
+        std::vector<const ggml_tensor *> sync_tensors(n_backends);
+        for (size_t i = 0; i < n_backends; i++) {
+            data_tensors[i] = tensors[i];
+            sync_tensors[i] = &fence_tensors[i];
+        }
+
+        for (size_t r = 0; r < n_backends; r++) {
+            auto sess = static_cast<ggml_hexagon_session *>(comm_ctx->backends[r]->context);
+            sess->enqueue_allreduce(tensors[r], data_tensors, sync_tensors, (uint32_t) r, (uint32_t) n_backends, seq, 0, true);
+            for (size_t j = 0; j < n_backends; j++) {
+                if (r != j) {
+                    sess->add_sync_peer(static_cast<ggml_hexagon_session *>(comm_ctx->backends[j]->context));
+                }
+            }
+        }
+
+        return true;
     }
 
     if (comm_ctx->fence_seq == 0) comm_ctx->fence_seq = 1;
@@ -6336,6 +6488,10 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     const char * str_mbuf     = getenv("GGML_HEXAGON_MBUF");
     const char * str_optrace  = getenv("GGML_HEXAGON_OPTRACE");
     const char * str_hostbuf  = getenv("GGML_HEXAGON_HOSTBUF");
+    const char * str_ar_single_fence = getenv("GGML_HEXAGON_AR_SINGLE_FENCE");
+    const char * str_fence_backoff   = getenv("GGML_HEXAGON_FENCE_BACKOFF");
+    const char * str_ar_stream       = getenv("GGML_HEXAGON_AR_STREAM");
+    const char * str_ar_balanced     = getenv("GGML_HEXAGON_AR_BALANCED");
 
     // Init Arch first since it affects other defaults
     if (!str_arch) {
@@ -6383,6 +6539,15 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_mbuf      = str_mbuf     ? strtoul(str_mbuf, NULL, 0) * MiB       : opt_mbuf;
     opt_vmem      = str_vmem     ? strtoul(str_vmem, NULL, 0) * MiB       : opt_vmem;
     opt_hostbuf   = str_hostbuf  ? atoi(str_hostbuf) != 0                 : opt_hostbuf;
+    opt_ar_single_fence = str_ar_single_fence ? atoi(str_ar_single_fence) : opt_ar_single_fence;
+    opt_fence_backoff   = str_fence_backoff   ? atoi(str_fence_backoff)   : opt_fence_backoff;
+    opt_ar_stream       = str_ar_stream       ? atoi(str_ar_stream)       : opt_ar_stream;
+    opt_ar_balanced     = str_ar_balanced     ? atoi(str_ar_balanced)     : opt_ar_balanced;
+
+    if (opt_ar_single_fence || opt_fence_backoff || opt_ar_stream || opt_ar_balanced) {
+        GGML_LOG_INFO("ggml-hex: tensor-split opts: single-fence %d backoff %d stream %d balanced %d\n",
+                opt_ar_single_fence, opt_fence_backoff, opt_ar_stream, opt_ar_balanced);
+    }
 
     // Parse device configuration
     const char * str_devices  = getenv("GGML_HEXAGON_DEVICES");

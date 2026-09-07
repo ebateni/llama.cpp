@@ -258,6 +258,23 @@ ggml-hex: new session: HTP0 : session-id 0 domain-id 3 uri file:///libggml-htp-v
 
       `GGML_HEXAGON_PROFILE=1 ./scripts/snapdragon/run.py --target adb -- llama-cli ... |& ./scripts/snapdragon/ggml-hexagon-profile.py -`
 
+- `GGML_HEXAGON_AR_SINGLE_FENCE=0`
+  Tensor-split scaling, experimental. Single arrival barrier per allreduce using
+  persistent comm-owned fences, instead of entry plus exit barriers. Cuts fence
+  rendezvous count in half. Requires all ranks to run matching allreduce order.
+
+- `GGML_HEXAGON_FENCE_BACKOFF=0`
+  Tensor-split scaling, experimental. Backs off NPU fence spin waits to cut
+  shared bus traffic when 4 physical cores spin on peer fences at once.
+
+- `GGML_HEXAGON_AR_STREAM=0`
+  Tensor-split scaling, experimental. Streaming allreduce accumulation with VTCM
+  use independent of rank count (1D non-add path). Keeps DMA blocks large at 4 ranks.
+
+- `GGML_HEXAGON_AR_BALANCED=0`
+  Tensor-split scaling, experimental. Balanced rank partitioning (64-elem granularity)
+  so the slowest rank holds at most 64 elems more than the fastest one.
+
 - `GGML_HEXAGON_OPFILTER=regex`
   Allows filtering (disabling) Ops that match the regex pattern:
 

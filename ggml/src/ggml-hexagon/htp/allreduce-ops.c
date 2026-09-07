@@ -135,6 +135,50 @@ DEFINE_ALLREDUCE_THREAD_DMA_1D(f32,     float,  hvx_add_f32_aaa, 0)
 DEFINE_ALLREDUCE_THREAD_DMA_1D(add_f16, __fp16, hvx_add_f16_aaa, 1)
 DEFINE_ALLREDUCE_THREAD_DMA_1D(add_f32, float,  hvx_add_f32_aaa, 1)
 
+// Streaming accumulation: VTCM holds one dst block plus one tmp block per
+// thread, independent of rank count. Reduces in place, then fans out.
+#define DEFINE_ALLREDUCE_THREAD_DMA_1D_STREAM(SUFFIX, TYPE, HVX_ADD_FN)                                            \
+static void allreduce_thread_dma_1d_stream_##SUFFIX(unsigned int nth, unsigned int ith, void * data) {             \
+    struct htp_allreduce_context * actx = (struct htp_allreduce_context *) data;                                    \
+    struct htp_ops_context * octx = actx->octx;                                                                     \
+    const uint32_t n_ranks     = actx->n_ranks;                                                                     \
+    const uint32_t n_dsts      = actx->n_dsts;                                                                      \
+    const uint32_t block_elems = actx->block_elems;                                                                 \
+    const uint32_t dr  = actx->elems_per_thread;                                                                    \
+    const uint32_t ir0 = actx->rank_elem_start + dr * ith;                                                          \
+    const uint32_t ir1 = MIN(ir0 + dr, actx->rank_elem_start + actx->rank_nelem);                                   \
+    if (ir0 >= ir1) return;                                                                                         \
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];                                                          \
+    dma_queue * q = octx->ctx->dma[ith];                                                                            \
+    const size_t blk_bytes = (size_t) block_elems * sizeof(TYPE);                                                   \
+    uint8_t * d_base = actx->dst_spad_base + (ith * actx->vtcm_size_per_thread);                                    \
+    uint8_t * t_base = d_base + blk_bytes;                                                                          \
+    for (uint32_t ir = ir0; ir < ir1; ) {                                                                           \
+        uint32_t cur_elems = MIN(block_elems, ir1 - ir);                                                            \
+        size_t   cur_bytes = cur_elems * sizeof(TYPE);                                                              \
+        const uint8_t * s0_ddr = (const uint8_t *) octx->src[0]->data + ir * sizeof(TYPE);                          \
+        dma_queue_push(q, dma_make_ptr(d_base, s0_ddr), cur_bytes, cur_bytes, cur_bytes, 1);                        \
+        uint8_t * d_spad = (uint8_t *) dma_queue_pop(q).dst;                                                        \
+        for (uint32_t s = 1; s < n_ranks; s++) {                                                                    \
+            const uint8_t * s_ddr = (const uint8_t *) octx->src[s]->data + ir * sizeof(TYPE);                       \
+            dma_queue_push(q, dma_make_ptr(t_base, s_ddr), cur_bytes, cur_bytes, cur_bytes, 1);                     \
+            uint8_t * t_spad = (uint8_t *) dma_queue_pop(q).dst;                                                    \
+            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);                                       \
+            HVX_ADD_FN(d_spad, d_spad, t_spad, cur_elems);                                                          \
+            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);                                        \
+        }                                                                                                           \
+        for (uint32_t d = 0; d < n_dsts; d++) {                                                                     \
+            uint8_t * d_ddr = (uint8_t *) octx->dsts[d]->data + ir * sizeof(TYPE);                                  \
+            dma_queue_push(q, dma_make_ptr(d_ddr, d_spad), cur_bytes, cur_bytes, cur_bytes, 1);                     \
+        }                                                                                                           \
+        ir += cur_elems;                                                                                            \
+    }                                                                                                               \
+    dma_queue_flush(q);                                                                                             \
+}
+
+DEFINE_ALLREDUCE_THREAD_DMA_1D_STREAM(f16, __fp16, hvx_add_f16_aaa)
+DEFINE_ALLREDUCE_THREAD_DMA_1D_STREAM(f32, float,  hvx_add_f32_aaa)
+
 #define DEFINE_ALLREDUCE_THREAD_DMA_2D(SUFFIX, TYPE, HVX_ADD_FN, HAS_ADD, IS_ROW_BCAST)                                                           \
 static void allreduce_thread_dma_2d_##SUFFIX(unsigned int nth, unsigned int ith, void * data) {                                                   \
     struct htp_allreduce_context * actx = (struct htp_allreduce_context *) data;                                                                  \
@@ -260,6 +304,9 @@ int op_allreduce(struct htp_ops_context * octx) {
     const uint32_t nelem = dst->ne[0] * dst->ne[1] * dst->ne[2] * dst->ne[3];
     const uint32_t fence_seq_entry = (uint32_t) octx->op_params[0];
     const uint32_t fence_seq_exit  = (uint32_t) octx->op_params[1];
+    const int single_fence  = (kparams->fence_mode == 1);
+    const int fence_backoff = (kparams->fence_backoff != 0);
+    const int stream_accum  = (kparams->stream_accum != 0);
 
     // 1. Entry Barrier: Synchronize all ranks before reading
     struct htp_thread_trace * tr0 = &octx->ctx->trace[0];
@@ -280,14 +327,21 @@ int op_allreduce(struct htp_ops_context * octx) {
         while (1) {
             Q6_dccleaninva_A((void *) peer_fence);
             uint32_t val = atomic_load(&peer_fence[0]);
-            if (val == fence_seq_entry || val == fence_seq_exit) {
+            // Single fence mode uses persistent words with rising seq, accept any newer seq.
+            bool arrived = single_fence ? ((int32_t)(val - fence_seq_entry) >= 0)
+                                        : (val == fence_seq_entry || val == fence_seq_exit);
+            if (arrived) {
                 break;
             }
             if (++spins > HTP_FENCE_TIMEOUT) {
                 FARF(ERROR, "ggml-hex: allreduce entry fence-wait TIMEOUT: rank %u waiting on %u (fence %p seq %u)\n", rank, j, peer_fence, fence_seq_entry);
                 return HTP_STATUS_INTERNAL_ERR;
             }
-            hex_pause();
+            if (fence_backoff) {
+                hex_pause_backoff(spins);
+            } else {
+                hex_pause();
+            }
         }
     }
     asm volatile ("syncht" : : : "memory");
@@ -319,10 +373,13 @@ int op_allreduce(struct htp_ops_context * octx) {
         actx.is_row_bcast         = (kparams->is_row_bcast != 0);
 
         work_queue_func_t reduce_fun = NULL;
+        const bool use_stream = (stream_accum && !has_add && kparams->kernel_type == HTP_ALLREDUCE_KERNEL_DMA_1D);
         switch (kparams->kernel_type) {
             case HTP_ALLREDUCE_KERNEL_DMA_1D:
                 if (has_add) {
                     reduce_fun = (dst->type == HTP_TYPE_F16) ? allreduce_thread_dma_1d_add_f16 : allreduce_thread_dma_1d_add_f32;
+                } else if (use_stream) {
+                    reduce_fun = (dst->type == HTP_TYPE_F16) ? allreduce_thread_dma_1d_stream_f16 : allreduce_thread_dma_1d_stream_f32;
                 } else {
                     reduce_fun = (dst->type == HTP_TYPE_F16) ? allreduce_thread_dma_1d_f16 : allreduce_thread_dma_1d_f32;
                 }
@@ -343,12 +400,18 @@ int op_allreduce(struct htp_ops_context * octx) {
         }
 
         uint8_t * vtcm_ptr = (uint8_t *) octx->ctx->vtcm_base;
-        for (uint32_t s = 0; s < n_ranks; s++) {
-            actx.src_spad_base[s] = vtcm_ptr;
+        if (use_stream) {
+            // Stream mode keeps one dst block plus one tmp block per thread.
+            actx.dst_spad_base = vtcm_ptr;
+            vtcm_ptr += n_threads * vtcm_size_per_thread;
+        } else {
+            for (uint32_t s = 0; s < n_ranks; s++) {
+                actx.src_spad_base[s] = vtcm_ptr;
+                vtcm_ptr += n_threads * vtcm_size_per_thread;
+            }
+            actx.dst_spad_base = vtcm_ptr;
             vtcm_ptr += n_threads * vtcm_size_per_thread;
         }
-        actx.dst_spad_base = vtcm_ptr;
-        vtcm_ptr += n_threads * vtcm_size_per_thread;
         if (has_add) {
             actx.res_spad_base = vtcm_ptr;
             vtcm_ptr += (actx.is_row_bcast ? 1 : n_threads) * vtcm_size_per_thread;
@@ -365,34 +428,41 @@ int op_allreduce(struct htp_ops_context * octx) {
         work_queue_run(octx->ctx->work_queue, reduce_fun, &actx, n_threads);
     }
 
-    // 4. Exit Barrier: Synchronize all ranks after writing
-    htp_trace_event_start(tr0, HTP_TRACE_EVT_FENCE, (uint16_t) fence_seq_exit);
+    // 4. Exit Barrier: Synchronize all ranks after writing.
+    // Single fence mode skips it, the next arrival barrier covers completion.
+    if (!single_fence) {
+        htp_trace_event_start(tr0, HTP_TRACE_EVT_FENCE, (uint16_t) fence_seq_exit);
 
-    atomic_store(&my_fence[0], fence_seq_exit);
-    asm volatile ("syncht" : : : "memory");
-    Q6_dccleaninva_A((void *) my_fence);
+        atomic_store(&my_fence[0], fence_seq_exit);
+        asm volatile ("syncht" : : : "memory");
+        Q6_dccleaninva_A((void *) my_fence);
 
-    for (uint32_t j = 0; j < n_ranks; j++) {
-        if (j == rank) continue;
-        const struct htp_tensor * peer_sync = octx->src[n_ranks + j];
-        atomic_uint * peer_fence = (atomic_uint *) peer_sync->data;
-        uint64_t spins = 0;
-        while (1) {
-            Q6_dccleaninva_A((void *) peer_fence);
-            uint32_t val = atomic_load(&peer_fence[0]);
-            if (val == fence_seq_exit) {
-                break;
+        for (uint32_t j = 0; j < n_ranks; j++) {
+            if (j == rank) continue;
+            const struct htp_tensor * peer_sync = octx->src[n_ranks + j];
+            atomic_uint * peer_fence = (atomic_uint *) peer_sync->data;
+            uint64_t spins = 0;
+            while (1) {
+                Q6_dccleaninva_A((void *) peer_fence);
+                uint32_t val = atomic_load(&peer_fence[0]);
+                if (val == fence_seq_exit) {
+                    break;
+                }
+                if (++spins > HTP_FENCE_TIMEOUT) {
+                    FARF(ERROR, "ggml-hex: allreduce exit fence-wait TIMEOUT: rank %u waiting on %u (fence %p seq %u)\n", rank, j, peer_fence, fence_seq_exit);
+                    return HTP_STATUS_INTERNAL_ERR;
+                }
+                if (fence_backoff) {
+                    hex_pause_backoff(spins);
+                } else {
+                    hex_pause();
+                }
             }
-            if (++spins > HTP_FENCE_TIMEOUT) {
-                FARF(ERROR, "ggml-hex: allreduce exit fence-wait TIMEOUT: rank %u waiting on %u (fence %p seq %u)\n", rank, j, peer_fence, fence_seq_exit);
-                return HTP_STATUS_INTERNAL_ERR;
-            }
-            hex_pause();
         }
-    }
-    asm volatile ("syncht" : : : "memory");
+        asm volatile ("syncht" : : : "memory");
 
-    htp_trace_event_stop(tr0, HTP_TRACE_EVT_FENCE, (uint16_t) fence_seq_exit);
+        htp_trace_event_stop(tr0, HTP_TRACE_EVT_FENCE, (uint16_t) fence_seq_exit);
+    }
 
     return HTP_STATUS_OK;
 }

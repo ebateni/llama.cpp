@@ -62,4 +62,15 @@ static inline void hex_pause() {
     asm volatile(" pause(#255)\n");
 }
 
+// Spin wait backoff. Keeps bus quiet while waiting on peer fences.
+static inline void hex_pause_backoff(uint64_t spins) {
+    if ((spins & 1023) == 0) {
+        for (int i = 0; i < 32; i++) {
+            asm volatile(" pause(#255)\n");
+        }
+    } else {
+        hex_pause();
+    }
+}
+
 #endif /* HEX_UTILS_H */
