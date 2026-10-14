@@ -272,6 +272,7 @@ llama_context::llama_context(
 
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
+    cparams.seq_parallel = (model.split_mode() == LLAMA_SPLIT_MODE_SEQUENCE);
 
     // initialized later
     cparams.pipeline_parallel = false;

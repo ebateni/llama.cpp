@@ -2886,6 +2886,19 @@ ggml_tensor * llm_graph_context::build_attn(
         const auto & k_idxs = inp->get_k_idxs();
         const auto & v_idxs = inp->get_v_idxs();
 
+        // Sequence parallelism: k_cur/v_cur are split along the token dimension across devices.
+        // Gather them to full tensors (on every device) before writing the mirrored KV cache, so
+        // each device's cache holds all tokens' K/V (required because its Q slice attends to the
+        // full sequence). The GATHER: name prefix triggers the meta backend's all-gather.
+        if (cparams.seq_parallel) {
+            k_cur = ggml_cont(ctx0, k_cur);
+            ggml_set_name(k_cur, (std::string("GATHER:k_cur-") + std::to_string(il)).c_str());
+            v_cur = ggml_cont(ctx0, v_cur);
+            ggml_set_name(v_cur, (std::string("GATHER:v_cur-") + std::to_string(il)).c_str());
+            ggml_build_forward_expand(gf, k_cur);
+            ggml_build_forward_expand(gf, v_cur);
+        }
+
         ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
         ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
     }

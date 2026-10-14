@@ -960,6 +960,15 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             } break;
             case GGML_OP_CONT:
             case GGML_OP_RESHAPE: {
+                // Sequence parallelism: a ggml_cont named with the "GATHER:" sentinel prefix marks
+                // an AXIS_1 (token/row-split) tensor that must be all-gathered to a full tensor on
+                // every device. Emit the GATHER sentinel so the graph-compute boundary runs
+                // comm_allgather here. Falls through to normal reshape handling otherwise.
+                if (src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_1 &&
+                        strncmp(tensor->name, "GATHER:", 7) == 0) {
+                    split_state = {GGML_BACKEND_SPLIT_AXIS_GATHER, {0}, {1}, 1};
+                    break;
+                }
                 split_state = handle_reshape(src_ss);
             } break;
             case GGML_OP_VIEW: {
@@ -1813,6 +1822,12 @@ struct ggml_backend_meta_context {
 
         std::vector<ggml_cgraph *> cgraphs_aux;
     };
+    // Which cross-device collective runs at the END of a subgraph to produce the
+    // tensor the next subgraph consumes.
+    enum collective_kind {
+        COLLECTIVE_ALLREDUCE = 0, // last node is PARTIAL, reduced in place
+        COLLECTIVE_ALLGATHER = 1, // last node is GATHER (full), gathered from its AXIS_1 src
+    };
     struct backend_config {
         ggml_backend_t backend;
 
@@ -1836,8 +1851,12 @@ struct ggml_backend_meta_context {
     size_t                      n_subgraphs   = 0;
     uint64_t                    uid           = 0;
 
+    // Per-subgraph collective kind (which collective runs at that subgraph's boundary).
+    std::vector<collective_kind> subgraph_collective;
+
     void *                               comm_ctx       = nullptr;
     ggml_backend_comm_allreduce_tensor_t comm_allreduce = nullptr;
+    ggml_backend_comm_allgather_tensor_t comm_allgather = nullptr;
 
     ggml_backend_meta_context(ggml_backend_dev_t meta_dev, const char * params) {
         const size_t n_devs = ggml_backend_meta_dev_n_devs(meta_dev);
@@ -1869,6 +1888,10 @@ struct ggml_backend_meta_context {
                 ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(
                     ggml_backend_get_device(simple_backends[0])), "ggml_backend_comm_allreduce_tensor");
             GGML_ASSERT(comm_allreduce != nullptr);
+            // Optional: all-gather collective for sequence parallelism (may be absent on older backends).
+            comm_allgather = (ggml_backend_comm_allgather_tensor_t)
+                ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(
+                    ggml_backend_get_device(simple_backends[0])), "ggml_backend_comm_allgather_tensor");
         }
     }
 
@@ -2040,6 +2063,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
         }
         size_t n_subgraphs  = 0;
         size_t max_tmp_size = 0;
+        backend_ctx->subgraph_collective.clear();
 
         for (size_t j = 0; j < n_backends; j++) {
             auto & bcj = backend_ctx->backend_configs[j];
@@ -2225,8 +2249,25 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                 if (split_state.axis == GGML_BACKEND_SPLIT_AXIS_PARTIAL) {
                     max_tmp_size = std::max(max_tmp_size, ggml_nbytes(node));
                 }
-                const bool new_subgraph = i + 1 == cgraph->n_nodes || split_state.axis == GGML_BACKEND_SPLIT_AXIS_PARTIAL;
+                const bool is_gather  = split_state.axis == GGML_BACKEND_SPLIT_AXIS_GATHER;
+                const bool is_partial = split_state.axis == GGML_BACKEND_SPLIT_AXIS_PARTIAL;
+                const bool new_subgraph = i + 1 == cgraph->n_nodes || is_partial || is_gather;
                 if (!new_subgraph) {
+                    continue;
+                }
+
+                // All-gather boundary: the gather node (full tensor) is produced entirely by
+                // comm_allgather from its AXIS_1 source, so the backend must not compute it.
+                // No delay/zero-slice handling (that is allreduce-specific).
+                if (is_gather) {
+                    for (size_t j = 0; j < n_backends; j++) {
+                        auto & bcj = backend_ctx->backend_configs[j];
+                        bcj.nodes[i]->flags &= ~GGML_TENSOR_FLAG_COMPUTE;
+                        bcj.cgraphs[n_subgraphs].offset = i_start;
+                    }
+                    backend_ctx->subgraph_collective.push_back(COLLECTIVE_ALLGATHER);
+                    n_subgraphs++;
+                    i_start = i + 1;
                     continue;
                 }
 
@@ -2253,6 +2294,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                     auto & bcj = backend_ctx->backend_configs[j];
                     bcj.cgraphs[n_subgraphs].offset = i_start;
                 }
+                backend_ctx->subgraph_collective.push_back(COLLECTIVE_ALLREDUCE);
                 n_subgraphs++;
                 i_start = i + 1;
             }
@@ -2477,6 +2519,31 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
         }
 
         if (n_backends > 1 && i < backend_ctx->n_subgraphs - 1) {
+            const collective_kind kind = i < backend_ctx->subgraph_collective.size()
+                ? backend_ctx->subgraph_collective[i] : COLLECTIVE_ALLREDUCE;
+
+            if (kind == COLLECTIVE_ALLGATHER) {
+                // Last node of this subgraph is the GATHER tensor (full, per device); its src[0]
+                // is that device's compacted AXIS_1 slice. Gather the slices into the full tensors.
+                bool ok = false;
+                if (backend_ctx->comm_ctx && backend_ctx->comm_allgather) {
+                    std::vector<ggml_tensor *> dsts(n_backends);
+                    std::vector<ggml_tensor *> srcs(n_backends);
+                    for (size_t j = 0; j < n_backends; j++) {
+                        auto & bcj = backend_ctx->backend_configs[j];
+                        ggml_cgraph * cgraph_ij = bcj.cgraphs[i].cgraph_main;
+                        ggml_tensor * gather_node = cgraph_ij->nodes[cgraph_ij->n_nodes-1];
+                        dsts[j] = gather_node;
+                        srcs[j] = gather_node->src[0];
+                    }
+                    ok = backend_ctx->comm_allgather(backend_ctx->comm_ctx, dsts.data(), srcs.data(), (int) n_backends);
+                }
+                if (!ok) {
+                    GGML_ABORT("meta: all-gather collective required for sequence parallelism is unavailable");
+                }
+                continue;
+            }
+
             bool backend_allreduce_success = false;
             if (backend_ctx->comm_ctx) {
                 std::vector<ggml_tensor *> nodes;
