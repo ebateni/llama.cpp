@@ -45,6 +45,7 @@ add_library(${HTP_LIB} SHARED
     im2col-ops.c
     roll-ops.c
     allreduce-ops.c
+    allgather-ops.c
 )
 
 target_compile_definitions(${HTP_LIB} PRIVATE

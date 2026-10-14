@@ -819,6 +819,9 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_ALLREDUCE_ADD:
             return op_allreduce(octx);
 
+        case HTP_OP_ALLGATHER:
+            return op_allgather(octx);
+
         case HTP_OP_MUL_MAT:
         case HTP_OP_MUL_MAT_ADD:
             return op_matmul(octx);
