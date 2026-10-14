@@ -517,6 +517,10 @@ struct ggml_hexagon_session {
     void enqueue_allreduce(const ggml_tensor * dst, const std::vector<const ggml_tensor *> & src_tensors,
                            const std::vector<const ggml_tensor *> & sync_tensors, uint32_t rank, uint32_t n_ranks,
                            uint32_t fence_seq_entry = 0, uint32_t fence_seq_exit = 0);
+    void enqueue_allgather(const ggml_tensor * dst, const std::vector<const ggml_tensor *> & src_slices,
+                           const std::vector<const ggml_tensor *> & sync_tensors, uint32_t rank, uint32_t n_ranks,
+                           const uint32_t * row_offset, const uint32_t * row_count,
+                           uint32_t fence_seq_entry = 0, uint32_t fence_seq_exit = 0);
 
     void start_batch();
     void flush_sync(bool all = true);
@@ -3710,6 +3714,80 @@ void ggml_hexagon_session::enqueue_allreduce(
 
     ar_node.name = "ALLREDUCE";
     this->enqueue_op(ar_node);
+}
+
+static bool ggml_hexagon_precompute_allgather_params(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * dst,
+    uint32_t rank,
+    uint32_t n_ranks,
+    const uint32_t * row_offset,
+    const uint32_t * row_count,
+    struct htp_allgather_kernel_params * kparams
+) {
+    memset(kparams, 0, sizeof(*kparams));
+    kparams->rank    = (int32_t) rank;
+    kparams->n_ranks = (int32_t) n_ranks;
+
+    const uint32_t elem_size = (dst->type == GGML_TYPE_F16) ? sizeof(ggml_fp16_t) : sizeof(float);
+    const uint32_t ne0       = (uint32_t) dst->ne[0];
+    kparams->row_bytes = (int32_t) (ne0 * elem_size);
+
+    uint32_t total_rows = 0;
+    for (uint32_t r = 0; r < n_ranks; r++) {
+        kparams->row_offset[r] = (int32_t) row_offset[r];
+        kparams->row_count[r]  = (int32_t) row_count[r];
+        total_rows += row_count[r];
+    }
+
+    // one thread per ~1 row block, capped at the session's thread count
+    const uint32_t n_threads = (std::min)((uint32_t) sess->n_threads, (std::max)(1u, total_rows));
+    kparams->n_threads   = (int32_t) n_threads;
+    kparams->kernel_type = HTP_ALLGATHER_KERNEL_DMA;
+    return true;
+}
+
+void ggml_hexagon_session::enqueue_allgather(
+    const ggml_tensor * dst,
+    const std::vector<const ggml_tensor *> & src_slices,
+    const std::vector<const ggml_tensor *> & sync_tensors,
+    uint32_t rank,
+    uint32_t n_ranks,
+    const uint32_t * row_offset,
+    const uint32_t * row_count,
+    uint32_t fence_seq_entry,
+    uint32_t fence_seq_exit
+) {
+    htp_opnode ag_node(HTP_OP_ALLGATHER);
+
+    // dummy carries the fence seqs via op_params; the real output is this rank's full dst.
+    ggml_tensor* node = ag_node.add_dummy(*dst);
+    node->op           = GGML_OP_NONE;
+    node->op_params[0] = (int32_t) fence_seq_entry;
+    node->op_params[1] = (int32_t) fence_seq_exit;
+
+    ag_node.init(node);
+
+    // inputs: [ src_slice_0 .. src_slice_{n-1}, sync_0 .. sync_{n-1} ]
+    ag_node.inputs.clear();
+    for (size_t i = 0; i < src_slices.size(); i++) {
+        ag_node.inputs.push_back(src_slices[i]);
+    }
+    for (size_t i = 0; i < sync_tensors.size(); i++) {
+        ag_node.inputs.push_back(ag_node.add_dummy(*sync_tensors[i]));
+    }
+
+    // output: this rank's full (mirrored) destination buffer
+    ag_node.outputs.clear();
+    ag_node.outputs.push_back(dst);
+
+    ggml_hexagon_precompute_allgather_params(
+        this, dst, rank, n_ranks, row_offset, row_count,
+        (struct htp_allgather_kernel_params *) ag_node.kernel_params
+    );
+
+    ag_node.name = "ALLGATHER";
+    this->enqueue_op(ag_node);
 }
 
 ggml_hexagon_shared_buffer * ggml_hexagon_session::mmap_tensor(const ggml_tensor * t) {
@@ -7602,6 +7680,86 @@ static bool ggml_backend_hexagon_comm_allreduce_tensor(void * comm_ctx_v, struct
     return true;
 }
 
+static bool ggml_backend_hexagon_comm_allgather_tensor(void * comm_ctx_v, struct ggml_tensor ** dsts, struct ggml_tensor ** srcs, int n) {
+    if (!comm_ctx_v) return false;
+    auto * comm_ctx = static_cast<ggml_backend_hexagon_comm_context *>(comm_ctx_v);
+    const size_t n_backends = comm_ctx->n_backends;
+
+    if (n_backends < 2 || n_backends > 4 || (size_t) n != n_backends) return false;
+
+    // distinct physical cores required
+    for (size_t i = 0; i < n_backends; i++) {
+        auto sess_i = static_cast<ggml_hexagon_session *>(comm_ctx->backends[i]->context);
+        for (size_t j = i + 1; j < n_backends; j++) {
+            auto sess_j = static_cast<ggml_hexagon_session *>(comm_ctx->backends[j]->context);
+            if (sess_i->phys_idx == sess_j->phys_idx) {
+                return false;
+            }
+        }
+    }
+
+    // all dsts same shape/type (full mirrored tensor); all contiguous hexagon buffers
+    for (size_t i = 0; i < n_backends; i++) {
+        if (!dsts[i] || !dsts[i]->buffer || !ggml_backend_buffer_is_hexagon(dsts[i]->buffer)) return false;
+        if (!srcs[i] || !srcs[i]->buffer || !ggml_backend_buffer_is_hexagon(srcs[i]->buffer)) return false;
+        if (dsts[i]->type != dsts[0]->type || srcs[i]->type != dsts[0]->type) return false;
+        if (!ggml_is_contiguous(dsts[i]) || !ggml_is_contiguous(srcs[i])) return false;
+    }
+    if (dsts[0]->type != GGML_TYPE_F16 && dsts[0]->type != GGML_TYPE_F32) return false;
+
+    // Row geometry: each rank contributes srcs[r]'s rows (ne1*ne2*ne3); offsets are the running sum.
+    uint32_t row_count[HTP_ALLGATHER_MAX_RANKS]  = {0};
+    uint32_t row_offset[HTP_ALLGATHER_MAX_RANKS] = {0};
+    uint32_t acc = 0;
+    for (size_t r = 0; r < n_backends; r++) {
+        const uint32_t rows = (uint32_t) (srcs[r]->ne[1] * srcs[r]->ne[2] * srcs[r]->ne[3]);
+        row_offset[r] = acc;
+        row_count[r]  = rows;
+        acc += rows;
+        if ((uint32_t) srcs[r]->ne[0] != (uint32_t) dsts[0]->ne[0]) return false;
+    }
+    const uint32_t total_rows = (uint32_t) (dsts[0]->ne[1] * dsts[0]->ne[2] * dsts[0]->ne[3]);
+    if (acc != total_rows) return false;
+
+    // Fence sequence: entry + exit, bumped past every session's current seq.
+    uint32_t max_seq = static_cast<ggml_hexagon_session *>(comm_ctx->backends[0]->context)->fence_seq;
+    for (size_t i = 1; i < n_backends; i++) {
+        auto sess_i = static_cast<ggml_hexagon_session *>(comm_ctx->backends[i]->context);
+        if ((int32_t)(sess_i->fence_seq - max_seq) > 0) {
+            max_seq = sess_i->fence_seq;
+        }
+    }
+    if (++max_seq == 0) max_seq = 1;
+    uint32_t fence_seq_entry = max_seq;
+    if (++max_seq == 0) max_seq = 1;
+    uint32_t fence_seq_exit  = max_seq;
+
+    for (size_t i = 0; i < n_backends; i++) {
+        auto sess_i = static_cast<ggml_hexagon_session *>(comm_ctx->backends[i]->context);
+        sess_i->fence_seq = max_seq;
+    }
+
+    std::vector<const ggml_tensor *> src_slices(n_backends);
+    std::vector<const ggml_tensor *> sync_tensors(n_backends);
+    for (size_t i = 0; i < n_backends; i++) {
+        src_slices[i]   = srcs[i];
+        sync_tensors[i] = &comm_ctx->fence_tensors[i];
+    }
+
+    for (size_t r = 0; r < n_backends; r++) {
+        auto sess = static_cast<ggml_hexagon_session *>(comm_ctx->backends[r]->context);
+        sess->enqueue_allgather(dsts[r], src_slices, sync_tensors, (uint32_t) r, (uint32_t) n_backends,
+                                row_offset, row_count, fence_seq_entry, fence_seq_exit);
+        for (size_t j = 0; j < n_backends; j++) {
+            if (r != j) {
+                sess->add_peer(static_cast<ggml_hexagon_session *>(comm_ctx->backends[j]->context));
+            }
+        }
+    }
+
+    return true;
+}
+
 static ggml_backend_buffer_type_t ggml_backend_hexagon_split_buffer_type(int main_device, const float * tensor_split) {
     GGML_UNUSED(tensor_split);
     auto reg = ggml_backend_hexagon_reg();
@@ -7627,6 +7785,9 @@ static void * ggml_backend_hexagon_get_proc_address(ggml_backend_reg_t reg, cons
     }
     if (strcmp(name, "ggml_backend_comm_allreduce_tensor") == 0) {
         return (void *) ggml_backend_hexagon_comm_allreduce_tensor;
+    }
+    if (strcmp(name, "ggml_backend_comm_allgather_tensor") == 0) {
+        return (void *) ggml_backend_hexagon_comm_allgather_tensor;
     }
     return NULL;
 }

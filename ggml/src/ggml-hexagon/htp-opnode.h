@@ -16,6 +16,7 @@
 #include "htp/unary-ops.h"
 #include "htp/binary-ops.h"
 #include "htp/allreduce-ops.h"
+#include "htp/allgather-ops.h"
 #include "htp/ssm-conv.h"
 #include "htp/gated-delta-net-ops.h"
 #include "htp/softmax-ops.h"
