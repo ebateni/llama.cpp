@@ -208,6 +208,9 @@ extern "C" {
     typedef void * (*ggml_backend_comm_init_t)(ggml_backend_t * backends, size_t n_backends);
     typedef void   (*ggml_backend_comm_free_t)(void * comm_ctx);
     typedef bool   (*ggml_backend_comm_allreduce_tensor_t)(void * comm_ctx, struct ggml_tensor ** tensors);
+    // All-gather: concatenate each device's compacted slice (srcs[r], along the row dim) into the
+    // full-size mirrored output on every device (dsts[r]). srcs[r] and dsts[r] belong to device r.
+    typedef bool   (*ggml_backend_comm_allgather_tensor_t)(void * comm_ctx, struct ggml_tensor ** dsts, struct ggml_tensor ** srcs, int n);
 
     // Split buffer type for tensor parallelism (old)
     typedef ggml_backend_buffer_type_t   (*ggml_backend_split_buffer_type_t)(int main_device, const float * tensor_split);
@@ -368,6 +371,8 @@ extern "C" {
 
         GGML_BACKEND_SPLIT_AXIS_MIRRORED = 10, // all values on all backends
         GGML_BACKEND_SPLIT_AXIS_PARTIAL  = 11, // each backend has a partial sum
+        GGML_BACKEND_SPLIT_AXIS_GATHER   = 12, // full tensor on all backends, produced by all-gathering
+                                               //   each backend's AXIS_1 (token/row) slice (sequence parallelism)
 
         // for internal bookkeeping only:
         GGML_BACKEND_SPLIT_AXIS_NONE    = 98,

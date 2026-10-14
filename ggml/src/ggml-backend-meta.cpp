@@ -2270,7 +2270,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                         bcj.nodes[i]->flags &= ~GGML_TENSOR_FLAG_COMPUTE;
                         bcj.cgraphs[n_subgraphs].offset = i_start;
                     }
-                    backend_ctx->subgraph_collective.push_back(COLLECTIVE_ALLGATHER);
+                    backend_ctx->subgraph_collective.push_back(ggml_backend_meta_context::COLLECTIVE_ALLGATHER);
                     n_subgraphs++;
                     i_start = i + 1;
                     continue;
@@ -2299,7 +2299,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                     auto & bcj = backend_ctx->backend_configs[j];
                     bcj.cgraphs[n_subgraphs].offset = i_start;
                 }
-                backend_ctx->subgraph_collective.push_back(COLLECTIVE_ALLREDUCE);
+                backend_ctx->subgraph_collective.push_back(ggml_backend_meta_context::COLLECTIVE_ALLREDUCE);
                 n_subgraphs++;
                 i_start = i + 1;
             }
@@ -2524,10 +2524,10 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
         }
 
         if (n_backends > 1 && i < backend_ctx->n_subgraphs - 1) {
-            const collective_kind kind = i < backend_ctx->subgraph_collective.size()
-                ? backend_ctx->subgraph_collective[i] : COLLECTIVE_ALLREDUCE;
+            const ggml_backend_meta_context::collective_kind kind = i < backend_ctx->subgraph_collective.size()
+                ? backend_ctx->subgraph_collective[i] : ggml_backend_meta_context::COLLECTIVE_ALLREDUCE;
 
-            if (kind == COLLECTIVE_ALLGATHER) {
+            if (kind == ggml_backend_meta_context::COLLECTIVE_ALLGATHER) {
                 // Last node of this subgraph is the GATHER tensor (full, per device); its src[0]
                 // is that device's compacted AXIS_1 slice. Gather the slices into the full tensors.
                 bool ok = false;
