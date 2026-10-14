@@ -113,9 +113,9 @@ llama_model_falcon::graph::graph(const llama_model & model, const llm_graph_para
         }
 
         if (il == n_layer - 1 && inp_out_ids) {
-            cur       = ggml_get_rows(ctx0,       cur, inp_out_ids);
-            inpL      = ggml_get_rows(ctx0,      inpL, inp_out_ids);
-            attn_norm = ggml_get_rows(ctx0, attn_norm, inp_out_ids);
+            cur       = build_out_ids_rows(cur, inp_out_ids);
+            inpL      = build_out_ids_rows(inpL, inp_out_ids);
+            attn_norm = build_out_ids_rows(attn_norm, inp_out_ids);
         }
 
         ggml_tensor * ffn_inp = cur;

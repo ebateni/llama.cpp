@@ -99,9 +99,9 @@ llama_model_phi2::graph::graph(const llama_model & model, const llm_graph_params
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f, il);
         }
         if (il == n_layer - 1 && inp_out_ids) {
-            cur              = ggml_get_rows(ctx0,              cur, inp_out_ids);
-            inpL             = ggml_get_rows(ctx0,             inpL, inp_out_ids);
-            attn_norm_output = ggml_get_rows(ctx0, attn_norm_output, inp_out_ids);
+            cur              = build_out_ids_rows(cur, inp_out_ids);
+            inpL             = build_out_ids_rows(inpL, inp_out_ids);
+            attn_norm_output = build_out_ids_rows(attn_norm_output, inp_out_ids);
         }
         // FF
         {

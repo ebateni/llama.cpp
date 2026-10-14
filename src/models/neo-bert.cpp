@@ -92,8 +92,8 @@ llama_model_neo_bert::graph::graph(const llama_model & model, const llm_graph_pa
             cb(cur, "kqv_out", il);
         }
         if (il == n_layer - 1 && inp_out_ids) {
-            cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
-            inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
+            cur  = build_out_ids_rows(cur, inp_out_ids);
+            inpL = build_out_ids_rows(inpL, inp_out_ids);
         }
         // re-add the layer input
         cur = ggml_add(ctx0, cur, inpL);

@@ -91,8 +91,8 @@ llama_model_gemma::graph::graph(const llama_model & model, const llm_graph_param
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f, il);
         }
         if (il == n_layer - 1 && inp_out_ids) {
-            cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
-            inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
+            cur  = build_out_ids_rows(cur, inp_out_ids);
+            inpL = build_out_ids_rows(inpL, inp_out_ids);
         }
         ggml_tensor * sa_out = ggml_add(ctx0, cur, inpL);
         cb(sa_out, "sa_out", il);

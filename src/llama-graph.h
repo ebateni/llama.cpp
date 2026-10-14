@@ -1165,6 +1165,9 @@ struct llm_graph_context {
     ggml_tensor * build_inp_pos() const;
     ggml_tensor * build_inp_attn_scale() const;
     ggml_tensor * build_inp_out_ids() const;
+    // Select the output-token rows from the hidden state. In sequence-parallel mode the hidden
+    // state is token-split (AXIS_1), so it is first all-gathered to a full tensor on every device.
+    ggml_tensor * build_out_ids_rows(ggml_tensor * cur, ggml_tensor * out_ids) const;
     ggml_tensor * build_inp_mean() const;
     ggml_tensor * build_inp_cls() const;
 

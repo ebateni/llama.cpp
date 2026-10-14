@@ -167,8 +167,8 @@ llama_model_falcon_h1::graph::graph(const llama_model & model, const llm_graph_p
         cb(cur, "layer_out", il);
 
         if (il == n_layer - 1 && inp_out_ids) {
-            cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
-            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            cur   = build_out_ids_rows(cur, inp_out_ids);
+            inpSA = build_out_ids_rows(inpSA, inp_out_ids);
         }
         ggml_tensor * ffn_inp = inpSA;
         cb(ffn_inp, "ffn_inp", il);

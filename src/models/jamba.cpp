@@ -138,8 +138,8 @@ llama_model_jamba::graph::graph(const llama_model & model, const llm_graph_param
                     Qcur, Kcur, Vcur, NULL, NULL, NULL, 1.0f/sqrtf(float(n_embd_head)), il);
         }
         if (il == n_layer - 1 && inp_out_ids) {
-            cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
-            inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
+            cur  = build_out_ids_rows(cur, inp_out_ids);
+            inpL = build_out_ids_rows(inpL, inp_out_ids);
         }
         // residual
         struct ggml_tensor * ffn_inp = ggml_add(ctx0, inpL, cur);

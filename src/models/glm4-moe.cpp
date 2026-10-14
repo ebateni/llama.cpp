@@ -269,7 +269,7 @@ llama_model_glm4_moe::graph_mtp::graph_mtp(const llama_model & model, const llm_
     res->t_h_nextn = cur;
 
     if (inp_out_ids) {
-        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+        cur = build_out_ids_rows(cur, inp_out_ids);
     }
     cb(cur, "mtp_shared_head_norm", -1);
 
@@ -365,8 +365,8 @@ llama_model_glm4_moe::graph::graph(const llama_model & model, const llm_graph_pa
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
         }
         if (il == n_layer - 1 && inp_out_ids && (!cparams.embeddings_nextn || cparams.embeddings_nextn_masked)) {
-            cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
-            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            cur   = build_out_ids_rows(cur, inp_out_ids);
+            inpSA = build_out_ids_rows(inpSA, inp_out_ids);
         }
         ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
         cb(ffn_inp, "ffn_inp", il);
@@ -428,7 +428,7 @@ llama_model_glm4_moe::graph::graph(const llama_model & model, const llm_graph_pa
     res->t_h_nextn = cur;
 
     if (cparams.embeddings_nextn && !cparams.embeddings_nextn_masked && inp_out_ids) {
-        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+        cur = build_out_ids_rows(cur, inp_out_ids);
     }
 
     cb(cur, "result_norm", -1);

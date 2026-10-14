@@ -161,8 +161,8 @@ llama_model_plm::graph::graph(const llama_model & model, const llm_graph_params 
                     q_states, k_states, v_states, nullptr, nullptr, nullptr, kq_scale, il);
         }
         if (il == n_layer - 1 && inp_out_ids) {
-            cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
-            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            cur   = build_out_ids_rows(cur, inp_out_ids);
+            inpSA = build_out_ids_rows(inpSA, inp_out_ids);
         }
         ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
         cb(ffn_inp, "ffn_inp", il);

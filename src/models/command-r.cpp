@@ -99,9 +99,9 @@ llama_model_command_r::graph::graph(const llama_model & model, const llm_graph_p
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
         }
         if (il == n_layer - 1 && inp_out_ids) {
-            cur     = ggml_get_rows(ctx0, cur, inp_out_ids);
-            inpL    = ggml_get_rows(ctx0, inpL, inp_out_ids);
-            ffn_inp = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
+            cur     = build_out_ids_rows(cur, inp_out_ids);
+            inpL    = build_out_ids_rows(inpL, inp_out_ids);
+            ffn_inp = build_out_ids_rows(ffn_inp, inp_out_ids);
         }
         ggml_tensor * attn_out = cur;
 

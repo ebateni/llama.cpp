@@ -190,8 +190,8 @@ llama_model_minicpm3::graph::graph(const llama_model & model, const llm_graph_pa
                     q_states, k_states, v_states, nullptr, nullptr, nullptr, kq_scale, il);
         }
         if (il == n_layer - 1 && inp_out_ids) {
-            cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
-            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            cur   = build_out_ids_rows(cur, inp_out_ids);
+            inpSA = build_out_ids_rows(inpSA, inp_out_ids);
         }
         // scale_res - scale the hidden states for residual connection
         const float scale_res = scale_depth/sqrtf(float(n_layer)); // TODO: is this correct?

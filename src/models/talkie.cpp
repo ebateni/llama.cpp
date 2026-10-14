@@ -99,9 +99,9 @@ llama_model_talkie::graph::graph(const llama_model & model, const llm_graph_para
         }
 
         if (il == n_layer - 1 && inp_out_ids) {
-            cur      = ggml_get_rows(ctx0, cur,      inp_out_ids);
-            inpSA    = ggml_get_rows(ctx0, inpSA,    inp_out_ids);
-            inp_skip = ggml_get_rows(ctx0, inp_skip, inp_out_ids);
+            cur      = build_out_ids_rows(cur, inp_out_ids);
+            inpSA    = build_out_ids_rows(inpSA, inp_out_ids);
+            inp_skip = build_out_ids_rows(inp_skip, inp_out_ids);
         }
 
         ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);

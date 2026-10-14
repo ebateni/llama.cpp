@@ -162,8 +162,8 @@ llama_model_arwkv7::graph::graph(const llama_model & model, const llm_graph_para
         ffn_inp = ggml_reshape_2d(ctx0, ffn_inp, n_embd, n_tokens);
 
         if (il == n_layer - 1 && inp_out_ids) {
-            cur     = ggml_get_rows(ctx0, cur,     inp_out_ids);
-            ffn_inp = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
+            cur     = build_out_ids_rows(cur, inp_out_ids);
+            ffn_inp = build_out_ids_rows(ffn_inp, inp_out_ids);
         }
         // feed-forward network
         cur = build_norm(ffn_inp,

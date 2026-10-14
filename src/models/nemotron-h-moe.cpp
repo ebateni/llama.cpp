@@ -88,7 +88,7 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
 
     // gather the output rows here so the MoE FFN below only runs on the positions we keep
     if (crop_before_ffn) {
-        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+        cur = build_out_ids_rows(cur, inp_out_ids);
     }
 
     // MoE FFN sub-layer (mtp.layers.1)
@@ -149,7 +149,7 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
     res->t_h_nextn = cur;
 
     if (!crop_before_ffn && inp_out_ids) {
-        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+        cur = build_out_ids_rows(cur, inp_out_ids);
     }
 
     // LM head

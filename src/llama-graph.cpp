@@ -2499,6 +2499,18 @@ ggml_tensor * llm_graph_context::build_inp_out_ids() const {
     return cur;
 }
 
+ggml_tensor * llm_graph_context::build_out_ids_rows(ggml_tensor * cur, ggml_tensor * out_ids) const {
+    if (cparams.seq_parallel) {
+        // The hidden state is split along the token dimension (AXIS_1) across devices. Gather it to
+        // a full tensor on every device before selecting the output-token rows, so get_rows (whose
+        // index set is mirrored) reads from the complete sequence. The "GATHER:" name prefix makes
+        // the meta backend run the cross-device all-gather at this point.
+        cur = ggml_cont(ctx0, cur);
+        ggml_set_name(cur, "GATHER:out_ids_in");
+    }
+    return ggml_get_rows(ctx0, cur, out_ids);
+}
+
 ggml_tensor * llm_graph_context::build_inp_mean() const {
     auto inp = std::make_unique<llm_graph_input_mean>(cparams);
 

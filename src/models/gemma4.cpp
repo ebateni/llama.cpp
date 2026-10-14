@@ -276,8 +276,8 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
         // TODO @ngxson : strip unused token right after the last KV layer to speed up prompt processing
         // keep all rows when extracting unmasked nextn embeddings (MTP target needs the hidden state for every token)
         if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
-            cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
-            inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
+            cur  = build_out_ids_rows(cur, inp_out_ids);
+            inpL = build_out_ids_rows(inpL, inp_out_ids);
         }
         cur = build_norm(cur,
                 model.layers[il].attn_post_norm, nullptr,
@@ -376,7 +376,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
 
             // TODO @ngxson : improve this
             if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
-                inp_this_layer = ggml_get_rows(ctx0, inp_this_layer, inp_out_ids);
+                inp_this_layer = build_out_ids_rows(inp_this_layer, inp_out_ids);
             }
 
             cur = ggml_mul(ctx0, cur, inp_this_layer);
@@ -414,7 +414,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     res->t_h_nextn = cur;
 
     if (!cparams.embeddings_nextn_masked && inp_out_ids) {
-        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+        cur = build_out_ids_rows(cur, inp_out_ids);
     }
 
     cb(cur, "result_norm", -1);

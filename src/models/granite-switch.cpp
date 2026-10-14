@@ -299,8 +299,8 @@ llama_model_granite_switch::graph::graph(
         cur = build_attention_layer(cur, inp_pos, adapter_ids, inp_attn, model, n_embd_head, il);
 
         if (il == n_layer - 1 && inp_out_ids) {
-            cur   = ggml_get_rows(ctx0, cur,   inp_out_ids);
-            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            cur   = build_out_ids_rows(cur, inp_out_ids);
+            inpSA = build_out_ids_rows(inpSA, inp_out_ids);
             // keep adapter_ids aligned to the kept rows (2D round-trip for get_rows)
             const int64_t n_out = inp_out_ids->ne[0];
             adapter_ids = ggml_get_rows(ctx0,

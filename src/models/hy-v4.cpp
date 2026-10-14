@@ -582,7 +582,7 @@ llama_model_hy_v4::graph::graph(const llama_model & model, const llm_graph_param
     // prune to the requested output rows once, after all HC streams are done
     if (inp_out_ids) {
         ggml_tensor * flat = ggml_reshape_2d(ctx0, inpL, n_embd * hc, n_tokens);
-        flat = ggml_get_rows(ctx0, flat, inp_out_ids);
+        flat = build_out_ids_rows(flat, inp_out_ids);
         inpL = ggml_reshape_3d(ctx0, flat, n_embd, hc, n_outputs);
     }
 

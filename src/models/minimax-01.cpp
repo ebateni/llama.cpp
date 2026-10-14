@@ -420,9 +420,9 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
         }
 
         if (il == n_layer - 1 && inp_out_ids) {
-            cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
-            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
-            residual = ggml_get_rows(ctx0, residual, inp_out_ids);
+            cur   = build_out_ids_rows(cur, inp_out_ids);
+            inpSA = build_out_ids_rows(inpSA, inp_out_ids);
+            residual = build_out_ids_rows(residual, inp_out_ids);
         }
 
         residual = ggml_scale(ctx0, residual, hparams.f_residual_scale);

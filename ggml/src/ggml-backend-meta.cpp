@@ -752,6 +752,11 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
         if (src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_0 && src_ss[1].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED) {
             return src_ss[0];
         }
+        // Sequence parallelism: data gathered to a full tensor (GATHER == full on every device),
+        // indices mirrored -> the selected rows are identical on every device -> MIRRORED output.
+        if (src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_GATHER && src_ss[1].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED) {
+            return {GGML_BACKEND_SPLIT_AXIS_MIRRORED, {0}, {1}, 1};
+        }
         // Sequence parallelism: the row-index tensor is split along its only dimension (AXIS_0 =
         // the token count) while the data table is mirrored. get_rows output is
         // [data.ne[0], idx.ne[0], ...], so a split on the index count becomes an AXIS_1 (token)

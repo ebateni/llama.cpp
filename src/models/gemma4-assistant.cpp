@@ -151,8 +151,8 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
                 Qcur, nullptr, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
 
         if (il == n_layer_nextn - 1 && inp_out_ids) {
-            cur  = ggml_get_rows(ctx0, cur,  inp_out_ids);
-            inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
+            cur  = build_out_ids_rows(cur, inp_out_ids);
+            inpL = build_out_ids_rows(inpL, inp_out_ids);
         }
 
         cur = build_norm(cur, model.layers[il].attn_post_norm, nullptr, LLM_NORM_RMS, il);

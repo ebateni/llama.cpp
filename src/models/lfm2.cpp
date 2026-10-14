@@ -261,8 +261,8 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
                                     build_attn_block(cur, inp_pos, inp_hybrid->get_attn(), il);
 
         if (il == n_layer - 1 && inp_out_ids) {
-            cur      = ggml_get_rows(ctx0, cur, inp_out_ids);
-            prev_cur = ggml_get_rows(ctx0, prev_cur, inp_out_ids);
+            cur      = build_out_ids_rows(cur, inp_out_ids);
+            prev_cur = build_out_ids_rows(prev_cur, inp_out_ids);
         }
 
         cur = ggml_add(ctx0, prev_cur, cur);

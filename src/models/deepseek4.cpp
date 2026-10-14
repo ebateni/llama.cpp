@@ -1333,7 +1333,7 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p
     }
 
     ggml_tensor * flat = ggml_reshape_2d(ctx0, inpL, n_embd*hc, n_tokens);
-    ggml_tensor * flat_out = inp_out_ids ? ggml_get_rows(ctx0, flat, inp_out_ids) : flat;
+    ggml_tensor * flat_out = inp_out_ids ? build_out_ids_rows(flat, inp_out_ids) : flat;
 
     if (cparams.embeddings_nextn) {
         ggml_tensor * h_nextn = cparams.embeddings_nextn_masked ? flat_out : inpL;
@@ -1477,7 +1477,7 @@ llama_model_deepseek4::graph_mtp::graph_mtp(const llama_model & model, const llm
     cb(inpL, "mtp_l_out", il);
 
     ggml_tensor * flat = ggml_reshape_2d(ctx0, inpL, n_embd*hc, n_tokens);
-    ggml_tensor * h_nextn = ggml_get_rows(ctx0, flat, inp_out_ids);
+    ggml_tensor * h_nextn = build_out_ids_rows(flat, inp_out_ids);
     cb(h_nextn, "h_nextn", -1);
     res->t_h_nextn = h_nextn;
 

@@ -153,10 +153,10 @@ llama_model_rwkv6::graph::graph(const llama_model & model, const llm_graph_param
         cur      = ggml_reshape_2d(ctx0, cur, n_embd, n_tokens);
 
         if (il == n_layer - 1 && inp_out_ids) {
-            ffn_inp  = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
-            ffn_norm = ggml_get_rows(ctx0, ffn_norm, inp_out_ids);
-            x_prev   = ggml_get_rows(ctx0, x_prev, inp_out_ids);
-            cur      = ggml_get_rows(ctx0, cur, inp_out_ids);
+            ffn_inp  = build_out_ids_rows(ffn_inp, inp_out_ids);
+            ffn_norm = build_out_ids_rows(ffn_norm, inp_out_ids);
+            x_prev   = build_out_ids_rows(x_prev, inp_out_ids);
+            cur      = build_out_ids_rows(cur, inp_out_ids);
         }
         cur = build_rwkv6_channel_mix(layer, ffn_norm, x_prev, LLM_ARCH_RWKV6);
         cur = ggml_add(ctx0, cur, ffn_inp);
