@@ -371,6 +371,8 @@ extern "C" {
 
         GGML_BACKEND_SPLIT_AXIS_MIRRORED = 10, // all values on all backends
         GGML_BACKEND_SPLIT_AXIS_PARTIAL  = 11, // each backend has a partial sum
+        GGML_BACKEND_SPLIT_AXIS_GATHER   = 12, // full tensor on all backends, produced by all-gathering
+                                               //   each backend's AXIS_1 (token/row) slice (sequence parallelism)
 
         // for internal bookkeeping only:
         GGML_BACKEND_SPLIT_AXIS_NONE    = 98,

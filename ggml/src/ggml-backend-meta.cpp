@@ -38,6 +38,8 @@ const char * ggml_backend_meta_split_axis_name(enum ggml_backend_meta_split_axis
             return "MIRRORED";
         case GGML_BACKEND_SPLIT_AXIS_PARTIAL:
             return "PARTIAL";
+        case GGML_BACKEND_SPLIT_AXIS_GATHER:
+            return "GATHER";
         case GGML_BACKEND_SPLIT_AXIS_NONE:
             return "NONE";
         case GGML_BACKEND_SPLIT_AXIS_UNKNOWN:
@@ -651,7 +653,8 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
                 GGML_ABORT("shape mismatch for %s", ggml_op_name(tensor->op));
             }
             case GGML_BACKEND_SPLIT_AXIS_MIRRORED:
-            case GGML_BACKEND_SPLIT_AXIS_PARTIAL: {
+            case GGML_BACKEND_SPLIT_AXIS_PARTIAL:
+            case GGML_BACKEND_SPLIT_AXIS_GATHER: {
                 return src_ss[0];
             }
             default: {
@@ -713,7 +716,8 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
                 return {ggml_backend_meta_split_axis(tensor->op_params[src_ss[0].axis]), {0}, {src_ss[0].nr[0]}, 1};
             }
             case GGML_BACKEND_SPLIT_AXIS_MIRRORED:
-            case GGML_BACKEND_SPLIT_AXIS_PARTIAL: {
+            case GGML_BACKEND_SPLIT_AXIS_PARTIAL:
+            case GGML_BACKEND_SPLIT_AXIS_GATHER: {
                 return src_ss[0];
             }
             default: {
@@ -733,7 +737,8 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             case GGML_BACKEND_SPLIT_AXIS_2:
             case GGML_BACKEND_SPLIT_AXIS_3:
             case GGML_BACKEND_SPLIT_AXIS_MIRRORED:
-            case GGML_BACKEND_SPLIT_AXIS_PARTIAL: {
+            case GGML_BACKEND_SPLIT_AXIS_PARTIAL:
+            case GGML_BACKEND_SPLIT_AXIS_GATHER: {
                 return src_ss[0];
             }
             default: {
@@ -1427,6 +1432,7 @@ static void ggml_backend_meta_buffer_memset_tensor(
             GGML_ASSERT(value == 0);
             [[fallthrough]];
         }
+        case GGML_BACKEND_SPLIT_AXIS_GATHER:
         case GGML_BACKEND_SPLIT_AXIS_MIRRORED: {
             for (size_t j = 0; j < n_bufs; j++) {
                 ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, j);
@@ -1528,6 +1534,7 @@ static void ggml_backend_meta_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
             }
             GGML_ASSERT(offset_j == chunk_size_full);
         } break;
+        case GGML_BACKEND_SPLIT_AXIS_GATHER:
         case GGML_BACKEND_SPLIT_AXIS_MIRRORED: {
             for (size_t j = 0; j < n_bufs; j++) {
                 ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, j);
@@ -1656,6 +1663,7 @@ static void ggml_backend_meta_buffer_get_tensor(ggml_backend_buffer_t buffer, co
             }
             GGML_ASSERT(offset_j == chunk_size_full);
         } break;
+        case GGML_BACKEND_SPLIT_AXIS_GATHER:
         case GGML_BACKEND_SPLIT_AXIS_MIRRORED: {
             // TODO other simple backend may be better
             const ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, 0);
@@ -1923,6 +1931,7 @@ static void ggml_backend_meta_set_tensor_async(ggml_backend_t backend, ggml_tens
             }
             GGML_ASSERT(offset_j == chunk_size_full);
         } break;
+        case GGML_BACKEND_SPLIT_AXIS_GATHER:
         case GGML_BACKEND_SPLIT_AXIS_MIRRORED: {
             for (size_t j = 0; j < n_backends; j++) {
                 ggml_backend_tensor_set_async(
@@ -1968,6 +1977,7 @@ static void ggml_backend_meta_get_tensor_async(ggml_backend_t backend, const ggm
             }
             GGML_ASSERT(offset_j == chunk_size_full);
         } break;
+        case GGML_BACKEND_SPLIT_AXIS_GATHER:
         case GGML_BACKEND_SPLIT_AXIS_MIRRORED: {
             // TODO other simple backend may be better
             ggml_backend_t simple_backend = ggml_backend_meta_simple_backend(backend, 0);
