@@ -747,6 +747,15 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
         if (src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_0 && src_ss[1].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED) {
             return src_ss[0];
         }
+        // Sequence parallelism: the row-index tensor is split along its only dimension (AXIS_0 =
+        // the token count) while the data table is mirrored. get_rows output is
+        // [data.ne[0], idx.ne[0], ...], so a split on the index count becomes an AXIS_1 (token)
+        // split on the output — this seeds the token-dimension split for the first-layer activation.
+        if (src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED && src_ss[1].axis == GGML_BACKEND_SPLIT_AXIS_0) {
+            ggml_backend_meta_split_state ret = src_ss[1];
+            ret.axis = GGML_BACKEND_SPLIT_AXIS_1;
+            return ret;
+        }
         return handle_generic(src_ss, /*scalar_only =*/ true);
     };
 
@@ -778,6 +787,17 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             GGML_ASSERT(src_ss[2].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED);
             GGML_ASSERT(tensor->src[4] == nullptr || src_ss[4].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED);
             return {GGML_BACKEND_SPLIT_AXIS_MIRRORED, {0}, {1}, 1};
+        }
+
+        // Sequence parallelism: Q is split along the query-token dimension (ne[1] of the
+        // [head_dim, n_tokens, n_heads] Q tensor is AXIS_1), while K/V are mirrored (every device
+        // holds the full K/V). Each device computes complete attention for its own query tokens
+        // against the full K/V, so there is no partial-sum merge — the output stays split on AXIS_1.
+        if (src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_1) {
+            GGML_ASSERT(src_ss[1].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED);
+            GGML_ASSERT(src_ss[2].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED);
+            GGML_ASSERT(tensor->src[4] == nullptr || src_ss[4].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED);
+            return {GGML_BACKEND_SPLIT_AXIS_1, {0}, {1}, 1};
         }
 
         GGML_ASSERT(src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_2);

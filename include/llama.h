@@ -197,10 +197,12 @@ extern "C" {
     LLAMA_API const char * llama_flash_attn_type_name(enum llama_flash_attn_type flash_attn_type);
 
     enum llama_split_mode {
-        LLAMA_SPLIT_MODE_NONE   = 0, // single GPU
-        LLAMA_SPLIT_MODE_LAYER  = 1, // split layers and KV across GPUs
-        LLAMA_SPLIT_MODE_ROW    = 2, // split layers and KV across GPUs, use tensor parallelism if supported
-        LLAMA_SPLIT_MODE_TENSOR = 3,
+        LLAMA_SPLIT_MODE_NONE     = 0, // single GPU
+        LLAMA_SPLIT_MODE_LAYER    = 1, // split layers and KV across GPUs
+        LLAMA_SPLIT_MODE_ROW      = 2, // split layers and KV across GPUs, use tensor parallelism if supported
+        LLAMA_SPLIT_MODE_TENSOR   = 3,
+        LLAMA_SPLIT_MODE_SEQUENCE = 4, // sequence parallelism: split the token dimension across devices,
+                                       //   weights/KV mirrored (no allreduce)
     };
 
     enum llama_load_mode {

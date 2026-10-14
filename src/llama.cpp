@@ -158,13 +158,13 @@ int64_t llama_time_us(void) {
 static bool llama_prepare_model_devices(const llama_model_params & params, llama_model * model) {
     // create list of devices to use with this model
     if (params.devices) {
-        if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR) {
+        if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR || params.split_mode == LLAMA_SPLIT_MODE_SEQUENCE) {
             size_t n_devs = 0;
             while (params.devices[n_devs]) {
                 n_devs++;
             }
             if (n_devs == 0) {
-                LLAMA_LOG_ERROR("%s: LLAMA_SPLIT_MODE_TENSOR needs >= 1 devices\n", __func__);
+                LLAMA_LOG_ERROR("%s: LLAMA_SPLIT_MODE_TENSOR/SEQUENCE needs >= 1 devices\n", __func__);
                 return false;
             }
             LLAMA_LOG_INFO("%s: creating a Meta device with %zu devices\n", __func__, n_devs);
@@ -173,6 +173,7 @@ static bool llama_prepare_model_devices(const llama_model_params & params, llama
             }
             model->get_split_state_ud.n_devices = n_devs;
             model->get_split_state_ud.model = model;
+            model->get_split_state_ud.split_mode = params.split_mode;
             model->devices.push_back({
                 true, ggml_backend_meta_device(
                 params.devices, n_devs, llama_meta_device_get_split_state, &model->get_split_state_ud)
@@ -214,6 +215,7 @@ static bool llama_prepare_model_devices(const llama_model_params & params, llama
             GGML_ASSERT(!devs.empty());
             model->get_split_state_ud.n_devices = devs.size();
             model->get_split_state_ud.model     = model;
+            model->get_split_state_ud.split_mode = params.split_mode;
             gpus.push_back({
                 true, ggml_backend_meta_device(
                 devs.data(), devs.size(), llama_meta_device_get_split_state, &model->get_split_state_ud)

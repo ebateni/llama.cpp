@@ -475,6 +475,24 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     };
 
     auto get_tensor_config = [&]() -> tensor_config {
+        // Sequence parallelism: split only the token dimension of the graph inputs; mirror
+        // everything else (weights, KV-caches, positions, mask). The token split then propagates
+        // through the whole graph via the op handlers in ggml-backend-meta.cpp (get_rows seeds it,
+        // mul_mat/norm/rope/flash-attn carry it) with no collective, since no tensor is split on
+        // a reduction axis.
+        if (ud->split_mode == LLAMA_SPLIT_MODE_SEQUENCE) {
+            // inp_tokens: 1-D [n_tokens] row-index into the (mirrored) embedding table -> split AXIS_0.
+            if (tensor_name == "inp_tokens" || tensor_name == "inp_mixed_tokens") {
+                return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0);
+            }
+            // inp_embd: raw-embedding input [n_embd, n_tokens] -> token dim is AXIS_1.
+            if (tensor_name == "inp_embd" || tensor_name == "inp_mixed_embd") {
+                return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1);
+            }
+            // Everything else (weights, KV-caches, positions, mask, out_ids) is mirrored.
+            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
+        }
+
         if (ud->model->arch == LLM_ARCH_HRM_TEXT) {
             // aliased cache slots cannot satisfy the meta-split invariants, so replicate all tensors
             return {GGML_BACKEND_SPLIT_AXIS_MIRRORED, tensor, 0, 0};
