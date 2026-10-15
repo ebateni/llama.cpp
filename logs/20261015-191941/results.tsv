@@ -1,0 +1,9 @@
+model	cores	split	ab	ubatch	pp_tokens	pp_ts	tg_ts	iq	needle	cookie_ok	depth
+gemma-4-12b-it-qat-q4_0	1	single	1	1024	1024	574.47	7.53	1/10	PASS	GARBAGE(phrase)	0
+gemma-4-12b-it-qat-q4_0	1	single	0	1024	1024	528.91	7.48	1/10	PASS	GARBAGE(phrase)	0
+gemma-4-12b-it-qat-q4_0	4	row	1	1024	1024	1579.87	15.19	1/10	PASS	GARBAGE(phrase)	0
+gemma-4-12b-it-qat-q4_0	4	row	0	1024	1024	1455.33	14.69	1/10	PASS	GARBAGE(phrase)	0
+gemma-2-2b_Q4_0	1	single	1	1024	1024	2319.00	26.07	6/10	PASS	OK	0
+gemma-2-2b_Q4_0	1	single	0	1024	1024	2143.07	25.77	6/10	PASS	OK	0
+gemma-2-2b_Q4_0	4	row	1	1024	1024	5059.64	46.06	6/10	PASS	OK	0
+gemma-2-2b_Q4_0	4	row	0	1024	1024	4615.20	42.44	6/10	PASS	OK	0
