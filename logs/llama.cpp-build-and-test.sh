@@ -214,6 +214,9 @@ fi
 #   on this branch (verified: not among the env vars ggml-hexagon.cpp reads),
 #   so 4-core Gemma would simply abort.
 : "${MODELS:=llama-3.2-3b-instruct-q4_0:4 Qwen3.5-4B-Q4:4 gemma-4-E4B_q4_0-it:2}"
+# Accept "name.gguf[:N]" too: the runner always appends .gguf itself.
+MODELS=$(for spec in $MODELS; do printf '%s ' "$(printf '%s' "$spec" | sed -E 's/\.gguf(:|$)/\1/')"; done)
+MODELS=${MODELS% }
 
 # Phase switches.
 DO_BUILD=1; DO_DEPLOY=1; DO_BENCH=1; DO_IQ=1; DO_COOKIE=1; DO_NEEDLE=1
@@ -363,7 +366,16 @@ do_build() {
   [ -f "$PKG_HOST/bin/llama-bench" ]        || die "build produced no llama-bench"
   [ -f "$PKG_HOST/lib/libggml-htp-v81.so" ] || die "build produced no signed HTP skel"
 
-  say "${G}build ok${N}: $PKG_HOST  ($(git rev-parse --short HEAD))"
+  # Stamp the package so results record which source the device binaries came from
+  # (with --no-build the repo HEAD can differ from what is deployed).
+  printf '%s (%s)%s built %s
+' "$(git rev-parse --short HEAD)" "$(git rev-parse --abbrev-ref HEAD)"     "$(git diff --quiet HEAD -- ggml src common tools 2>/dev/null || echo ' +dirty')" "$(date -Iseconds)"     > "$PKG_HOST/BUILD_INFO"
+  say "${G}build ok${N}: $PKG_HOST  ($(cat "$PKG_HOST/BUILD_INFO"))"
+}
+
+device_build_info() {
+  $ADB shell "cat $PKG_DEV/BUILD_INFO 2>/dev/null" 2>/dev/null | tr -d '
+' | grep . || echo "unknown (package built before BUILD_INFO stamping)"
 }
 
 #------------------------------------------------------------------------------
@@ -1775,6 +1787,8 @@ run_matrix() {
   head1 "TEST MATRIX"
   say "device   : $ADB_SERIAL"
   say "commit   : $(cd "$REPO" && git rev-parse --short HEAD) ($(cd "$REPO" && git rev-parse --abbrev-ref HEAD))"
+  DEV_BUILD_INFO=$(device_build_info)
+  say "binaries : $DEV_BUILD_INFO"
   if [ -n "$AB_VAR" ]; then
     say "A/B var  : $AB_VAR = $AB"
   fi
@@ -1789,7 +1803,7 @@ fi)"
   say "outdir   : $OUTDIR"
   say ""
 
-  printf 'model\tcores\tsplit\tab\tubatch\tpp_tokens\tpp_ts\ttg_ts\tiq\tneedle\tcookie_ok\n' > "$TSV"
+  printf 'model\tcores\tsplit\tab\tubatch\tpp_tokens\tpp_ts\ttg_ts\tiq\tneedle\tcookie_ok\tdepth\n' > "$TSV"
 
   # If no A/B var is configured, run the loop body once with a placeholder value.
   local ab_values="$AB"; [ -z "$AB_VAR" ] && ab_values="-"
@@ -1994,8 +2008,8 @@ fi)"
               fi
             fi
 
-            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-                   "$model" "$n" "$sp" "$abv" "$ub_used" "$ppt" "$pp" "$tg" "$iq" "$needle" "$cookie_ok" >> "$TSV"
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+                   "$model" "$n" "$sp" "$abv" "$ub_used" "$ppt" "$pp" "$tg" "$iq" "$needle" "$cookie_ok" "$PP_DEPTH_RUN" >> "$TSV"
 
             local flag="$G"; case "$needle$cookie_ok" in *FAIL*|*GARBAGE*|*ERR*) flag="$R" ;; esac
             printf '  %-32s %dc %-6s ab=%-4s pp=%-6s ppd=%-6s tgd=%-6s ub=%-5s pp_ts=%-9s tg=%-7s %siq=%s needle=%s cookie=%s%s%s\n' \
@@ -2024,7 +2038,8 @@ summarise() {
     echo "# llama.cpp / ggml-hexagon build-and-test results"
     echo
     echo "- device: \`$ADB_SERIAL\`"
-    echo "- commit: \`$(cd "$REPO" && git rev-parse --short HEAD)\` (\`$(cd "$REPO" && git rev-parse --abbrev-ref HEAD)\`)"
+    echo "- repo HEAD: \`$(cd "$REPO" && git rev-parse --short HEAD)\` (\`$(cd "$REPO" && git rev-parse --abbrev-ref HEAD)\`)"
+    echo "- device binaries: \`${DEV_BUILD_INFO:-unknown}\`"
     echo "- date: $(date -Iseconds)"
     echo "- reps: $REPS, ctx: $CTX, pp-depth: $PP_DEPTH, tg-depth: $TG_DEPTH"
     echo "- split mode(s): $SPLITS (1-core rows always run as \"single\" — nothing to split)"
@@ -2032,12 +2047,8 @@ summarise() {
     echo
     echo '## Results'
     echo
-    if [ -n "$AB_VAR" ]; then
-      echo "| model | cores | split | $AB_VAR | ubatch | pp_tok | PP t/s | PP x1c | TG t/s | TG x1c | IQ | needle | cookie |"
-    else
-      echo '| model | cores | split | ubatch | pp_tok | PP t/s | PP x1c | TG t/s | TG x1c | IQ | needle | cookie |'
-    fi
-    echo '|---|---|---|---|---|---|---|---|---|---|---|---|---|'
+    echo "| model | cores | split | ${AB_VAR:-ab} | ubatch | pp_tok | depth | PP t/s | PP x1c | TG t/s | TG x1c | IQ | needle | cookie |"
+    echo '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|'
     # "x1c" = speedup vs this model's 1-core ("single") result at the same
     # ab — computed here (not stored in the TSV) so it stays correct regardless
     # of which cores/splits were run. Keyed on model+ab only (NOT ubatch): the
@@ -2048,16 +2059,16 @@ summarise() {
       FNR==1 { next }
       FNR==NR {
         if ($2+0==1) {
-          if ($7!="NA" && $7!="-") bp[$1,$4,$5,$6]=$7
-          if ($8!="NA" && $8!="-") bt[$1,$4,$5,$6]=$8
+          if ($7!="NA" && $7!="-") bp[$1,$4,$5,$6,$12]=$7
+          if ($8!="NA" && $8!="-") bt[$1,$4,$5,$6,$12]=$8
         }
         next
       }
       {
-        k = $1 SUBSEP $4 SUBSEP $5 SUBSEP $6
+        k = $1 SUBSEP $4 SUBSEP $5 SUBSEP $6 SUBSEP $12
         ppx = ((k in bp) && $7!="NA" && $7!="-" && bp[k]+0!=0) ? sprintf("%.2fx", $7/bp[k]) : "NA"
         tgx = ((k in bt) && $8!="NA" && $8!="-" && bt[k]+0!=0) ? sprintf("%.2fx", $8/bt[k]) : "NA"
-        printf "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",$1,$2,$3,$4,$5,$6,$7,ppx,$8,tgx,$9,$10,$11
+        printf "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",$1,$2,$3,$4,$5,$6,$12,$7,ppx,$8,tgx,$9,$10,$11
       }' "$TSV" "$TSV"
     echo
 
@@ -2068,22 +2079,22 @@ summarise() {
     if [ "$split_n" -gt 1 ]; then
       echo '## Split-mode comparison (per model / cores / ubatch)'
       echo
-      echo '| model | cores | split | ab | ubatch | pp_tok | PP t/s | PP x1c | TG t/s | TG x1c | IQ | needle | cookie |'
-      echo '|---|---|---|---|---|---|---|---|---|---|---|---|---|'
+      echo '| model | cores | split | ab | ubatch | pp_tok | depth | PP t/s | PP x1c | TG t/s | TG x1c | IQ | needle | cookie |'
+      echo '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|'
       awk -F'\t' '
         FNR==1 { next }
         FNR==NR {
           if ($2+0==1) {
-            if ($7!="NA" && $7!="-") bp[$1,$4,$5,$6]=$7
-            if ($8!="NA" && $8!="-") bt[$1,$4,$5,$6]=$8
+            if ($7!="NA" && $7!="-") bp[$1,$4,$5,$6,$12]=$7
+            if ($8!="NA" && $8!="-") bt[$1,$4,$5,$6,$12]=$8
           }
           next
         }
         $2+0>1 {
-          k = $1 SUBSEP $4 SUBSEP $5 SUBSEP $6
+          k = $1 SUBSEP $4 SUBSEP $5 SUBSEP $6 SUBSEP $12
           ppx = ((k in bp) && $7!="NA" && $7!="-" && bp[k]+0!=0) ? sprintf("%.2fx", $7/bp[k]) : "NA"
           tgx = ((k in bt) && $8!="NA" && $8!="-" && bt[k]+0!=0) ? sprintf("%.2fx", $8/bt[k]) : "NA"
-          printf "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",$1,$2,$3,$4,$5,$6,$7,ppx,$8,tgx,$9,$10,$11
+          printf "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",$1,$2,$3,$4,$5,$6,$12,$7,ppx,$8,tgx,$9,$10,$11
         }' "$TSV" "$TSV" \
         | sort -t'|' -k2,2 -k3,3n
       echo
@@ -2101,18 +2112,18 @@ summarise() {
       echo
       echo 'If the percentage shrinks as ubatch grows, the change and ubatch are NOT additive.'
       echo
-      echo "| model | cores | ubatch | PP $AB_VAR=$v0 | PP $AB_VAR=$v1 | delta |"
-      echo '|---|---|---|---|---|---|'
+      echo "| model | cores | ubatch | pp_tok | depth | PP $AB_VAR=$v0 | PP $AB_VAR=$v1 | delta |"
+      echo '|---|---|---|---|---|---|---|---|'
       tail -n +2 "$TSV" | awk -F'\t' -v v0="$v0" -v v1="$v1" -v ps="$primary_split" '
         $3!=ps && $3!="single" { next }
-        $4==v0 { base[$1"\t"$2"\t"$5"\t"$6]=$7 }
-        $4==v1 { opt[$1"\t"$2"\t"$5"\t"$6]=$7 }
+        $4==v0 { base[$1"\t"$2"\t"$5"\t"$6"\t"$12]=$7 }
+        $4==v1 { opt[$1"\t"$2"\t"$5"\t"$6"\t"$12]=$7 }
         END {
           for (k in opt) {
             b=base[k]; o=opt[k]
             if (b=="" || b=="NA" || b=="-" || o=="NA" || o=="-") continue
             split(k,p,"\t")
-            printf "| %s | %s | %s | %.1f | %.1f | %+.1f%% |\n", p[1],p[2],p[3],b,o,(o-b)/b*100
+            printf "| %s | %s | %s | %s | %s | %.1f | %.1f | %+.1f%% |\n", p[1],p[2],p[3],p[4],p[5],b,o,(o-b)/b*100
           }
       }' | sort -t'|' -k2,2 -k3,3n -k4,4n
       echo

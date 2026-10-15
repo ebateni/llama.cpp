@@ -90,3 +90,41 @@ weight bytes > activation bytes, i.e. small ubatches — that is decode (Phase 2
 | **new: CONCAT into SSM_CONV (Qwen3.5)** | 6.3 ms + SSM_CONV 1.59x | with the GDN work |
 
 All of it is Hexagon-side (host fusion matcher + DSP kernels); no Meta or `src/` change.
+
+## Update — ub 1024/2048, depth 0/16k (`logs/20261015-171354`, profile `logs/20261015-163820`)
+
+pp2048, row, 4c vs 1c (x1c). Binary provenance unknown for these runs: the harness recorded
+repo HEAD `75360014b` (seq-parallel branch) with `--no-build`; the harness now stamps `BUILD_INFO`.
+
+| model | ub1024 d0 | ub2048 d0 | ub1024 d16k | ub2048 d16k |
+|---|---|---|---|---|
+| llama-3.2-3b | 2.99 | 3.18 | 3.63 | 3.67 |
+| Qwen3.5-4B   | 2.77 | 2.75 | 3.01 | 2.99 |
+| Gemma-4-E4B  | 2.31 | **2.75** | 2.48 | **2.87** |
+
+Gemma gains +18% from ub1024 -> ub2048 because 2048 tokens give >= 4 Q-blocks and the FA
+fallback stops running SOLO (FA 3.46x at ub2048). This confirms Finding 1, and that the fix must
+not depend on ubatch.
+
+Top losses at ub2048 d0 (profile level 1, so no flush/barrier split; graph = pp2048):
+
+| llama 3.27x (lost 69 ms of 377) | ms | Qwen3.5-4B 2.84x (lost 179 of 619) | ms | Gemma 2.88x (lost 159 of 566) | ms |
+|---|---|---|---|---|---|
+| SWIGLU 2.03x | 15.8 | **SSM_CONV 1.38x** | **24.9** | GEGLU 2.11x | 28.7 |
+| ADD l_out + ffn_inp | 14.4 | SWIGLU 1.85x | 23.6 | MUL_MAT:node (attn_out+PLE) 2.75x | 14.8 |
+| FA | 5.4 | **CONCAT conv_input** | **12.8** | 3x ADD (attn_out, pe_in, node) | 26.7 |
+| ROPE Q | 4.6 | MUL (gate) | 9.0 | ROPE Q + q-norm | 13.7 |
+| 2x RMS_NORM+MUL | 7.0 | SILU conv_output | 7.7 | MUL l_out | 6.4 |
+| | | 2x ADD residual | 14.9 | FA 3.46x | 8.4 |
+| | | CPY conv_state_update | 5.5 | | |
+
+**Qwen3.5 conv block** (CONCAT[transpose qkv_mixed] -> SSM_CONV -> SILU, + CPY of the last 3
+columns into conv_state): 28.8 + 38.1 + 20.8 + 11.5 = **99 ms of 619 (16%)** of the 4c graph.
+The CONCAT is a transpose (`delta-net-base.cpp:466`); the CPY gathers 3 strided columns. A
+fused kernel reading `qkv_mixed` token-major with a 3-token halo moves ~2 x 67 MB per layer
+(~0.8 ms at 170 GB/s, ~19 ms total) -> estimate **-80 ms (~13%)**. With the transpose gone the
+natural axis becomes TOKEN (contiguous rows plus a read-only halo) instead of channels.
+
+**GLU ops are the whole cost, not just the loss:** SWIGLU/GEGLU take 8.5% (llama), 7% (Qwen)
+and 11% (Gemma) of the 4c graph. Fusing them into the gate/up MUL_MAT_NX epilogue removes the op
+and halves the NX output writes.
