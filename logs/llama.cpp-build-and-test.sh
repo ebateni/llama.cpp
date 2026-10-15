@@ -45,6 +45,9 @@
 #   ADB_SERIAL=192.168.1.1:5555 ./llama.cpp-build-and-test.sh --no-build --no-deploy --quick
 #                                                     # fastest re-test
 #   ./llama.cpp-build-and-test.sh --allow-concurrent   # do NOT kill other jobs (unsafe)
+#   REPS=1 ./llama.cpp-build-and-test.sh --no-build --only-perf --split row --hex-profile 3
+#                                                     # per-NSP op profile + FENCE/L2FLUSH
+#                                                     # trace of the PP bench -> $OUTDIR/profile/
 #   AB_VAR= UBATCH=1024 ./llama.cpp-build-and-test.sh --no-build   # single config, no sweep
 #   AB_VAR=GGML_HEXAGON_FUSE_MUL_MAT_ADD AB=0,1 ./llama.cpp-build-and-test.sh --no-build
 #
@@ -144,6 +147,13 @@ ORIGINAL_ARGV=("$@")
                                         # size. Default: single value, no sweep.
 : "${BATCH:=}"                          # llama-bench -b (batch size); empty = llama-bench default
 : "${REPS:=3}"                 # llama-bench -r
+: "${HEX_PROFILE:=0}"          # --hex-profile N: GGML_HEXAGON_PROFILE for the PP
+                               # bench only (1=op usec, 2=+PMU, 3=+trace events
+                               # incl. FENCE/L2FLUSH). Adds -v and keeps the FULL
+                               # PP stderr in $OUTDIR/profile/<label>.log (not the
+                               # 4000-line tail). TG runs unprofiled. Profiling
+                               # distorts PP t/s: use REPS=1 and take clean
+                               # numbers from a separate run with HEX_PROFILE=0.
 # Accept the actual runtime environment-variable names. The shorter aliases
 # remain supported for backward compatibility.
 #
@@ -222,6 +232,8 @@ while [ $# -gt 0 ]; do
     --quick)      UBATCH=1024; CORES=1,4; REPS=2 ;;
     --only-perf)  DO_IQ=0; DO_COOKIE=0; DO_NEEDLE=0 ;;
     --collect-memory) COLLECT_MEMORY=1 ;;
+    --hex-profile) HEX_PROFILE=$2; shift ;;
+    --hex-profile=*) HEX_PROFILE=${1#--hex-profile=} ;;
     --memory-interval) MEMORY_INTERVAL=$2; shift ;;
     --memory-interval=*) MEMORY_INTERVAL=${1#--memory-interval=} ;;
     --allow-concurrent) KILL_CONCURRENT=0 ;;
@@ -398,6 +410,20 @@ CTX=$CTX
 PP_TOKENS=$PP_TOKENS
 BATCH=$BATCH
 AB_VAR="$AB_VAR"   # name of the env var being A/B-swept this run (may be empty)
+HEX_PROFILE=$HEX_PROFILE   # GGML_HEXAGON_PROFILE for the PP bench (0 = off)
+PROF_FILE=/data/local/tmp/bench_pp_prof.txt
+# profenv — extra env for the PP bench only (TG stays unprofiled). Skipped when
+# GGML_HEXAGON_PROFILE is itself the A/B variable (hexenv emits it then).
+profenv() {
+  [ "\$HEX_PROFILE" != 0 ] && [ "\$AB_VAR" != "GGML_HEXAGON_PROFILE" ] && \
+    printf '%s=%s ' GGML_HEXAGON_PROFILE "\$HEX_PROFILE"
+}
+# profiling is on if either --hex-profile or the A/B value enables it
+prof_on() {
+  [ "\$HEX_PROFILE" != 0 ] && return 0
+  [ "\$AB_VAR" = "GGML_HEXAGON_PROFILE" ] && [ "\${AB_VAL:-0}" != 0 ] && return 0
+  return 1
+}
 
 # --- Hexagon runtime environment -------------------------------------------
 # LD_LIBRARY_PATH        : host-side .so (libggml-hexagon, libllama, ...)
@@ -554,7 +580,7 @@ case "\$CMD" in
     pp_err=/data/local/tmp/bench_pp_err.txt
     pp_fifo=/data/local/tmp/bench_pp_err.fifo
 
-    rm -f "\$pp_out" "\$pp_err" "\$pp_fifo"
+    rm -f "\$pp_out" "\$pp_err" "\$pp_fifo" "\$PROF_FILE"
 
     mkfifo "\$pp_fifo" || {
       echo \
@@ -565,8 +591,16 @@ case "\$CMD" in
 
     # Drain stderr continuously. COMM-DIAG is excluded because retaining it
     # previously exhausted device memory. Only the final useful lines remain.
-    grep -v 'COMM-DIAG' < "\$pp_fifo" |
-      tail -n 4000 > "\$pp_err" &
+    # With profiling, the full stream is also kept in \$PROF_FILE (on device
+    # storage, not RAM) and pulled to the host after the case.
+    if prof_on; then
+      grep -v 'COMM-DIAG' < "\$pp_fifo" |
+        tee "\$PROF_FILE" |
+        tail -n 4000 > "\$pp_err" &
+    else
+      grep -v 'COMM-DIAG' < "\$pp_fifo" |
+        tail -n 4000 > "\$pp_err" &
+    fi
 
     pp_filter_pid=\$!
 
@@ -597,10 +631,11 @@ case "\$CMD" in
       pp_logcat_lines=\$(logcat -b kernel -d -v brief 2>/dev/null | wc -l)
     fi
 
-    env \$(hexenv) setsid -w "\$BENCH" \
+    env \$(hexenv) \$(profenv) setsid -w "\$BENCH" \
       -m "\$MODELS/\$m.gguf" \
       \$(devargslash \$n \$sp) \
       \$(smode \$n \$sp) \
+      \$(prof_on && echo "-v") \
       -ngl 99 \
       -p "\$pp_tokens" \
       -n 0 \
@@ -1163,11 +1198,30 @@ mem_monitor_stop() {
   mem_monitor_analyze "$MEM_CUR_DIR" "$MEM_CUR_LABEL" "$rc"
 }
 
+# pull_profile <label> <action> — with profiling on, copy the full PP stderr of a
+# bench case to $OUTDIR/profile/<label>.log and delete it on the device (it can
+# be tens of MB). Profiling is on for --hex-profile N, or when the case's A/B
+# value of GGML_HEXAGON_PROFILE is non-zero (the device driver decides; we just
+# pull whatever file it left behind).
+pull_profile() {
+  local label=$1 action=$2
+  [ "$action" = "bench" ] || return 0
+  [ "$HEX_PROFILE" != 0 ] || [ "$AB_VAR" = "GGML_HEXAGON_PROFILE" ] || return 0
+  local dir="$OUTDIR/profile" dst
+  mkdir -p "$dir"
+  dst="$dir/$(mem_safe_label "$label").log"
+  if "$ADB" pull /data/local/tmp/bench_pp_prof.txt "$dst" >/dev/null 2>&1; then
+    say "    ${C}profile[$label]: $(wc -l < "$dst" 2>/dev/null | tr -d ' ') lines -> $dst${N}" >&2
+  fi
+  "$ADB" shell "rm -f /data/local/tmp/bench_pp_prof.txt" >/dev/null 2>&1 || true
+}
+
 monitored_dev() {
   local label=$1 process_name=$2; shift 2
   if [ "$COLLECT_MEMORY" != 1 ]; then
     local out rc
     out=$(run_dev_streamed "$label" "$@"); rc=$?
+    pull_profile "$label" "${1:-}"
     cleanup_device_workloads "$label" || return 1
     if case_had_kernel_oom "$out"; then
       recover_cleanup_failure "case=$label; confirmed kernel OOM requires a clean memory state" || return 1
@@ -1194,6 +1248,7 @@ monitored_dev() {
     "$ADB" pull       /data/local/tmp/bench_tg_err.txt       "$MEM_CUR_DIR/benchmark-tg-stderr.txt"       >/dev/null 2>&1 || true
   fi
 
+  pull_profile "$label" "$action"
   mem_monitor_stop "$rc"
   cleanup_device_workloads "$label" || return 1
   if case_had_kernel_oom "$out"; then
@@ -1254,6 +1309,7 @@ write_run_config() {
     printf 'BATCH=%q\n' "$BATCH"
     printf 'MODELS=%q\n' "$MODELS"
     printf 'REPS=%q\n' "$REPS"
+    printf 'HEX_PROFILE=%q\n' "$HEX_PROFILE"
     printf 'PP_DEPTH=%q\n' "$PP_DEPTH"
     printf 'TG_DEPTH=%q\n' "$TG_DEPTH"
     printf 'PP_TOKENS=%q\n' "$PP_TOKENS"
@@ -1289,7 +1345,7 @@ write_run_config() {
     env |
       LC_ALL=C sort |
       grep -E \
-        '^(ADB_SERIAL|AB|AB_VAR|CORES|SPLITS|UBATCH|MODELS|REPS|PP_DEPTH|TG_DEPTH|CTX|COLLECT_MEMORY|MEMORY_INTERVAL|GGML_|LLAMA_|HEXAGON_|CDSP|ADSP_)=' \
+        '^(ADB_SERIAL|AB|AB_VAR|CORES|SPLITS|UBATCH|MODELS|REPS|PP_DEPTH|TG_DEPTH|CTX|COLLECT_MEMORY|MEMORY_INTERVAL|HEX_PROFILE|GGML_|LLAMA_|HEXAGON_|CDSP|ADSP_)=' \
       || true
 
     echo
@@ -1698,6 +1754,9 @@ echo "depths: $DEPTHS (pp-depth=depth, tg-depth=depth+PP_TOKENS=$PP_TOKENS)"
 else
 echo "pp-depth: $PP_DEPTH      tg-depth: $TG_DEPTH"
 fi)"
+  if [ "$HEX_PROFILE" != 0 ]; then
+    say "profile  : GGML_HEXAGON_PROFILE=$HEX_PROFILE on PP bench (+ -v); full logs -> $OUTDIR/profile/  (PP t/s distorted; TG unprofiled)"
+  fi
   say "outdir   : $OUTDIR"
   say ""
 
