@@ -48,6 +48,9 @@
 #   REPS=1 ./llama.cpp-build-and-test.sh --no-build --only-perf --split row --hex-profile 3
 #                                                     # per-NSP op profile + FENCE/L2FLUSH
 #                                                     # trace of the PP bench -> $OUTDIR/profile/
+#   CORES=1,4 AB_VAR=GGML_HEXAGON_FA_SPLIT AB=0,1 ./llama.cpp-build-and-test.sh --test-ops FLASH_ATTN_EXT
+#                                                     # test-backend-ops -b HTP0 on the device per cores x A/B
+#                                                     # value (row split); no model runs -> testops.tsv
 #   ./llama.cpp-build-and-test.sh --push-only logs/<ts>
 #                                                     # no device: split >94 MB .gz into parts,
 #                                                     # then commit + push that run dir only
@@ -156,6 +159,8 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 : "${REPS:=3}"                 # llama-bench -r
 : "${PUSH_RESULTS:=0}"         # --push-results: git commit $OUTDIR + push at the end
 : "${PUSH_ONLY:=}"             # --push-only <dir>: only commit + push an existing run dir (no device)
+: "${TEST_OPS:=}"              # --test-ops OP[,OP..]: run test-backend-ops (-o OP) instead of the model matrix
+: "${TEST_OPS_PATTERN:=}"      # optional test-backend-ops -p <regex> filter for --test-ops
 : "${HEX_PROFILE:=0}"          # --hex-profile N: GGML_HEXAGON_PROFILE for the PP
                                # bench only (1=op usec, 2=+PMU, 3=+trace events
                                # incl. FENCE/L2FLUSH). Adds -v and keeps the FULL
@@ -247,6 +252,8 @@ while [ $# -gt 0 ]; do
     --push-results) PUSH_RESULTS=1 ;;
     --push-only)  PUSH_ONLY=$2; shift ;;
     --push-only=*) PUSH_ONLY=${1#--push-only=} ;;
+    --test-ops)   TEST_OPS=$2; shift ;;
+    --test-ops=*) TEST_OPS=${1#--test-ops=} ;;
     --hex-profile) HEX_PROFILE=$2; shift ;;
     --hex-profile=*) HEX_PROFILE=${1#--hex-profile=} ;;
     --memory-interval) MEMORY_INTERVAL=$2; shift ;;
@@ -937,7 +944,25 @@ The opposite of \\"hot\\" is"; E="cold" ;;
     case "\$out" in *"$NEEDLE"*) echo "NEEDLE=PASS" ;; *) echo "NEEDLE=FAIL" ;; esac
     ;;
 
-  *) echo "usage: llama.cpp-build-and-test-dev.sh <bench|iq|cookie|needle> <model> <cores> <split> <abval> [ubatch]" >&2; exit 2 ;;
+  # testops <cores> <abval> <op> [pattern]
+  #   Runs test-backend-ops against the (row-grouped) HTP0 device vs CPU.
+  #   Emits the tool's output plus "TESTOPS_RC=<rc>".
+  testops)
+    n=\$1; ab=\$2; op=\$3; pat=\${4:-}
+    GGML_HEXAGON_DEVICES=\$(hexdevices \$n row)
+    set_ab "\$ab"
+    echo "HARNESS_ENV testops cores=\$n ab=\$ab op=\$op GGML_HEXAGON_DEVICES=\$GGML_HEXAGON_DEVICES"
+    (
+      if [ -n "\$pat" ]; then
+        timeout 3600 env \$(hexenv) setsid -w \$PKG/bin/test-backend-ops test -b HTP0 -o "\$op" -p "\$pat"
+      else
+        timeout 3600 env \$(hexenv) setsid -w \$PKG/bin/test-backend-ops test -b HTP0 -o "\$op"
+      fi
+      echo "TESTOPS_RC=\$?"
+    ) 2>&1 | tr -d '\r'
+    ;;
+
+  *) echo "usage: llama.cpp-build-and-test-dev.sh <bench|iq|cookie|needle> <model> <cores> <split> <abval> [ubatch] | testops <cores> <abval> <op> [pattern]" >&2; exit 2 ;;
 esac
 DEVEOF
 
@@ -2391,6 +2416,7 @@ push_results() {
   done
 
   local msg="results: $(basename "$OUTDIR") (splits=$SPLITS cores=$CORES pp=$PP_TOKENS profile=$HEX_PROFILE)"
+  [ -n "$TEST_OPS" ] && msg="results: $(basename "$OUTDIR") (test-ops=$TEST_OPS cores=$CORES ${AB_VAR:+$AB_VAR=$AB})"
   [ -n "$PUSH_ONLY" ] && msg="results: $(basename "$OUTDIR") (push-only)"
   if git -C "$repo" commit -q -m "$msg" -- "$rel"; then
     git -C "$repo" pull -q --rebase --autostash origin "$branch" &&
@@ -2400,6 +2426,53 @@ push_results() {
   else
     say "${Y}nothing to commit for $rel${N}"
   fi
+}
+
+#------------------------------------------------------------------------------
+# --test-ops: test-backend-ops per op x cores x A/B value -> $OUTDIR/testops.tsv
+#------------------------------------------------------------------------------
+run_testops() {
+  head1 "TEST-BACKEND-OPS ($TEST_OPS)"
+  DEV_BUILD_INFO=$(device_build_info)
+  say "binaries : $DEV_BUILD_INFO"
+  local tsv="$OUTDIR/testops.tsv" IFSB=$IFS
+  printf 'op\tcores\tab\tpassed\ttotal\tfail_lines\trc\n' > "$tsv"
+  local ab_values="$AB"; [ -z "$AB_VAR" ] && ab_values="-"
+  IFS=,; for op in $TEST_OPS; do IFS=$IFSB
+    IFS=,; for n in $CORES; do IFS=$IFSB
+      IFS=,; for abv in $ab_values; do IFS=$IFSB
+        local label="testops_${op}_${n}c_ab${abv}" out
+        out=$(monitored_dev "$label" test-backend-ops testops "$n" "$abv" "$op" ${TEST_OPS_PATTERN:+"$TEST_OPS_PATTERN"})
+        printf '%s\n' "$out" > "$(unique_log_path "$LOGS/$label.log")"
+        # "  1234/1234 tests passed" is printed per backend
+        local pt passed total fails rc
+        pt=$(printf '%s\n' "$out" | sed -n 's/^ *\([0-9]*\)\/\([0-9]*\) tests passed.*/\1 \2/p' | tail -1)
+        passed=${pt%% *}; total=${pt##* }
+        [ -n "$pt" ] || { passed=NA; total=NA; }
+        fails=$(printf '%s\n' "$out" | grep -c 'FAIL' || true)
+        rc=$(printf '%s\n' "$out" | sed -n 's/^TESTOPS_RC=//p' | tail -1)
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$op" "$n" "$abv" "$passed" "$total" "$fails" "${rc:-NA}" >> "$tsv"
+        local flag="$G"; { [ "$passed" != "$total" ] || [ "$fails" != 0 ] || [ "${rc:-1}" != 0 ]; } && flag="$R"
+        say "  ${flag}$op ${n}c ${AB_VAR:-ab}=$abv: $passed/$total passed, FAIL lines $fails, rc ${rc:-NA}${N}"
+      done
+    done
+  done
+  IFS=$IFSB
+  {
+    echo "# test-backend-ops results"
+    echo
+    echo "- device: \`$ADB_SERIAL\`"
+    echo "- device binaries: \`${DEV_BUILD_INFO:-unknown}\`"
+    echo "- date: $(date -Iseconds)"
+    [ -n "$TEST_OPS_PATTERN" ] && echo "- pattern: \`$TEST_OPS_PATTERN\`"
+    echo
+    echo "| op | cores | ${AB_VAR:-ab} | passed | total | FAIL lines | rc |"
+    echo '|---|---|---|---|---|---|---|'
+    tail -n +2 "$tsv" | awk -F'\t' '{printf "| %s | %s | %s | %s | %s | %s | %s |\n",$1,$2,$3,$4,$5,$6,$7}'
+    echo
+    echo "Full outputs: \`$LOGS/testops_*.log\`"
+  } > "$SUMMARY"
+  cat "$SUMMARY"
 }
 
 #------------------------------------------------------------------------------
@@ -2417,8 +2490,12 @@ main() {
     recover_cleanup_failure "requested by --reboot-before-test" ||
       die "pre-test reboot/recovery failed — no tests were run"
   fi
-  run_matrix
-  summarise
+  if [ -n "$TEST_OPS" ]; then
+    run_testops
+  else
+    run_matrix
+    summarise
+  fi
   push_results
 }
 

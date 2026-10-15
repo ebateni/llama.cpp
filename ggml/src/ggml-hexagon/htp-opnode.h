@@ -342,7 +342,8 @@ struct htp_opformat {
             } else if (type == HTP_FA_KERNEL_HVX) {
                 path = "hvx";
             }
-            snprintf(str, max_size, "%s vtcm %d", path, (int) kparams->vtcm_size);
+            snprintf(str, max_size, "%s vtcm %d br %d bc %d%s", path, (int) kparams->vtcm_size, (int) kparams->Br,
+                     (int) kparams->Bc, (kparams->flags & HTP_FA_FLAG_TEAM_SPLIT) ? " team" : "");
         } else if (htp_op_is_unary(node.opcode)) {
             const auto * kparams = (const struct htp_unary_kernel_params *) node.kernel_params;
             snprintf(str, max_size, "%s vtcm %d", kparams->col_tile ? "wide-row" : "row-block", (int) kparams->vtcm_size);

@@ -11648,6 +11648,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // prefill with KV-head counts that do not divide a 4-core group (Gemma 4 / Qwen3.5: 2 KV
+    // heads; 1 and 6 for the other team layouts): exercises multi-device Q-block partitioning.
+    for (int hs : { 128, 256, 512, }) {
+        for (int nh : { 1, 2, 6, }) {
+            for (int nr2 : { 4, 8, }) {
+                for (int nb : { 75, 1024, }) {
+                    test_cases.emplace_back(new test_flash_attn_ext(hs, hs, nh, {nr2, 1}, 1024, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+                }
+            }
+        }
+    }
+
     for (int hsk : { 40, 64, 72, 80, 96, 128, 192, 256, 320, 512, 576 }) {
         for (int hsv : { 40, 64, 72, 80, 96, 128, 192, 256, 512 }) {
             if (hsk != 96 && hsk != 192 && hsk != 320 && hsk != 576 && hsk != hsv) continue;
