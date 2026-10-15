@@ -105,7 +105,10 @@ ORIGINAL_ARGV=("$@")
 : "${MODELS_DEV:=/data/local/tmp/models}"                # device model dir
 : "${PROMPT_DEV:=/data/local/tmp/prompt_1k.txt}"         # 1k needle prompt
 : "${NEEDLE:=CTX-1k-DEPTH-50PCT-1024T}"                  # string a correct run echoes
-: "${OUTDIR:=/local/mnt2/workspace2/llama.cpp_multinsp/build-and-test/$(date +%Y%m%d-%H%M%S)}"
+# Default: a timestamped run dir next to this script (i.e. <repo>/logs/<ts>/).
+# Run dirs are git-ignored via logs/.gitignore.
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+: "${OUTDIR:=$SCRIPT_DIR/$(date +%Y%m%d-%H%M%S)}"
 # Optional per-test diagnostics. Continuous samples are streamed to the host,
 # never accumulated in /tmp or /data/local/tmp on the device.
 : "${COLLECT_MEMORY:=0}"              # 1 with --collect-memory
