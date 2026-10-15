@@ -1219,13 +1219,13 @@ pull_profile() {
   local dir="$OUTDIR/profile" dst
   mkdir -p "$dir"
   dst="$dir/$(mem_safe_label "$label").log"
-  if "$ADB" pull /data/local/tmp/bench_pp_prof.txt "$dst" >/dev/null 2>&1; then
+  if $ADB pull /data/local/tmp/bench_pp_prof.txt "$dst" >/dev/null 2>&1; then
     local nl; nl=$(wc -l < "$dst" 2>/dev/null | tr -d ' ')
     # gzip so profiles stay far below GitHub's 100 MB per-file limit
     gzip -9f "$dst" && dst="$dst.gz"
     say "    ${C}profile[$label]: $nl lines -> $dst${N}" >&2
   fi
-  "$ADB" shell "rm -f /data/local/tmp/bench_pp_prof.txt" >/dev/null 2>&1 || true
+  $ADB shell "rm -f /data/local/tmp/bench_pp_prof.txt" >/dev/null 2>&1 || true
 }
 
 monitored_dev() {
@@ -1251,13 +1251,13 @@ monitored_dev() {
     printf '%s
 ' "$out"       > "$MEM_CUR_DIR/device-handler-output.txt"
 
-    "$ADB" pull       /data/local/tmp/bench_pp_out.txt       "$MEM_CUR_DIR/benchmark-pp-stdout.txt"       >/dev/null 2>&1 || true
+    $ADB pull       /data/local/tmp/bench_pp_out.txt       "$MEM_CUR_DIR/benchmark-pp-stdout.txt"       >/dev/null 2>&1 || true
 
-    "$ADB" pull       /data/local/tmp/bench_pp_err.txt       "$MEM_CUR_DIR/benchmark-pp-stderr.txt"       >/dev/null 2>&1 || true
+    $ADB pull       /data/local/tmp/bench_pp_err.txt       "$MEM_CUR_DIR/benchmark-pp-stderr.txt"       >/dev/null 2>&1 || true
 
-    "$ADB" pull       /data/local/tmp/bench_tg_out.txt       "$MEM_CUR_DIR/benchmark-tg-stdout.txt"       >/dev/null 2>&1 || true
+    $ADB pull       /data/local/tmp/bench_tg_out.txt       "$MEM_CUR_DIR/benchmark-tg-stdout.txt"       >/dev/null 2>&1 || true
 
-    "$ADB" pull       /data/local/tmp/bench_tg_err.txt       "$MEM_CUR_DIR/benchmark-tg-stderr.txt"       >/dev/null 2>&1 || true
+    $ADB pull       /data/local/tmp/bench_tg_err.txt       "$MEM_CUR_DIR/benchmark-tg-stderr.txt"       >/dev/null 2>&1 || true
   fi
 
   pull_profile "$label" "$action"
@@ -1370,7 +1370,7 @@ write_run_config() {
     echo
     echo "===== DEVICE IDENTITY ====="
 
-    "$ADB" shell '
+    $ADB shell '
       printf "hostname="
       hostname 2>/dev/null || true
 
@@ -1388,7 +1388,7 @@ write_run_config() {
     echo
     echo "===== INSTALLED DEVICE DRIVER ENVIRONMENT ====="
 
-    "$ADB" shell "
+    $ADB shell "
       if [ -r '$DEV_DRIVER' ]; then
         grep -n -E \
           '^(export )?(LD_LIBRARY_PATH|ADSP_LIBRARY_PATH|CDSP[0-9]*_LIBRARY_PATH|GGML_|LLAMA_|HEXAGON_)' \
