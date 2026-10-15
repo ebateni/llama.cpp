@@ -597,12 +597,11 @@ case "\$CMD" in
 
     # Drain stderr continuously. COMM-DIAG is excluded because retaining it
     # previously exhausted device memory. Only the final useful lines remain.
-    # With profiling, the full stream is also kept in \$PROF_FILE (on device
-    # storage, not RAM) and pulled to the host after the case.
+    # With profiling, stderr goes straight to \$PROF_FILE (device storage) with
+    # no pipe chain: the host prints profile lines while popping DSP responses,
+    # so any pipe backpressure stalls the NSPs. Filtered after the run.
     if prof_on; then
-      grep -v 'COMM-DIAG' < "\$pp_fifo" |
-        tee "\$PROF_FILE" |
-        tail -n 4000 > "\$pp_err" &
+      cat < "\$pp_fifo" > "\$PROF_FILE" &
     else
       grep -v 'COMM-DIAG' < "\$pp_fifo" |
         tail -n 4000 > "\$pp_err" &
@@ -656,6 +655,10 @@ case "\$CMD" in
 
     wait "\$pp_filter_pid" 2>/dev/null || true
     rm -f "\$pp_fifo"
+    if prof_on; then
+      grep -v -e 'COMM-DIAG' -e 'profile-op' -e 'trace-evt' "\$PROF_FILE" |
+        tail -n 4000 > "\$pp_err"
+    fi
 
     pp=\$(
       awk -F'|' -v pat="pp\$pp_tokens" '
