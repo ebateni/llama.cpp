@@ -1,0 +1,13 @@
+model	cores	split	ab	ubatch	pp_tokens	pp_ts	tg_ts	iq	needle	cookie_ok
+llama-3.2-3b-instruct-q4_0	1	single	-	1024	1024	1781.14	24.35	-	-	-
+llama-3.2-3b-instruct-q4_0	1	single	-	1024	1024	1121.93	18.90	-	-	-
+llama-3.2-3b-instruct-q4_0	4	row	-	1024	1024	5074.22	50.23	-	-	-
+llama-3.2-3b-instruct-q4_0	4	row	-	1024	1024	3475.63	37.42	-	-	-
+Qwen3.5-4B-Q4	1	single	-	1024	1024	1107.35	18.65	-	-	-
+Qwen3.5-4B-Q4	1	single	-	1024	1024	1028.46	17.43	-	-	-
+Qwen3.5-4B-Q4	4	row	-	1024	1024	2929.15	36.69	-	-	-
+Qwen3.5-4B-Q4	4	row	-	1024	1024	2838.01	36.84	-	-	-
+gemma-4-E4B_q4_0-it	1	single	-	1024	1024	1237.88	18.03	-	-	-
+gemma-4-E4B_q4_0-it	1	single	-	1024	1024	1153.99	17.09	-	-	-
+gemma-4-E4B_q4_0-it	4	row	-	1024	1024	2791.88	34.10	-	-	-
+gemma-4-E4B_q4_0-it	4	row	-	1024	1024	2612.11	30.84	-	-	-
