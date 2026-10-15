@@ -6,7 +6,7 @@ upstream `620d2225c`. Device `1b531bdd`, 4 NSPs, row split (`GGML_HEXAGON_DEVICE
 This file is the living plan and history. It is updated and pushed after every step.
 Detailed measurements live in [`adaptive-split-baseline.md`](adaptive-split-baseline.md).
 
-_Last updated: 2026-10-15 — M1 pushed, awaiting build + test-ops + perf A/B._
+_Last updated: 2026-10-15 — **all device runs so far were built from the wrong branch** (see §6); M1 awaiting a build from this branch._
 
 ---
 
@@ -125,13 +125,17 @@ cookie and IQ unchanged; 4c PP ≥ the knob-off result at every depth and ubatch
 
 ## 6. Open issues
 
-- **Binary provenance** of runs `20261015-152029` through `20261015-181419`: the harness recorded
-  repo HEAD `75360014b` (seq-parallel branch) with `--no-build`, so which build was on the
-  device is unknown. The harness now stamps `BUILD_INFO`; A/B results from a single binary are
-  unaffected.
-- **Gemma 12B produces garbage in llama-completion** (llama-bench looks fine). Deferred by the
-  owner. Triage plan: harness quality run, 1c vs 4c, `OPFUSION=1` vs `0`, plus a CPU
-  (`-ngl 0`) reference.
+- **Wrong source tree (confirmed).** `REPO="$PWD"` pointed to the `llama.cpp.ebateni` checkout on
+  `dev/ebateni/seq-parallel-prototype` (+dirty, 520 commits behind upstream), while the harness
+  and the results lived in the `ebateni/adaptive-split` checkout. Run `20261015-191941` stamps
+  `device binaries: 75360014b3 (dev/ebateni/seq-parallel-prototype) +dirty`. So the P0
+  baseline numbers come from that branch, not from upstream `620d2225c`. Fix (`686052437`): REPO
+  now defaults to the script's own checkout, and a foreign REPO is refused. **The baseline has to
+  be re-measured from this branch** (it is the knob-off half of every A/B, so the M1 A/B does
+  that for free).
+- **Gemma-4-12B garbage** (run `20261015-191941`, wrong-branch binaries): cookie GARBAGE and IQ
+  1/10 at **1c and 4c, with fusion on and off**. So it is not the multi-core split and not the
+  fusions; it is a single-core kernel or the model. Gemma-2-2B is fine. Re-check on this branch.
 - **MoE 4c host OOM** at ub1024 / d16k while 1c passes; 4c uses extra host memory (M5).
 - **Causal block skipping** in HMX FA: every Q-block streams the full KV, including fully
   masked blocks. Skipping them would roughly halve FA at depth 0, for 1c too. This is a
@@ -159,3 +163,6 @@ cookie and IQ unchanged; 4c PP ≥ the knob-off result at every depth and ubatch
 | `02f7ad0f5` | **M1**: `GGML_HEXAGON_FA_SPLIT` team split + per-NSP Br cost; FA profile string shows br/bc/team; new test-backend-ops FA cases (n_kv 1/2/6); harness `--test-ops` |
 | `b4c3373a2` | Baseline: MoE results |
 | (this file) | Plan + work log |
+| `2b0ce0c1e` | This plan + work log |
+| owner run | `20261015-191941`: Gemma-4-12B / Gemma-2-2B, OPFUSION 1 vs 0 (fusion = +8% PP); Gemma-4-12B garbage at 1c and 4c |
+| `686052437` | Harness: REPO defaults to the script's checkout; refuses a foreign REPO (the root cause of the wrong-branch binaries) |
