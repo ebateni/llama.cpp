@@ -1,0 +1,9 @@
+model	cores	split	ab	ubatch	pp_tokens	pp_ts	tg_ts	iq	needle	cookie_ok
+Qwen3.5-35B-A3B-UD-Q4_K_M	1	single	-	1024	2048	428.02	14.97	-	-	-
+Qwen3.5-35B-A3B-UD-Q4_K_M	1	single	-	512*	2048	319.98	15.01	-	-	-
+Qwen3.5-35B-A3B-UD-Q4_K_M	1	single	-	1024	2048	355.73	13.77	-	-	-
+Qwen3.5-35B-A3B-UD-Q4_K_M	1	single	-	512*	2048	283.71	13.75	-	-	-
+Qwen3.5-35B-A3B-UD-Q4_K_M	4	row	-	1024	2048	985.70	24.11	-	-	-
+Qwen3.5-35B-A3B-UD-Q4_K_M	4	row	-	512*	2048	768.21	23.27	-	-	-
+Qwen3.5-35B-A3B-UD-Q4_K_M	4	row	-	512*	2048	705.16	19.82	-	-	-
+Qwen3.5-35B-A3B-UD-Q4_K_M	4	row	-	512*	2048	714.41	19.80	-	-	-
