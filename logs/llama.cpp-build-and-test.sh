@@ -48,6 +48,9 @@
 #   REPS=1 ./llama.cpp-build-and-test.sh --no-build --only-perf --split row --hex-profile 3
 #                                                     # per-NSP op profile + FENCE/L2FLUSH
 #                                                     # trace of the PP bench -> $OUTDIR/profile/
+#   ./llama.cpp-build-and-test.sh --push-only logs/<ts>
+#                                                     # no device: split >94 MB .gz into parts,
+#                                                     # then commit + push that run dir only
 #   AB_VAR= UBATCH=1024 ./llama.cpp-build-and-test.sh --no-build   # single config, no sweep
 #   AB_VAR=GGML_HEXAGON_FUSE_MUL_MAT_ADD AB=0,1 ./llama.cpp-build-and-test.sh --no-build
 #
@@ -152,6 +155,7 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 : "${BATCH:=}"                          # llama-bench -b (batch size); empty = llama-bench default
 : "${REPS:=3}"                 # llama-bench -r
 : "${PUSH_RESULTS:=0}"         # --push-results: git commit $OUTDIR + push at the end
+: "${PUSH_ONLY:=}"             # --push-only <dir>: only commit + push an existing run dir (no device)
 : "${HEX_PROFILE:=0}"          # --hex-profile N: GGML_HEXAGON_PROFILE for the PP
                                # bench only (1=op usec, 2=+PMU, 3=+trace events
                                # incl. FENCE/L2FLUSH). Adds -v and keeps the FULL
@@ -238,6 +242,8 @@ while [ $# -gt 0 ]; do
     --only-perf)  DO_IQ=0; DO_COOKIE=0; DO_NEEDLE=0 ;;
     --collect-memory) COLLECT_MEMORY=1 ;;
     --push-results) PUSH_RESULTS=1 ;;
+    --push-only)  PUSH_ONLY=$2; shift ;;
+    --push-only=*) PUSH_ONLY=${1#--push-only=} ;;
     --hex-profile) HEX_PROFILE=$2; shift ;;
     --hex-profile=*) HEX_PROFILE=${1#--hex-profile=} ;;
     --memory-interval) MEMORY_INTERVAL=$2; shift ;;
@@ -265,7 +271,14 @@ if [ "$DO_CLEAN" = 1 ] && [ "$DO_DEPLOY" = 0 ]; then
   echo "--clean requires the deploy phase (drop --no-deploy)" >&2; exit 2
 fi
 
-[ -n "$ADB_SERIAL" ] ||
+# --push-only <dir>: no device work at all — just commit + push an existing run dir.
+if [ -n "$PUSH_ONLY" ]; then
+  [ -d "$PUSH_ONLY" ] || { echo "--push-only: no such directory: $PUSH_ONLY" >&2; exit 2; }
+  OUTDIR=$(cd "$PUSH_ONLY" && pwd)
+  PUSH_RESULTS=1
+fi
+
+[ -n "$ADB_SERIAL" ] || [ -n "$PUSH_ONLY" ] ||
   { echo "ADB_SERIAL is required (for lagvm: ADB_SERIAL=192.168.1.1:5555)" >&2; exit 2; }
 
 for _sp in $(printf '%s' "$SPLITS" | tr ',' ' '); do
@@ -283,11 +296,11 @@ TSV="$OUTDIR/results.tsv"
 SUMMARY="$OUTDIR/summary.md"
 LOGS="$OUTDIR/logs"
 
-mkdir -p "$LOGS"
+[ -n "$PUSH_ONLY" ] || mkdir -p "$LOGS"
 
 RUN_CONFIG_LOG="$OUTDIR/run-config.log"
 DEVICE_INVOCATIONS_LOG="$OUTDIR/device-invocations.log"
-: > "$DEVICE_INVOCATIONS_LOG"
+[ -n "$PUSH_ONLY" ] || : > "$DEVICE_INVOCATIONS_LOG"
 MEMORY_LOGS="$OUTDIR/memory"
 MEMORY_TSV="$OUTDIR/memory-summary.tsv"
 REBOOT_LOG="$OUTDIR/reboots.log"
@@ -319,7 +332,7 @@ setup_adb_transport() {
   ADB="adb -s $ADB_SERIAL"
   ensure_adb_connected
 }
-setup_adb_transport
+[ -n "$PUSH_ONLY" ] || setup_adb_transport
 
 #------------------------------------------------------------------------------
 # Phase 1 — build
@@ -2348,19 +2361,27 @@ push_results() {
   repo=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null) ||
     { say "${R}not a git checkout — results not pushed${N}"; return 0; }
   branch=$(git -C "$repo" branch --show-current)
-  rel=${OUTDIR#"$repo"/}
-  case "$OUTDIR" in
-    "$repo"/*) ;;
-    *) say "${R}OUTDIR is outside the repo ($OUTDIR) — results not pushed${N}"; return 0 ;;
-  esac
+  # let git resolve paths (shell path spellings can differ, e.g. symlinks/mounts)
+  if [ "$(git -C "$OUTDIR" rev-parse --show-toplevel 2>/dev/null)" != "$repo" ]; then
+    say "${R}OUTDIR is outside the repo ($OUTDIR) — results not pushed${N}"; return 0
+  fi
+  rel=$(git -C "$OUTDIR" rev-parse --show-prefix); rel=${rel%/}
 
-  git -C "$repo" add -- "$rel"
-  find "$OUTDIR" -type f -size +95M | while IFS= read -r f; do
-    say "${Y}skipping (>95 MB): $f${N}"
-    git -C "$repo" reset -q -- "${f#"$repo"/}"
+  # split oversized profile logs into 90 MB parts (cat <file>.gz.part* to rejoin)
+  find "$OUTDIR" -type f -name '*.gz' -size +94M | while IFS= read -r f; do
+    say "${Y}splitting (>94 MB): $f${N}"
+    split -b 90m -d -a 2 "$f" "$f.part" && rm -f "$f"
   done
 
-  if git -C "$repo" commit -q -m "results: $(basename "$OUTDIR") (splits=$SPLITS cores=$CORES pp=$PP_TOKENS profile=$HEX_PROFILE)" -- "$rel"; then
+  git -C "$repo" add -- "$rel"
+  (cd "$OUTDIR" && find . -type f -size +95M) | while IFS= read -r f; do
+    say "${Y}skipping (>95 MB): $OUTDIR/${f#./}${N}"
+    git -C "$OUTDIR" reset -q -- "${f#./}"
+  done
+
+  local msg="results: $(basename "$OUTDIR") (splits=$SPLITS cores=$CORES pp=$PP_TOKENS profile=$HEX_PROFILE)"
+  [ -n "$PUSH_ONLY" ] && msg="results: $(basename "$OUTDIR") (push-only)"
+  if git -C "$repo" commit -q -m "$msg" -- "$rel"; then
     git -C "$repo" pull -q --rebase --autostash origin "$branch" &&
       git -C "$repo" push -q origin "$branch" &&
       say "${G}results pushed: $rel -> origin/$branch${N}" ||
@@ -2372,6 +2393,7 @@ push_results() {
 
 #------------------------------------------------------------------------------
 main() {
+  if [ -n "$PUSH_ONLY" ]; then push_results; return; fi
   preflight
   ensure_exclusive
   [ "$DO_BUILD"  = 1 ] && do_build
