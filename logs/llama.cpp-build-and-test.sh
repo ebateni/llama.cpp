@@ -106,7 +106,8 @@ ORIGINAL_ARGV=("$@")
 : "${PROMPT_DEV:=/data/local/tmp/prompt_1k.txt}"         # 1k needle prompt
 : "${NEEDLE:=CTX-1k-DEPTH-50PCT-1024T}"                  # string a correct run echoes
 # Default: a timestamped run dir next to this script (i.e. <repo>/logs/<ts>/).
-# Run dirs are git-ignored via logs/.gitignore.
+# --push-results commits that dir and pushes it (the fork is the only channel
+# between the test machine and the analysis side).
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 : "${OUTDIR:=$SCRIPT_DIR/$(date +%Y%m%d-%H%M%S)}"
 # Optional per-test diagnostics. Continuous samples are streamed to the host,
@@ -150,6 +151,7 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
                                         # size. Default: single value, no sweep.
 : "${BATCH:=}"                          # llama-bench -b (batch size); empty = llama-bench default
 : "${REPS:=3}"                 # llama-bench -r
+: "${PUSH_RESULTS:=0}"         # --push-results: git commit $OUTDIR + push at the end
 : "${HEX_PROFILE:=0}"          # --hex-profile N: GGML_HEXAGON_PROFILE for the PP
                                # bench only (1=op usec, 2=+PMU, 3=+trace events
                                # incl. FENCE/L2FLUSH). Adds -v and keeps the FULL
@@ -235,6 +237,7 @@ while [ $# -gt 0 ]; do
     --quick)      UBATCH=1024; CORES=1,4; REPS=2 ;;
     --only-perf)  DO_IQ=0; DO_COOKIE=0; DO_NEEDLE=0 ;;
     --collect-memory) COLLECT_MEMORY=1 ;;
+    --push-results) PUSH_RESULTS=1 ;;
     --hex-profile) HEX_PROFILE=$2; shift ;;
     --hex-profile=*) HEX_PROFILE=${1#--hex-profile=} ;;
     --memory-interval) MEMORY_INTERVAL=$2; shift ;;
@@ -1214,7 +1217,10 @@ pull_profile() {
   mkdir -p "$dir"
   dst="$dir/$(mem_safe_label "$label").log"
   if "$ADB" pull /data/local/tmp/bench_pp_prof.txt "$dst" >/dev/null 2>&1; then
-    say "    ${C}profile[$label]: $(wc -l < "$dst" 2>/dev/null | tr -d ' ') lines -> $dst${N}" >&2
+    local nl; nl=$(wc -l < "$dst" 2>/dev/null | tr -d ' ')
+    # gzip so profiles stay far below GitHub's 100 MB per-file limit
+    gzip -9f "$dst" && dst="$dst.gz"
+    say "    ${C}profile[$label]: $nl lines -> $dst${N}" >&2
   fi
   "$ADB" shell "rm -f /data/local/tmp/bench_pp_prof.txt" >/dev/null 2>&1 || true
 }
@@ -2325,6 +2331,39 @@ preflight() {
 }
 
 #------------------------------------------------------------------------------
+# push_results — commit $OUTDIR to the current branch and push it. Opt-in via
+# --push-results. Only $OUTDIR is committed (other local changes are left
+# alone); files over 95 MB are skipped (GitHub rejects >100 MB).
+push_results() {
+  [ "$PUSH_RESULTS" = 1 ] || return 0
+  head1 "PUSH RESULTS"
+  local repo branch rel
+  repo=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null) ||
+    { say "${R}not a git checkout — results not pushed${N}"; return 0; }
+  branch=$(git -C "$repo" branch --show-current)
+  rel=${OUTDIR#"$repo"/}
+  case "$OUTDIR" in
+    "$repo"/*) ;;
+    *) say "${R}OUTDIR is outside the repo ($OUTDIR) — results not pushed${N}"; return 0 ;;
+  esac
+
+  git -C "$repo" add -- "$rel"
+  find "$OUTDIR" -type f -size +95M | while IFS= read -r f; do
+    say "${Y}skipping (>95 MB): $f${N}"
+    git -C "$repo" reset -q -- "${f#"$repo"/}"
+  done
+
+  if git -C "$repo" commit -q -m "results: $(basename "$OUTDIR") (splits=$SPLITS cores=$CORES pp=$PP_TOKENS profile=$HEX_PROFILE)" -- "$rel"; then
+    git -C "$repo" pull -q --rebase --autostash origin "$branch" &&
+      git -C "$repo" push -q origin "$branch" &&
+      say "${G}results pushed: $rel -> origin/$branch${N}" ||
+      say "${R}push failed — results are committed locally; push manually${N}"
+  else
+    say "${Y}nothing to commit for $rel${N}"
+  fi
+}
+
+#------------------------------------------------------------------------------
 main() {
   preflight
   ensure_exclusive
@@ -2340,6 +2379,7 @@ main() {
   fi
   run_matrix
   summarise
+  push_results
 }
 
 main "$@"
