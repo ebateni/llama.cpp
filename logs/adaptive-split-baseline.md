@@ -128,3 +128,17 @@ natural axis becomes TOKEN (contiguous rows plus a read-only halo) instead of ch
 **GLU ops are the whole cost, not just the loss:** SWIGLU/GEGLU take 8.5% (llama), 7% (Qwen)
 and 11% (Gemma) of the 4c graph. Fusing them into the gate/up MUL_MAT_NX epilogue removes the op
 and halves the NX output writes.
+
+## MoE — Qwen3.5-35B-A3B-UD-Q4_K_M (`logs/20261015-181419`, row, pp2048)
+
+| ub | depth | 1c PP | 4c PP | x |
+|---|---|---|---|---|
+| 1024 | 0     | 428.0 | 985.7 | **2.30** |
+| 512  | 0     | 320.0 | 768.2 | 2.40 |
+| 512  | 16384 | 283.7 | 714.4 | 2.52 |
+| 1024 | 16384 | 355.7 | OOM (4c) | — |
+| 2048 | any   | OOM (1c and 4c) | | — |
+
+The worst 4c scaling of all the models. 4c at ub1024 / d16k is host-OOM-killed while 1c passes,
+so the mdev path costs extra host memory: a robustness item for M5. Needs a level-1 profile at
+ub1024 d0 to split MUL_MAT_ID vs router/top-k vs shared expert vs GDN.
