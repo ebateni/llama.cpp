@@ -100,7 +100,9 @@ ORIGINAL_ARGV=("$@")
 #------------------------------------------------------------------------------
 # Configuration — every value can be overridden from the environment.
 #------------------------------------------------------------------------------
-: "${REPO:=/local/mnt2/workspace2/llama.cpp.qualcomm}"   # llama.cpp source tree
+: "${REPO:=$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel 2>/dev/null)}"
+                                                         # llama.cpp source tree to build; default:
+                                                         # the checkout this script lives in
 : "${ADB_SERIAL:=}"                                      # required target serial
 : "${ADB_SERVER_SOCKET:=}"                                # optional host ADB server override
 : "${PLATFORM:=linux}"                                   # linux | android
@@ -2338,6 +2340,15 @@ EOF
 #   Checks only what the selected phases actually need.
 #------------------------------------------------------------------------------
 preflight() {
+  # Building a different checkout than the one this script (and the pushed results)
+  # live in silently mixes branches: results get filed under this branch while the
+  # binaries come from elsewhere. Refuse unless explicitly allowed.
+  local self_top repo_top
+  self_top=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null)
+  repo_top=$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null)
+  if [ -n "$self_top" ] && [ "$self_top" != "$repo_top" ] && [ "${ALLOW_FOREIGN_REPO:-0}" != 1 ]; then
+    die "REPO ($REPO, branch $(git -C "$REPO" branch --show-current 2>/dev/null)) is not this script's checkout ($self_top, branch $(git -C "$self_top" branch --show-current)). Drop REPO= (defaults to this checkout) or set ALLOW_FOREIGN_REPO=1."
+  fi
   head1 "PREFLIGHT"
   local bad=0
 
