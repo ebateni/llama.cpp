@@ -1223,6 +1223,10 @@ pull_profile() {
     local nl; nl=$(wc -l < "$dst" 2>/dev/null | tr -d ' ')
     # gzip so profiles stay far below GitHub's 100 MB per-file limit
     gzip -9f "$dst" && dst="$dst.gz"
+    # split anything still too big into 90 MB parts (cat <file>.gz.part* to rejoin)
+    if [ "$(wc -c < "$dst")" -gt 94000000 ]; then
+      split -b 90m -d -a 2 "$dst" "$dst.part" && rm -f "$dst" && dst="$dst.part*"
+    fi
     say "    ${C}profile[$label]: $nl lines -> $dst${N}" >&2
   fi
   $ADB shell "rm -f /data/local/tmp/bench_pp_prof.txt" >/dev/null 2>&1 || true
