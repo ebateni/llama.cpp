@@ -1,0 +1,2 @@
+model	cores	split	ab	ubatch	pp_tokens	pp_ts	tg_ts	iq	needle	cookie_ok
+llama-3.2-3b-instruct-q4_0	1	single	-	512*	1024	NA	NA	-	-	-
