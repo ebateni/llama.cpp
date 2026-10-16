@@ -739,6 +739,44 @@ static void tiled_vec_dot_q4_0_32x1(const uint32_t n, float * restrict s, const 
     }
 }
 
+// Q4_0 m=1 dot over tiles packed back to back (576 B stride, DMAed as one contiguous block).
+// Odd tiles start 64 B past a vector boundary and are read with unaligned loads.
+static inline __attribute__((always_inline)) HVX_Vector tiled_vec_dot_q4_0_32x1_pk_v(const uint32_t n, const void * restrict vx, const void * restrict vy) {
+    const uint8_t * restrict tile_ptr = vx;
+    const uint8_t * restrict y_q = vy;
+
+    HVX_Vector v_sum_float = Q6_V_vzero();
+    HVX_Vector i8 = Q6_Vb_vsplat_R(8);
+
+    uint32_t n_k_tiles = n / 32;
+    for (uint32_t kt = 0; kt < n_k_tiles; kt += 2) {
+        const HVX_Vector * restrict vptr = (const HVX_Vector *) (tile_ptr + kt * 576);
+        const HVX_Vector * restrict v_act = (const HVX_Vector *) (y_q + kt * 1152);
+
+        HVX_Vector v_sum = accum_4bit_32x1(vptr, v_act, i8);
+        HVX_Vector v_scale_comb = hvx_vec_mul_f16_f16_to_f32_lower32(vptr[4], v_act[8]);
+        v_sum_float = hvx_vec_add_f32_f32(v_sum_float, hvx_vec_mul_f32_f32(Q6_Vsf_equals_Vw(v_sum), v_scale_comb));
+
+        const uint8_t * odd = tile_ptr + (kt + 1) * 576;
+        HVX_Vector w[5];
+        #pragma unroll
+        for (int i = 0; i < 5; i++) {
+            w[i] = hvx_vmemu(odd + i * 128);
+        }
+        const HVX_Vector * restrict v_act1 = (const HVX_Vector *) (y_q + (kt + 1) * 1152);
+        HVX_Vector v_sum1 = accum_4bit_32x1(w, v_act1, i8);
+        HVX_Vector v_scale_comb1 = hvx_vec_mul_f16_f16_to_f32_lower32(w[4], v_act1[8]);
+        v_sum_float = hvx_vec_add_f32_f32(v_sum_float, hvx_vec_mul_f32_f32(Q6_Vsf_equals_Vw(v_sum1), v_scale_comb1));
+    }
+
+    return v_sum_float;
+}
+
+static void tiled_vec_dot_q4_0_32x1_pk(const uint32_t n, float * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const float * restrict sz) {
+    (void) sz;
+    hvx_vec_store_u(s, valid_rows * sizeof(float), tiled_vec_dot_q4_0_32x1_pk_v(n, vx, vy));
+}
+
 static void tiled_vec_dot_q4_0_32x2(const uint32_t n, float * restrict s0, float * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const float * restrict sz0, const float * restrict sz1) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y0_q = vy0;

@@ -1803,6 +1803,50 @@ static inline void fa_prefetch_block(dma_queue * dma_q, const struct htp_tensor 
     }
 }
 
+// Number of leading KV blocks that can hold an unmasked score for q rows [q_start, q_start + n_rows_q).
+// a trailing block is dropped only if every one of its mask entries is -inf for every q row in the tile:
+// such a block adds exactly 0 to the softmax sum and nothing to O, so skipping it is lossless.
+// scans from the end and stops at the first live block. the scan is a vector OR of (x != -inf) over each
+// row segment: one 128B load covers 64 fp16 mask entries, so a fully masked block costs n_rows_q * Bc/64 loads.
+static uint32_t fa_kv_blocks_live(const struct htp_tensor * mask, uint32_t q_start, uint32_t n_rows_q, uint32_t im3,
+                                  uint32_t Bc, uint32_t nek1, uint32_t n_kv_blocks) {
+    if (!mask || mask->ne[2] != 1 || n_kv_blocks <= 1) {
+        return n_kv_blocks;
+    }
+    // vector path needs whole 64-entry chunks on 128B-aligned rows
+    if ((Bc % 64) != 0 || (mask->nb[1] % 128) != 0 || ((mask->data + im3 * mask->nb[3]) % 128) != 0) {
+        return n_kv_blocks;
+    }
+
+    const uint8_t *  base     = (const uint8_t *) (uintptr_t) (mask->data + im3 * mask->nb[3]);
+    const HVX_Vector v_ninf   = Q6_Vh_vsplat_R(0xfc00);  // fp16 -inf, what llama.cpp writes for dropped entries
+    const uint32_t   n_chunks = Bc / 64;
+
+    uint32_t live = n_kv_blocks;
+    while (live > 1) {
+        const uint32_t c0 = (live - 1) * Bc;
+        if (c0 + Bc > nek1) {
+            break;  // ragged tail block: keep it rather than read past the row
+        }
+        // XOR with -inf is zero exactly for masked entries; OR-accumulate and test the whole vector once
+        HVX_Vector acc = Q6_V_vzero();
+        for (uint32_t r = 0; r < n_rows_q; ++r) {
+            const HVX_Vector * row = (const HVX_Vector *) (base + (size_t) (q_start + r) * mask->nb[1] + (size_t) c0 * sizeof(__fp16));
+            for (uint32_t ch = 0; ch < n_chunks; ++ch) {
+                acc = Q6_V_vor_VV(acc, Q6_V_vxor_VV(row[ch], v_ninf));
+            }
+        }
+        // any non-zero word -> some entry was not -inf -> block is live
+        const HVX_VectorPred nz   = Q6_Q_not_Q(Q6_Q_vcmp_eq_VwVw(acc, Q6_V_vzero()));
+        const HVX_Vector     flag = Q6_V_vmux_QVV(nz, Q6_V_vsplat_R(1), Q6_V_vzero());
+        if (hvx_vec_get_i32(hvx_vec_reduce_max_i32(flag)) != 0) {
+            break;
+        }
+        --live;
+    }
+    return live;
+}
+
 // ============================================================================
 // Core HMX flash attention algorithm (GQA-merged)
 // ============================================================================
@@ -2045,6 +2089,11 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
             const size_t   g_br_actual = hex_align_up(n_rows_g, HMX_FP16_TILE_N_ROWS);
             const size_t   n_row_tiles = g_br_actual / HMX_FP16_TILE_N_ROWS;
 
+            // trailing KV blocks that are fully masked for this q tile contribute nothing: skip them.
+            // block 0 is always kept (its DMA was issued ahead of the tile), so DMA push/pop pairing holds.
+            // the mask is head-independent here (ne[2] == 1), so one scan serves every kv head.
+            const uint32_t n_live = fa_kv_blocks_live(mask, q_start, n_rows_q, im3, Bc, nek1, factx.n_kv_blocks);
+
             for (uint32_t kv_head = kv_head_min; kv_head < kv_head_max; ++kv_head) {
                 const uint32_t ik2 = kv_head;
                 const uint32_t ik3 = fastdiv(ib3, &kparams->broadcast_rk3);
@@ -2105,7 +2154,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                     hmx_fa_o_update_job_t ou_job[2];
 
                     // Prefetch block 1 early if there are multiple blocks
-                    if (factx.n_kv_blocks > 1) {
+                    if (n_live > 1) {
                         fa_prefetch_block(dma_q, k, v, mask, 1, Bc, size_k_row_padded, size_k_row, size_v_row_padded, size_v_row,
                                           ik2, ik3, iv2, iv3, q_start, im3, kv_head, G, m_line_bytes, n_rows_q, nek1, 1, &factx);
                     }
@@ -2124,7 +2173,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                     qk_job[0].hmx_scales     = factx.vtcm_hmx_scales_qk;
                     hmx_queue_push(hmx_q, hmx_queue_make_desc(hmx_fa_qk_dot_worker, &qk_job[0]));
 
-                    for (uint32_t kv_blk = 0; kv_blk < factx.n_kv_blocks; ++kv_blk) {
+                    for (uint32_t kv_blk = 0; kv_blk < n_live; ++kv_blk) {
                         const uint32_t kv_start    = kv_blk * Bc;
                         const uint32_t kv_rows     = hex_smin(Bc, nek1 - kv_start);
                         const size_t   n_col_tiles = hmx_ceil_div(kv_rows, HMX_FP16_TILE_N_COLS);
@@ -2168,7 +2217,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         }
 
                         // ---- 4. Pop and run K-prep for next block & push next QK-dot ----
-                        if (kv_blk + 1 < factx.n_kv_blocks) {
+                        if (kv_blk + 1 < n_live) {
                             const uint32_t next_start = (kv_blk + 1) * Bc;
                             const uint32_t next_rows  = hex_smin(Bc, nek1 - next_start);
                             const size_t   next_buf   = 1 - buf_idx;
@@ -2223,7 +2272,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         }
 
                         // Prefetch block kv_blk + 2
-                        if (kv_blk + 2 < factx.n_kv_blocks) {
+                        if (kv_blk + 2 < n_live) {
                             fa_prefetch_block(dma_q, k, v, mask, kv_blk + 2, Bc, size_k_row_padded, size_k_row, size_v_row_padded, size_v_row,
                                               ik2, ik3, iv2, iv3, q_start, im3, kv_head, G, m_line_bytes, n_rows_q, nek1, buf_idx, &factx);
                         }
@@ -2232,8 +2281,8 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                     }
 
                     // Epilogue
-                    if (factx.n_kv_blocks > 0) {
-                        const uint32_t last_blk = factx.n_kv_blocks - 1;
+                    if (n_live > 0) {
+                        const uint32_t last_blk = n_live - 1;
                         const size_t last_cols  = hmx_ceil_div(hex_smin(Bc, nek1 - last_blk * Bc), HMX_FP16_TILE_N_COLS);
                         ou_job[0].o_curr           = o_tile_curr;
                         ou_job[0].o_prev           = o_tile_prev;
@@ -2259,7 +2308,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
                 } else {
                     // Fallback path
-                    for (uint32_t kv_blk = 0; kv_blk < factx.n_kv_blocks; ++kv_blk) {
+                    for (uint32_t kv_blk = 0; kv_blk < n_live; ++kv_blk) {
                         const uint32_t kv_start    = kv_blk * Bc;
                         const uint32_t kv_rows     = hex_smin(Bc, nek1 - kv_start);
                         const size_t   n_col_tiles = hmx_ceil_div(kv_rows, HMX_FP16_TILE_N_COLS);
@@ -2273,7 +2322,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                             }
                         }
 
-                        if (kv_blk + 1 < factx.n_kv_blocks) {
+                        if (kv_blk + 1 < n_live) {
                             const uint32_t  prefetch_start = (kv_blk + 1) * Bc;
                             const uint32_t  prefetch_rows  = hex_smin(Bc, nek1 - prefetch_start);
                             const size_t    prefetch_buf   = 1 - buf_idx;
@@ -2352,7 +2401,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                             ou_job.DV               = DV_pad;
 
                             hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_fa_o_update_worker, &ou_job));
-                            if (kv_blk + 1 == factx.n_kv_blocks) {
+                            if (kv_blk + 1 == n_live) {
                                 // Overlapped: run HVX build diag inv L while HMX is busy executing the update
                                 htp_trace_event_start(tr_hvx, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) q_start);
                                 fa_build_d_diag_inv_l(&factx, n_row_tiles, n_row_tiles_g_br);

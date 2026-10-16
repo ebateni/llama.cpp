@@ -16,6 +16,7 @@ void llama_model_gemma4::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_EMBEDDING_LENGTH_PER_LAYER,  hparams.n_embd_per_layer);
+    ml.get_key(LLM_KV_EMBEDDING_PER_LAYER_SCALE,   hparams.f_embd_per_layer_scale, false);
     ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_SWA,    hparams.n_embd_head_k_swa);
     ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_SWA,  hparams.n_embd_head_v_swa);
     ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING,     hparams.f_final_logit_softcapping, false);
@@ -145,11 +146,11 @@ std::unique_ptr<llm_graph_context> llama_model_gemma4::build_arch_graph(const ll
     return std::make_unique<graph>(*this, params);
 }
 
-// get 2D slice view from a 3D tensor, the idx corresponds to the 3rd dim
+// get 2D slice view from a 3D tensor, the idx corresponds to the 3rd dim.
+// uses the source strides so a permuted (non-contiguous) tensor can be sliced without a copy
 static ggml_tensor * gemma4_view_2d_slice(ggml_context * ctx0, ggml_tensor * x, int idx) {
     GGML_ASSERT(idx < (int) x->ne[2]);
-    return ggml_view_2d(ctx0, x, x->ne[0], x->ne[1], ggml_row_size(x->type, x->ne[0]),
-                        idx * x->ne[0] * x->ne[1] * ggml_element_size(x));
+    return ggml_view_2d(ctx0, x, x->ne[0], x->ne[1], x->nb[1], idx * x->nb[2]);
 }
 
 llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_params & params) :
@@ -180,16 +181,45 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     if (model.per_layer_tok_embd) {
-        const float tok_embd_scale = sqrtf((float) n_embd_per_layer);
+        // per_layer_input_scale from project_per_layer_inputs() is folded in here: the table term
+        // is only ever consumed by that function, so one scale covers both.
+        // the converter may have baked part of it into the table already (f_embd_per_layer_scale)
+        const float tok_embd_scale = sqrtf((float) n_embd_per_layer) / sqrtf(2.0f) / hparams.f_embd_per_layer_scale;
 
-        inp_per_layer = ggml_scale     (ctx0, inp_per_layer, tok_embd_scale);
+        if (fabsf(tok_embd_scale - 1.0f) > 1e-6f) {
+            inp_per_layer = ggml_scale(ctx0, inp_per_layer, tok_embd_scale);
+        }
         inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_per_layer, n_layer, inp_per_layer->ne[1]);
 
         // inp_per_layer shape: [n_embd_per_layer, n_tokens, n_layer]
         inp_per_layer = project_per_layer_inputs(inpL, inp_per_layer);
     }
 
+    // layers that reuse the KV of earlier layers write nothing to the cache, so they only need the
+    // rows that produce outputs. drop the other rows before the first of them, unless the caller
+    // wants per-token hidden states.
+    bool prune_shared = inp_out_ids && n_outputs < n_tokens && cparams.causal_attn &&
+                        hparams.n_layer_kv_from_start > 0 && hparams.n_layer_kv_from_start < n_layer &&
+                        !cparams.embeddings && !(cparams.embeddings_nextn && !cparams.embeddings_nextn_masked) &&
+                        inp_attn->get_kq_mask()->ne[3] == 1;
+    for (int il = (int) hparams.n_layer_kv_from_start; prune_shared && il <= n_layer; ++il) {
+        prune_shared = !cparams.embeddings_layer_inp[il];
+    }
+    ggml_tensor * pos_cur         = inp_pos;
+    ggml_tensor * kq_mask_out     = nullptr;
+    ggml_tensor * kq_mask_swa_out = nullptr;
+    int64_t       n_rows          = n_tokens;
+
     for (int il = 0; il < n_layer; ++il) {
+        if (prune_shared && n_rows == n_tokens && !hparams.has_kv(il)) {
+            inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
+            pos_cur = ggml_reshape_1d(ctx0, ggml_get_rows(ctx0, ggml_reshape_2d(ctx0, inp_pos, 1, n_tokens), inp_out_ids), n_outputs);
+            // one mask row per token: [n_kv, n_tokens, 1, 1] -> [n_kv, n_outputs, 1, 1]
+            kq_mask_out     = ggml_cast(ctx0, ggml_get_rows(ctx0, inp_attn->get_kq_mask(),     inp_out_ids), inp_attn->get_kq_mask()->type);
+            kq_mask_swa_out = ggml_cast(ctx0, ggml_get_rows(ctx0, inp_attn->get_kq_mask_swa(), inp_out_ids), inp_attn->get_kq_mask_swa()->type);
+            n_rows = n_outputs;
+        }
+
         const int64_t n_embd_head = hparams.n_embd_head_k(il);
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_v(il));
 
@@ -227,12 +257,12 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
         {
             cb(Qcur, "Qcur", il);
 
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
+            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_rows);
 
             Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
             cb(Qcur, "Qcur_normed", il);
 
-            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, freq_factors, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+            Qcur = ggml_rope_ext(ctx0, Qcur, pos_cur, freq_factors, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                                  ext_factor, attn_factor, beta_fast, beta_slow);
             cb(Qcur, "Qcur_pos", il);
         }
@@ -275,15 +305,23 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
                     nullptr, model.layers[il].wo_s, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
                     hparams.f_attention_scale, il);
         } else {
-            // reuse KV cache of earlier layers
+            // reuse KV cache of earlier layers. after pruning only n_rows queries remain, so use the
+            // matching mask rows
+            ggml_tensor * mask_full     = inp_attn->self_kq_mask_cnv;
+            ggml_tensor * mask_swa_full = inp_attn->self_kq_mask_swa_cnv;
+            if (kq_mask_out) {
+                inp_attn->self_kq_mask_cnv     = kq_mask_out;
+                inp_attn->self_kq_mask_swa_cnv = kq_mask_swa_out;
+            }
             cur = build_attn(inp_attn,
                     model.layers[il].wo, nullptr, model.layers[il].wo_s,
                     Qcur, nullptr, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
+            inp_attn->self_kq_mask_cnv     = mask_full;
+            inp_attn->self_kq_mask_swa_cnv = mask_swa_full;
         }
 
-        // TODO @ngxson : strip unused token right after the last KV layer to speed up prompt processing
         // keep all rows when extracting unmasked nextn embeddings (MTP target needs the hidden state for every token)
-        if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
+        if (il == n_layer - 1 && crop_before_nextn(inp_out_ids) && n_rows == n_tokens) {
             cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
         }
@@ -382,8 +420,9 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
 
             ggml_tensor * inp_this_layer = gemma4_view_2d_slice(ctx0, inp_per_layer, il); // [n_embd_per_layer, n_tokens]
 
-            // TODO @ngxson : improve this
-            if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
+            if (inp_out_ids && n_rows != n_tokens) {
+                inp_this_layer = ggml_get_rows(ctx0, inp_this_layer, inp_out_ids);
+            } else if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
                 inp_this_layer = ggml_get_rows(ctx0, inp_this_layer, inp_out_ids);
             }
 
@@ -421,7 +460,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
 
-    if (crop_after_nextn(inp_out_ids)) {
+    if (crop_after_nextn(inp_out_ids) && n_rows == n_tokens) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
@@ -518,19 +557,26 @@ ggml_tensor * llama_model_gemma4::graph::project_per_layer_inputs(ggml_tensor * 
     const float per_layer_input_scale      = 1.0f / sqrtf(2.0f);
 
     // note: this matrix multiplication will be performed in the input layer (i.e. on the CPU)
+    // the scale before the RMS norm only shifts how eps is weighted, so scale eps instead and
+    // drop the op. the two scales after it are constant and fold into one.
+    // compute the scaled norm weight first so the RMS_NORM -> MUL -> ADD chain is contiguous in the graph
+    ggml_tensor * proj_norm_w = ggml_scale(ctx0, model.per_layer_proj_norm, per_layer_input_scale);
+    ggml_build_forward_expand(gf, proj_norm_w);
+
     ggml_tensor * per_layer_proj;
     per_layer_proj = ggml_mul_mat   (ctx0, model.per_layer_model_proj, inp_batch);
-    per_layer_proj = ggml_scale     (ctx0, per_layer_proj, per_layer_projection_scale);
     per_layer_proj = ggml_reshape_3d(ctx0, per_layer_proj, n_embd_per_layer, n_layer, n_tokens);
 
-    per_layer_proj = build_norm(per_layer_proj, model.per_layer_proj_norm, nullptr, LLM_NORM_RMS, -1);
+    const float proj_eps = hparams.f_norm_rms_eps / (per_layer_projection_scale * per_layer_projection_scale);
+    per_layer_proj = ggml_rms_norm(ctx0, per_layer_proj, proj_eps);
+    per_layer_proj = ggml_mul(ctx0, per_layer_proj, proj_norm_w);
     cb(per_layer_proj, "per_layer_proj", -1);
 
-    inp_per_layer = ggml_add  (ctx0, per_layer_proj, inp_per_layer);
-    inp_per_layer = ggml_scale(ctx0, inp_per_layer, per_layer_input_scale);
+    // input_scale folds into the (256-element) norm weight, so the full-tensor scale disappears
+    inp_per_layer = ggml_add(ctx0, per_layer_proj, inp_per_layer);
     cb(inp_per_layer, "inp_per_layer", -1);
 
-    // permute to shape: [n_embd_per_layer, n_tokens, n_layer]
-    inp_per_layer = ggml_cont(ctx0, ggml_permute(ctx0, inp_per_layer, 0, 2, 1, 3));
-    return inp_per_layer;
+    // permute to shape: [n_embd_per_layer, n_tokens, n_layer]. no ggml_cont(): the per-layer
+    // consumer slices this with the real strides (see gemma4_view_2d_slice)
+    return ggml_permute(ctx0, inp_per_layer, 0, 2, 1, 3);
 }

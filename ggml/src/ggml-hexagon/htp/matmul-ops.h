@@ -884,6 +884,66 @@ static inline bool htp_mm_hmx_solve_2d_params(
     return false;
 }
 
+// VTCM needed by the fused NX+GEGLU kernel: the pipelined 2D layout plus two extra output buffers
+static inline size_t htp_mm_hmx_nx_geglu_vtcm_size(int wtype, uint32_t k, size_t mc, size_t nc, uint32_t act_threads, uint32_t aligned_tile_size) {
+    struct htp_mm_hmx_vtcm_layout L;
+    htp_mm_hmx_vtcm_layout_build(&L, HTP_MM_KERNEL_HMX_2D, wtype, k, mc, nc, 1, true, act_threads, aligned_tile_size, 0);
+    return hex_align_up(L.total_bytes, HTP_MM_HMX_TILE_SIZE) + 2 * L.output_area_bytes;
+}
+
+// MUL_MAT_AT reads an activation that is already f16 in tile layout, so the f32 conversion
+// scratch (act_threads) is dead weight. Re-solve (mc, nc) without it: the freed VTCM buys a
+// larger m_chunk, which cuts how many times the weight is streamed from DDR.
+static inline bool htp_mm_hmx_solve_2d_tiled_act_params(int wtype, uint32_t k, uint32_t n, uint32_t m,
+                                                        uint32_t aligned_tile_size, size_t vtcm_budget,
+                                                        size_t * mc_out, size_t * nc_out, size_t * vtcm_out) {
+    const size_t m_pad = hex_align_up(m, HTP_MM_HMX_TILE_N_ROWS);
+    size_t best_mb = SIZE_MAX, best_mc = 0, best_nc = 0, best_sz = 0;
+
+    for (size_t mc = m_pad; mc >= HTP_MM_HMX_TILE_N_ROWS; mc -= HTP_MM_HMX_TILE_N_ROWS) {
+        for (size_t nc = hex_align_down(hex_smin(n, 2048), 32); nc >= 32; nc -= 32) {
+            struct htp_mm_hmx_vtcm_layout L;
+            htp_mm_hmx_vtcm_layout_build(&L, HTP_MM_KERNEL_HMX_2D, wtype, k, mc, nc, 1, true, 0, aligned_tile_size, 0);
+            if (L.total_bytes > vtcm_budget) continue;
+
+            const size_t mb = (m + mc - 1) / mc;
+            if (mb < best_mb || (mb == best_mb && mc * nc > best_mc * best_nc)) {
+                best_mb = mb; best_mc = mc; best_nc = nc; best_sz = L.total_bytes;
+            }
+            break; // largest nc that fits for this mc
+        }
+    }
+
+    if (!best_mc) return false;
+    *mc_out = best_mc; *nc_out = best_nc; *vtcm_out = best_sz;
+    return true;
+}
+
+// pick (mc, nc) for the fused NX+GEGLU kernel, preferring few m-blocks (each m-block re-reads all weights)
+static inline bool htp_mm_hmx_solve_nx_geglu_params(int wtype, uint32_t k, uint32_t n, uint32_t m, uint32_t act_threads,
+                                                    uint32_t aligned_tile_size, size_t vtcm_budget,
+                                                    size_t * mc_out, size_t * nc_out, size_t * vtcm_out) {
+    const size_t m_pad = hex_align_up(m, HTP_MM_HMX_TILE_N_ROWS);
+    size_t best_cost = SIZE_MAX, best_mc = 0, best_nc = 0, best_sz = 0;
+    for (size_t mc = m_pad; mc >= HTP_MM_HMX_TILE_N_ROWS; mc -= HTP_MM_HMX_TILE_N_ROWS) {
+        for (size_t nc = hex_align_down(hex_smin(n, 2048), 32); nc >= 32; nc -= 32) {
+            const size_t sz = htp_mm_hmx_nx_geglu_vtcm_size(wtype, k, mc, nc, act_threads, aligned_tile_size);
+            if (sz > vtcm_budget) continue;
+            const size_t mb   = (m + mc - 1) / mc;
+            const size_t nb   = (n + nc - 1) / nc;
+            const size_t cost = mb * n * HTP_MM_HMX_COST_W_DEQUANT + nb * mb * 64; // per-chunk sync overhead
+            if (cost < best_cost) {
+                best_cost = cost; best_mc = mc; best_nc = nc; best_sz = sz;
+            }
+            break; // largest nc that fits for this mc
+        }
+        if (mc == HTP_MM_HMX_TILE_N_ROWS) break;
+    }
+    if (!best_mc) return false;
+    *mc_out = best_mc; *nc_out = best_nc; *vtcm_out = best_sz;
+    return true;
+}
+
 #ifdef __cplusplus
 }
 #endif

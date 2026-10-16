@@ -821,6 +821,8 @@ static int execute_op(struct htp_ops_context * octx) {
 
         case HTP_OP_MUL_MAT:
         case HTP_OP_MUL_MAT_ADD:
+        case HTP_OP_MUL_MAT_CAP:
+        case HTP_OP_MUL_MAT_AT:
             return op_matmul(octx);
 
         case HTP_OP_MUL_MAT_ID:
@@ -830,6 +832,8 @@ static int execute_op(struct htp_ops_context * octx) {
             return op_matmul_id_nx(octx);
 
         case HTP_OP_MUL_MAT_NX:
+        case HTP_OP_MUL_MAT_NX_GEGLU:
+        case HTP_OP_MUL_MAT_NX_GEGLU_T:
             return op_matmul_nx(octx);
 
         case HTP_OP_MUL:
@@ -842,6 +846,8 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_NORM:
         case HTP_OP_RMS_NORM:
         case HTP_OP_RMS_NORM_MUL:
+        case HTP_OP_ADD_RMS_NORM_MUL:
+        case HTP_OP_RMS_NORM_MUL_ADD:
         case HTP_OP_SCALE:
         case HTP_OP_CLAMP:
         case HTP_OP_LEAKY_RELU:
@@ -869,12 +875,14 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_GLU_GEGLU:
         case HTP_OP_GLU_GEGLU_QUICK:
         case HTP_OP_GLU_GEGLU_ERF:
+        case HTP_OP_GELU_MUL:
             return op_activations(octx);
 
         case HTP_OP_SOFTMAX:
             return op_softmax(octx);
 
         case HTP_OP_ROPE:
+        case HTP_OP_RMS_NORM_MUL_ROPE:
             return op_rope(octx);
 
         case HTP_OP_FLASH_ATTN_EXT:

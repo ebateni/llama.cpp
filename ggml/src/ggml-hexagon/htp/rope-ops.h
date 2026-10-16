@@ -4,8 +4,8 @@
 #include "hex-common.h"
 #include "hex-fastdiv.h"
 
-#define HTP_ROPE_SPAD_BLOCK  8
-#define HTP_ROPE_SPAD_NSLOTS 4
+#define HTP_ROPE_SPAD_BLOCK  16
+#define HTP_ROPE_SPAD_NSLOTS 8
 #define HTP_ROPE_SPAD_NROWS  (HTP_ROPE_SPAD_BLOCK * HTP_ROPE_SPAD_NSLOTS)
 
 struct htp_rope_kernel_params {
@@ -18,6 +18,9 @@ struct htp_rope_kernel_params {
     uint32_t src0_row_size_aligned;
     uint32_t freq_factors_offset;
     uint32_t freq_factors_size;
+    uint32_t norm_w_offset;    // RMS_NORM_MUL_ROPE: norm weight row in VTCM
+    uint32_t norm_w_size;
+    float    norm_eps;
 
     struct fastdiv_values div_ne2_ne1;
     struct fastdiv_values div_ne1;
@@ -35,24 +38,28 @@ struct htp_rope_vtcm_layout {
     size_t theta_cache_size_aligned;
     size_t src0_row_size_aligned;
     size_t freq_factors_size_aligned;
+    size_t norm_w_size_aligned;
 };
 
 static inline void htp_rope_vtcm_layout_build(
     struct htp_rope_vtcm_layout * layout,
     uint32_t ne00,
     uint32_t n_threads,
-    uint32_t n_freq_factors
+    uint32_t n_freq_factors,
+    uint32_t n_norm_w
 ) {
     const size_t src0_row_size             = ne00 * sizeof(float);
     const size_t src0_row_size_aligned     = hex_round_up((uint32_t) src0_row_size, 128);
     const size_t theta_cache_size_aligned  = hex_round_up((uint32_t) src0_row_size, 256);
     const size_t freq_factors_size_aligned = hex_round_up(n_freq_factors * sizeof(float), 256);
+    const size_t norm_w_size_aligned       = hex_round_up(n_norm_w * sizeof(float), 256);
 
     layout->src0_row_size_aligned     = src0_row_size_aligned;
     layout->theta_cache_size_aligned  = theta_cache_size_aligned;
     layout->freq_factors_size_aligned = freq_factors_size_aligned;
+    layout->norm_w_size_aligned       = norm_w_size_aligned;
     layout->bytes_per_thread          = theta_cache_size_aligned + HTP_ROPE_SPAD_NROWS * src0_row_size_aligned;
-    layout->total_bytes               = layout->bytes_per_thread * n_threads + freq_factors_size_aligned;
+    layout->total_bytes               = layout->bytes_per_thread * n_threads + freq_factors_size_aligned + norm_w_size_aligned;
 }
 
 static inline uint8_t * rope_spad_slot(uint8_t * base, uint32_t slot, size_t row_size_aligned) {

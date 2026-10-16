@@ -73,30 +73,35 @@ static void l2flush_multi_worker(unsigned int n, unsigned int i, void * data) {
     htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, gb_first);
 }
 
+// Merge overlapping/touching ranges. Ranges stay unsorted; one pass per surviving range, restart
+// only when a range grew (so the common case of no overlap costs 64 compares, not 64*64).
 static void merge_dirty_ranges(struct htp_context * ctx) {
     for (uint32_t i = 0; i < HTP_MAX_DIRTY_RANGES; i++) {
         struct htp_dirty_range * r = &ctx->dirty_ranges[i];
         if (!r->start) continue;
 
-        for (uint32_t j = 0; j < HTP_MAX_DIRTY_RANGES;) {
-            struct htp_dirty_range * s = &ctx->dirty_ranges[j];
-            if (i == j || !s->start || r->end < s->start || s->end < r->start) {
-                j++;
-                continue;
+        bool grew;
+        do {
+            grew = false;
+            for (uint32_t j = 0; j < HTP_MAX_DIRTY_RANGES; j++) {
+                struct htp_dirty_range * q = &ctx->dirty_ranges[j];
+                if (i == j || !q->start || r->end < q->start || q->end < r->start) {
+                    continue;
+                }
+                r->start = MIN(r->start, q->start);
+                r->end   = MAX(r->end, q->end);
+                q->start = 0;
+                q->end   = 0;
+                grew = true;
             }
-
-            r->start = MIN(r->start, s->start);
-            r->end   = MAX(r->end, s->end);
-            s->start = 0;
-            s->end   = 0;
-            j = 0;
-        }
+        } while (grew);
     }
 }
 
 void htp_tensor_dirty_all(struct htp_context * ctx, const struct htp_tensor * const * tensors, uint32_t n) {
     const struct htp_tensor * pending[HTP_OP_MAX_OUTPUTS];
     uint32_t n_pending = 0;
+    bool grew_any = false;
 
     for (uint32_t i = 0; i < n; i++) {
         const struct htp_tensor * t = tensors[i];
@@ -118,6 +123,7 @@ void htp_tensor_dirty_all(struct htp_context * ctx, const struct htp_tensor * co
                 r->start = new_start;
                 r->end   = new_end;
                 merged   = true;
+                grew_any = true;
             }
         }
 
@@ -126,7 +132,10 @@ void htp_tensor_dirty_all(struct htp_context * ctx, const struct htp_tensor * co
         }
     }
 
-    merge_dirty_ranges(ctx);
+    // a grown range may now touch others; plain inserts below only need a merge if several outputs were added
+    if (grew_any) {
+        merge_dirty_ranges(ctx);
+    }
 
     if (n_pending == 0) {
         return;
@@ -151,7 +160,9 @@ void htp_tensor_dirty_all(struct htp_context * ctx, const struct htp_tensor * co
             r->start = pending[i]->data;
             r->end   = pending[i]->data + pending[i]->size;
         }
-        merge_dirty_ranges(ctx);
+        if (n_pending > 1) {
+            merge_dirty_ranges(ctx);
+        }
         return;
     }
 

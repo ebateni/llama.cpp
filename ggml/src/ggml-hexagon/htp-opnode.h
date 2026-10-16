@@ -26,6 +26,8 @@ struct htp_opnode {
     ggml_tensor * node   { nullptr };
     htp_op_code   opcode { HTP_OP_INVALID };
     int32_t       kernel_params[HTP_OP_MAX_KERN_PARAMS] {0};
+    bool          has_op_params { false };            // use op_params below instead of node->op_params
+    int32_t       op_params[HTP_OP_MAX_PARAMS] {0};
 
     std::vector<ggml_tensor *>                fused;
     std::vector<std::shared_ptr<ggml_tensor>> dummy;
@@ -322,7 +324,8 @@ struct htp_opformat {
     void format_kernel_params(char * str, size_t max_size, const htp_opnode & node) {
         if (node.opcode == HTP_OP_MUL_MAT || node.opcode == HTP_OP_MUL_MAT_ID ||
             node.opcode == HTP_OP_MUL_MAT_NX || node.opcode == HTP_OP_MUL_MAT_ID_NX ||
-            node.opcode == HTP_OP_MUL_MAT_ADD) {
+            node.opcode == HTP_OP_MUL_MAT_ADD || node.opcode == HTP_OP_MUL_MAT_CAP || node.opcode == HTP_OP_MUL_MAT_NX_GEGLU ||
+            node.opcode == HTP_OP_MUL_MAT_NX_GEGLU_T || node.opcode == HTP_OP_MUL_MAT_AT) {
             const auto * kparams = (const struct htp_mm_kernel_params *) node.kernel_params;
             const char * path = "unknown";
             int32_t type = kparams->kernel_type;
@@ -332,7 +335,7 @@ struct htp_opformat {
                        type == HTP_MM_KERNEL_HVX_QUANT_ROW    || type == HTP_MM_KERNEL_HVX_QUANT_BLOCK) {
                 path = "hvx-tiled";
             }
-            snprintf(str, max_size, "%s vtcm %d", path, (int) kparams->vtcm_size);
+            snprintf(str, max_size, "%s mc %d nc %d vtcm %d", path, (int) kparams->m_chunk, (int) kparams->n_chunk, (int) kparams->vtcm_size);
         } else if (node.opcode == HTP_OP_FLASH_ATTN_EXT) {
             const auto * kparams = (const struct htp_fa_kernel_params *) node.kernel_params;
             const char * path = "unknown";

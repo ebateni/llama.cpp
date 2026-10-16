@@ -19,6 +19,7 @@
 #include "htp-ops.h"
 #include "htp-tensor.h"
 #include "rope-ops.h"
+#include "hvx-norm.h"
 
 // Redefined the rope type constants as we can't include ggml.h
 #define HTP_ROPE_TYPE_NORMAL 0
@@ -85,8 +86,11 @@ struct htp_rope_context {
 
     struct fastdiv_values div_ne2_ne1;
     struct fastdiv_values div_ne1;
+    struct fastdiv_values div_ne2;
 
     const float * freq_factors;
+    const float * norm_w; // non-NULL: rms_norm(row) * norm_w before rotation
+    float         norm_eps;
 };
 
 static float rope_yarn_ramp(const float low, const float high, const int i0) {
@@ -532,6 +536,134 @@ static void inline rope_neox_f32_inplace(struct htp_rope_context * rctx, uint8_t
     }
 }
 
+static inline void rope_theta_update(struct htp_rope_context * rctx, const int32_t * pos, uint32_t i2, uint32_t ne0,
+                                     uint32_t ne2, const float * freq_factors, float * theta_cache) {
+    const bool is_vision = (rctx->mode == HTP_ROPE_TYPE_VISION);
+    // VISION rotates the full row; other modes only rotate n_dims.
+    const uint32_t n_cache = is_vision ? ne0 : (uint32_t) rctx->n_dims;
+    const bool is_mrope = (rctx->mode & HTP_ROPE_TYPE_MROPE) != 0;
+    if (is_mrope) {
+        // src1 holds four position arrays stacked along ne0:
+        // pos[i2], pos[i2+ne2], pos[i2+ne2*2], pos[i2+ne2*3]
+        const bool is_imrope = (rctx->mode == HTP_ROPE_TYPE_IMROPE);
+        mrope_cache_init(
+            (float) pos[i2],
+            (float) pos[i2 + ne2],
+            (float) pos[i2 + ne2 * 2],
+            (float) pos[i2 + ne2 * 3],
+            rctx->sections, is_imrope, is_vision,
+            rctx->freq_scale, freq_factors, rctx->corr_dims,
+            n_cache, rctx->ext_factor, rctx->attn_factor,
+            theta_cache, rctx->theta_scale, rctx->theta_powers, rctx->theta_scale_32);
+    } else {
+        rope_cache_init(pos[i2], rctx->freq_scale, freq_factors, rctx->corr_dims,
+                        n_cache, rctx->ext_factor, rctx->attn_factor,
+                        theta_cache, rctx->theta_scale, rctx->theta_powers, rctx->theta_scale_32);
+    }
+}
+
+// Flat variant: rows of src0/dst are contiguous across heads and tokens, so DMA blocks run across
+// token boundaries and keep ROPE_FLAT_DEPTH blocks in flight. Pop order alternates (write of an
+// earlier block, read of the current block); slots = 2 * depth keeps a slot free before it is refilled.
+#define ROPE_FLAT_DEPTH (HTP_ROPE_SPAD_NSLOTS / 2)
+
+static void rope_job_f32_flat(unsigned int nth, unsigned int ith, void * data) {
+    struct htp_rope_context * rctx = (struct htp_rope_context *) data;
+    struct htp_ops_context * octx = rctx->octx;
+
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * src1 = octx->src[1];
+    const struct htp_tensor * dst  = octx->dst;
+
+    htp_rope_preamble;
+
+    const uint32_t start_row = rctx->row_start + rctx->src0_nrows_per_thread * ith;
+    const uint32_t end_row   = MIN(start_row + rctx->src0_nrows_per_thread, rctx->row_start + rctx->nrows);
+    if (start_row >= end_row) {
+        return;
+    }
+    (void) nth;
+
+    const bool is_neox = (rctx->mode & HTP_ROPE_TYPE_NEOX) || (rctx->mode & HTP_ROPE_TYPE_MROPE);
+    const bool is_vision = (rctx->mode == HTP_ROPE_TYPE_VISION);
+    const uint32_t ne = is_vision ? ne0 : rctx->n_dims;
+
+    uint8_t * spad_base = rctx->vtcm_base + (ith * rctx->spad_per_thread);
+    float *   theta_cache = (float *) spad_base;
+    spad_base += rctx->theta_cache_offset;
+
+    dma_queue * dma_q = octx->ctx->dma[ith];
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    const int32_t * pos = (const int32_t *) (uintptr_t) src1->data;
+
+    const uint32_t n_blocks = (end_row - start_row + HTP_ROPE_SPAD_BLOCK - 1) / HTP_ROPE_SPAD_BLOCK;
+
+    #define ROPE_PUSH_RD(b)                                                                                          \
+        do {                                                                                                         \
+            const uint32_t r0_ = start_row + (b) * HTP_ROPE_SPAD_BLOCK;                                              \
+            const uint32_t n_  = MIN(HTP_ROPE_SPAD_BLOCK, end_row - r0_);                                            \
+            uint8_t * sp_ = rope_spad_slot(spad_base, (b) % HTP_ROPE_SPAD_NSLOTS, rctx->src0_row_size_aligned);      \
+            dma_queue_push(dma_q, dma_make_data(dst->data, sp_), 0, 0, 0, 0);                                        \
+            dma_queue_push(dma_q, dma_make_data(sp_, src0->data + (size_t) r0_ * nb01),                              \
+                           rctx->src0_row_size_aligned, rctx->src0_row_stride, rctx->src0_row_size, n_);             \
+        } while (0)
+
+    for (uint32_t b = 0; b < ROPE_FLAT_DEPTH && b < n_blocks; b++) {
+        ROPE_PUSH_RD(b);
+    }
+
+    uint32_t prev_i2 = (uint32_t) -1;
+    for (uint32_t b = 0; b < n_blocks; b++) {
+        const uint32_t r0 = start_row + b * HTP_ROPE_SPAD_BLOCK;
+        const uint32_t n  = MIN(HTP_ROPE_SPAD_BLOCK, end_row - r0);
+
+        dma_queue_pop(dma_q);
+        uint8_t * spad = (uint8_t *) dma_queue_pop(dma_q).dst;
+
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, r0);
+        for (uint32_t r = 0; r < n; ) {
+            const uint32_t row = r0 + r;
+            const uint32_t i2  = fastmodulo(fastdiv(row, &rctx->div_ne1), ne2, &rctx->div_ne2);
+            const uint32_t run = MIN(n - r, ne1 - fastmodulo(row, ne1, &rctx->div_ne1));
+            if (i2 != prev_i2) {
+                prev_i2 = i2;
+                htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, i2);
+                rope_theta_update(rctx, pos, i2, ne0, ne2, rctx->freq_factors, theta_cache);
+                htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, i2);
+            }
+            uint8_t * seg = spad + r * rctx->src0_row_size_aligned;
+            if (rctx->norm_w) {
+                for (uint32_t k = 0; k < run; k++) {
+                    uint8_t * s = seg + k * rctx->src0_row_size_aligned;
+                    hvx_fast_rms_norm_mul_f32(s, (const uint8_t *) rctx->norm_w, s, ne0, rctx->norm_eps);
+                }
+            }
+            if (is_neox || is_vision) {
+                rope_neox_f32_inplace(rctx, seg, run, ne, theta_cache);
+            } else {
+                rope_basic_f32_inplace(rctx, seg, run, theta_cache);
+            }
+            r += run;
+        }
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, r0);
+
+        dma_queue_push(dma_q, dma_make_data(dst->data + (size_t) r0 * nb1, spad),
+                       rctx->dst_row_stride, rctx->src0_row_size_aligned, rctx->dst_row_size, n);
+
+        if (b + ROPE_FLAT_DEPTH < n_blocks) {
+            const uint32_t nb_ = b + ROPE_FLAT_DEPTH;
+            const uint32_t pr0 = start_row + nb_ * HTP_ROPE_SPAD_BLOCK;
+            const uint32_t pn  = MIN(HTP_ROPE_SPAD_BLOCK, end_row - pr0);
+            uint8_t * psp = rope_spad_slot(spad_base, nb_ % HTP_ROPE_SPAD_NSLOTS, rctx->src0_row_size_aligned);
+            dma_queue_push(dma_q, dma_make_data(psp, src0->data + (size_t) pr0 * nb01),
+                           rctx->src0_row_size_aligned, rctx->src0_row_stride, rctx->src0_row_size, pn);
+        }
+    }
+    #undef ROPE_PUSH_RD
+
+    dma_queue_flush(dma_q);
+}
+
 static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
     struct htp_rope_context * rctx = (struct htp_rope_context *) data;
     struct htp_ops_context * octx = rctx->octx;
@@ -611,27 +743,7 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
                     prev_i2 = i2;
 
                     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, i2);
-                    // VISION rotates the full row; other modes only rotate n_dims.
-                    const uint32_t n_cache = is_vision ? ne0 : (uint32_t) rctx->n_dims;
-                    const bool is_mrope = (rctx->mode & HTP_ROPE_TYPE_MROPE) != 0;
-                    if (is_mrope) {
-                        // src1 holds four position arrays stacked along ne0:
-                        // pos[i2], pos[i2+ne2], pos[i2+ne2*2], pos[i2+ne2*3]
-                        const bool is_imrope = (rctx->mode == HTP_ROPE_TYPE_IMROPE);
-                        mrope_cache_init(
-                            (float) pos[i2],
-                            (float) pos[i2 + ne2],
-                            (float) pos[i2 + ne2 * 2],
-                            (float) pos[i2 + ne2 * 3],
-                            rctx->sections, is_imrope, is_vision,
-                            rctx->freq_scale, freq_factors, rctx->corr_dims,
-                            n_cache, rctx->ext_factor, rctx->attn_factor,
-                            theta_cache, rctx->theta_scale, rctx->theta_powers, rctx->theta_scale_32);
-                    } else {
-                       rope_cache_init(pos[i2], rctx->freq_scale, freq_factors, rctx->corr_dims,
-                                        n_cache, rctx->ext_factor, rctx->attn_factor,
-                                        theta_cache, rctx->theta_scale, rctx->theta_powers, rctx->theta_scale_32);
-                    }
+                    rope_theta_update(rctx, pos, i2, ne0, ne2, freq_factors, theta_cache);
                     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, i2);
                 }
 
@@ -653,6 +765,12 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
                     uint8_t * cur_spad = (uint8_t *) dma_queue_pop(dma_q).dst;
 
                     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, cur_ir);
+                    if (rctx->norm_w) {
+                        for (uint32_t r = 0; r < cnr; r++) {
+                            uint8_t * s = cur_spad + r * rctx->src0_row_size_aligned;
+                            hvx_fast_rms_norm_mul_f32(s, (const uint8_t *) rctx->norm_w, s, ne0, rctx->norm_eps);
+                        }
+                    }
                     if (is_neox || is_vision) {
                         rope_neox_f32_inplace(rctx, cur_spad, cnr, ne, theta_cache);
                     } else {
@@ -702,6 +820,7 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
 
     switch (octx->op) {
         case HTP_OP_ROPE:
+        case HTP_OP_RMS_NORM_MUL_ROPE:
             break;
 
         default:
@@ -764,6 +883,16 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
         rctx.freq_factors = vtcm_freq_factors;
     }
 
+    if (octx->op == HTP_OP_RMS_NORM_MUL_ROPE) {
+        const struct htp_tensor * w = octx->src[3];
+        dma_queue * dma_q = octx->ctx->dma[0];
+        float * vtcm_w = (float *) (rctx.vtcm_base + kparams->norm_w_offset);
+        dma_queue_push(dma_q, dma_make_data(vtcm_w, w->data), kparams->norm_w_size, 0, w->ne[0] * sizeof(float), 1);
+        dma_queue_pop(dma_q);
+        rctx.norm_w   = vtcm_w;
+        rctx.norm_eps = kparams->norm_eps;
+    }
+
     const int32_t * op_params = &octx->op_params[0];
     rctx.n_dims     = ((const int32_t *) op_params)[1];
     rctx.mode       = ((const int32_t *) op_params)[2];
@@ -803,7 +932,14 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
     FARF(HIGH, "rope-f32 n-rows %u n-dims %d ne0 %u ext-factor %.6f theta-scale %.6f attn-factor %.6f\n", rctx.src0_nrows, rctx.n_dims, ne0,
          rctx.ext_factor, rctx.theta_scale, rctx.attn_factor);
 
-    work_queue_run(octx->ctx->work_queue, rope_job_f32, &rctx, n_threads);
+    // contiguous rows over heads and tokens (and no multi-device split): use the deep flat pipeline
+    const bool flat = (src0->nb[2] == src0->ne[1] * src0->nb[1]) && (src0->nb[3] == src0->ne[2] * src0->nb[2]) &&
+                      (dst->nb[2]  == dst->ne[1]  * dst->nb[1])  && (dst->nb[3]  == dst->ne[2]  * dst->nb[2])  &&
+                      !(rctx.mode & HTP_ROPE_TYPE_MROPE) && src0->ne[3] == 1;
+    if (flat) {
+        rctx.div_ne2 = init_fastdiv_values(src0->ne[2]);
+    }
+    work_queue_run(octx->ctx->work_queue, flat ? rope_job_f32_flat : rope_job_f32, &rctx, n_threads);
 
     return err;
 }

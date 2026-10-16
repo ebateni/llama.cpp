@@ -24,6 +24,12 @@ struct htp_unary_kernel_params {
     uint32_t  src1_row_size_aligned;
     uint32_t  dst_row_size_aligned;
 
+
+    // ADD_RMS_NORM_MUL only: second input and the VTCM-resident sum
+    uint32_t  vtcm_src2_size_per_thread;
+    uint32_t  vtcm_sum_size_per_thread;
+    uint32_t  vtcm_src2_size;
+    uint32_t  vtcm_sum_size;
     uint32_t  vtcm_size;
 
     // Fastdiv helpers
@@ -46,6 +52,8 @@ static inline bool htp_op_is_unary(uint32_t opcode) {
         case HTP_OP_NORM:
         case HTP_OP_RMS_NORM:
         case HTP_OP_RMS_NORM_MUL:
+        case HTP_OP_ADD_RMS_NORM_MUL:
+        case HTP_OP_RMS_NORM_MUL_ADD:
         case HTP_OP_SCALE:
         case HTP_OP_SQR:
         case HTP_OP_SQRT:
@@ -176,6 +184,46 @@ static inline void htp_unary_vtcm_layout_build(
 
     *out_col_tile = col_tile;
     *out_vtcm_row_per_thread = vtcm_row_per_thread;
+}
+
+// ADD_RMS_NORM_MUL / RMS_NORM_MUL_ADD: two row inputs, the VTCM-resident sum (also an output)
+// and the normalized result. Every staging area is double-buffered: the output DMA of one block
+// runs while the next block computes, so a single buffer would be overwritten while still in flight.
+static inline void htp_unary_fused_vtcm_layout_build(
+    struct htp_unary_vtcm_layout * L,
+    uint32_t ne00,
+    uint32_t n_threads,
+    uint32_t n_weights,
+    size_t vtcm_size,
+    size_t * sum_bytes_out,
+    size_t * src2_bytes_out,
+    uint32_t * out_rows_per_thread
+) {
+    const size_t row = hex_round_up((size_t) ne00 * sizeof(float), 128);
+
+    // weights are broadcast: n_weights rows per thread, outside the per-row budget
+    const size_t w_total = n_threads * n_weights * row;
+    size_t available = vtcm_size > w_total ? vtcm_size - w_total : 0;
+
+    // per row: 2 x (src0 + src1 + sum + dst)
+    const size_t per_row = 8 * row;
+    uint32_t rows = (uint32_t) (available / (n_threads * per_row));
+    if (rows == 0) { rows = 1; }
+
+    L->src0_bytes = 2 * row * rows;
+    L->src1_bytes = n_weights * row;
+    L->dst_bytes  = 2 * row * rows;
+    *src2_bytes_out = 2 * row * rows;
+    *sum_bytes_out  = 2 * row * rows;
+
+    L->off_src0 = 0;
+    L->off_src1 = L->off_src0 + L->src0_bytes * n_threads;
+    L->off_dst  = L->off_src1 + L->src1_bytes * n_threads;
+
+    // src2 and sum follow dst; callers derive their offsets the same way
+    L->total_bytes = L->off_dst + (L->dst_bytes + *src2_bytes_out + *sum_bytes_out) * n_threads;
+
+    *out_rows_per_thread = rows;
 }
 
 #endif /* HTP_UNARY_OPS_H */

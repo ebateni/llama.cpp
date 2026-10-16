@@ -220,53 +220,6 @@ static void swiglu_clamp_f32(const float * restrict src0,
 static const float GELU_COEF_A     = 0.044715f;
 static const float SQRT_2_OVER_PI  = 0.79788456080286535587989211986876f;
 
-static inline HVX_Vector hvx_vec_fast_sigmoid_f32_2it(HVX_Vector v) {
-    v = Q6_Vqf32_vmpy_VsfVsf(v, Q6_V_vsplat_R(FAST_SIGMOID_LOG2F));
-    v = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(v), Q6_V_vsplat_R(FAST_SIGMOID_C3));
-
-    HVX_Vector in_int = hvx_vec_truncate_f32(Q6_Vsf_equals_Vqf32(v));
-    HVX_Vector x      = Q6_Vqf32_vsub_Vqf32Vsf(v, Q6_Vsf_equals_Vw(in_int));
-    HVX_Vector xx     = Q6_Vqf32_vmpy_Vqf32Vqf32(x, x);
-
-    HVX_Vector v1 = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(xx), Q6_V_vsplat_R(FAST_SIGMOID_C2));
-    v1            = Q6_Vqf32_vadd_Vqf32Vsf(v1, Q6_V_vsplat_R(FAST_SIGMOID_LOG2F));
-
-    HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(x), Q6_V_vsplat_R(FAST_SIGMOID_C1));
-    v2            = Q6_Vqf32_vmpy_Vqf32Vqf32(v2, xx);
-    v2            = Q6_Vqf32_vadd_Vqf32Vqf32(v2, x);
-
-    HVX_Vector v3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(v2, v1));
-    v3            = Q6_Vw_vaslacc_VwVwR(v3, in_int, 24);
-
-    HVX_Vector v4 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_Vqf32Vqf32(v2, v1));
-    HVX_Vector v5 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(v3, v4));
-
-    // Newton-Raphson with 2 iterations
-    HVX_Vector two_sf = hvx_vec_splat_f32(2.0f);
-    HVX_Vector i_sf   = Q6_Vw_vsub_VwVw(Q6_V_vsplat_R(0x7EEEEBB3), v5);
-    HVX_Vector r_qf   = Q6_Vqf32_vmpy_VsfVsf(
-        i_sf, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(two_sf, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(i_sf, v5)))));
-    r_qf = Q6_Vqf32_vmpy_Vqf32Vqf32(
-        r_qf, Q6_Vqf32_vsub_VsfVsf(two_sf, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(r_qf), v5))));
-    HVX_Vector res = Q6_Vsf_equals_Vqf32(r_qf);
-
-    res = Q6_Vqf32_vmpy_VsfVsf(v3, res);
-
-    return Q6_Vsf_equals_Vqf32(res);
-}
-
-static inline HVX_Vector hvx_vec_fast_sigmoid_f32_guard_2it(HVX_Vector v,
-                                                            HVX_Vector one,
-                                                            HVX_Vector max_exp,
-                                                            HVX_Vector min_exp) {
-    const HVX_VectorPred pred_max = Q6_Q_vcmp_gt_VsfVsf(max_exp, v);
-    const HVX_VectorPred pred_min = Q6_Q_vcmp_gt_VsfVsf(v, min_exp);
-
-    HVX_Vector out = hvx_vec_fast_sigmoid_f32_2it(v);
-    out            = Q6_V_vmux_QVV(pred_max, out, one);
-    return Q6_V_vmux_QVV(pred_min, out, Q6_V_vzero());
-}
-
 static inline void hvx_geglu_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) {
     assert((unsigned long) dst  % 128 == 0);
     assert((unsigned long) src0 % 128 == 0);
@@ -447,6 +400,31 @@ static inline void hvx_geglu_f16_aa(uint8_t * restrict dst, const uint8_t * rest
         HVX_Vector gelu_x = hvx_vec_mul_f16_f16(hvx_vec_mul_f16_f16(x, t), v_half);
         HVX_Vector res    = hvx_vec_mul_f16_f16(gelu_x, g);
         hvx_vec_store_a((void *) &vdst[i], nloe * sizeof(_Float16), res);
+    }
+}
+
+// dst = gelu(src0) * src1; gelu is the same tanh approximation as the standalone GELU op
+static void gelu_mul_f32(const float * restrict src0,
+                         const float * restrict src1,
+                         float * restrict dst,
+                         const uint32_t num_rows,
+                         const struct htp_act_context * actx) {
+    htp_glu_op_preamble;
+
+    for (uint32_t ib = 0; ib < num_rows; ib++) {
+        const HVX_Vector * restrict vx = (const HVX_Vector *) ((const uint8_t *) src0 + (ib * src0_row_size_aligned));
+        const HVX_Vector * restrict vg = (const HVX_Vector *) ((const uint8_t *) src1 + (ib * src1_row_size_aligned));
+        HVX_Vector * restrict vd       = (HVX_Vector *) ((uint8_t *) dst + (ib * dst_row_size_aligned));
+
+        const uint32_t nvec = nc / 32;
+        const uint32_t nloe = nc % 32;
+        uint32_t i = 0;
+        for (; i < nvec; i++) {
+            vd[i] = hvx_vec_mul_f32_f32(hvx_vec_gelu_f32(vx[i]), vg[i]);
+        }
+        if (nloe) {
+            hvx_vec_store_a(&vd[i], nloe * sizeof(float), hvx_vec_mul_f32_f32(hvx_vec_gelu_f32(vx[i]), vg[i]));
+        }
     }
 }
 
@@ -727,6 +705,11 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
         case HTP_OP_GLU_GEGLU_ERF:
             compute_fn = geglu_erf_f32;
             op_type    = "geglu-erf-f32";
+            break;
+
+        case HTP_OP_GELU_MUL:
+            compute_fn = gelu_mul_f32;
+            op_type    = "gelu-mul-f32";
             break;
 
         default:

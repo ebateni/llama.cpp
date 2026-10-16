@@ -361,6 +361,8 @@ struct llama_hparams {
 
     // gemma4 per-layer embedding
     uint32_t n_embd_per_layer = 0;
+    // scale already multiplied into per_layer_token_embd by the converter (1.0 = not folded)
+    float    f_embd_per_layer_scale = 1.0f;
 
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
     // ref: https://github.com/ggml-org/llama.cpp/pull/8141

@@ -36,6 +36,14 @@ typedef void (*unary_rms_norm_mul_compute_fn_t)(const void * restrict src,
                                                 uint32_t num_rows,
                                                 const struct htp_unary_context * uctx);
 
+typedef void (*unary_add_rms_norm_mul_compute_fn_t)(const void * restrict src0,
+                                                    const void * restrict src1,
+                                                    const void * restrict weight,
+                                                    void * restrict sum,
+                                                    void * restrict dst,
+                                                    uint32_t num_rows,
+                                                    const struct htp_unary_context * uctx);
+
 typedef void (*unary_tri_compute_fn_t)(const void * restrict src,
                                        void * restrict dst,
                                        uint32_t num_rows,
@@ -63,6 +71,7 @@ struct htp_unary_context {
 
     dma_addr_t                data_src0;
     dma_addr_t                data_src1;            // weight/scale tensor for RMS_NORM_MUL
+    dma_addr_t                data_src2;            // second addend for ADD_RMS_NORM_MUL
     dma_addr_t                data_dst;
 
     size_t                    src0_data_row_size;   // actual data bytes per row
@@ -87,11 +96,18 @@ struct htp_unary_context {
 
     uint8_t *                 vtcm_src0;
     uint8_t *                 vtcm_src1;
+    uint8_t *                 vtcm_src2;
+    uint8_t *                 vtcm_sum;
     uint8_t *                 vtcm_dst;
 
     size_t                    vtcm_src0_size_per_thread;
     size_t                    vtcm_src1_size_per_thread;
     size_t                    vtcm_dst_size_per_thread;
+    size_t                    vtcm_src2_size_per_thread;
+    size_t                    vtcm_sum_size_per_thread;
+
+    // RMS_NORM_MUL_ADD only: the scale sits after the weight rows in VTCM
+    bool                      has_scale;
 };
 
 // Convert flat row index to DDR byte offset using the tensor's actual strides.
@@ -238,6 +254,58 @@ static void rms_norm_mul_f32(const void * restrict src,
         uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
 
         hvx_fast_rms_norm_mul_f32(src_local, w_local, dst_local, ne0, epsilon);
+    }
+}
+
+static void add_rms_norm_mul_f32(const void * restrict src0,
+                                 const void * restrict src1,
+                                 const void * restrict weight,
+                                 void * restrict sum,
+                                 void * restrict dst,
+                                 const uint32_t num_rows,
+                                 const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
+    float epsilon = 0.f;
+    memcpy(&epsilon, op_params, sizeof(float));
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict s0_local = (const uint8_t *) src0 + (ir * src0_row_size_aligned);
+        const uint8_t * restrict s1_local = (const uint8_t *) src1 + (ir * src0_row_size_aligned);
+        const uint8_t * restrict w_local  = (const uint8_t *) weight + (uctx->broadcast_weight ? 0 : ir * uctx->src1_row_size_aligned);
+        uint8_t * restrict sum_local      = (uint8_t *) sum + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local      = (uint8_t *) dst + (ir * dst_row_size_aligned);
+
+        hvx_fast_add_rms_norm_mul_f32(s0_local, s1_local, w_local, sum_local, dst_local, ne0, epsilon);
+    }
+}
+
+// y = rms_norm(x) * w1 + r [* s]; out = rms_norm(y) * w2. w2 sits one row after w1 in VTCM.
+// Without w2 the op only produces y, which the thread loop then stages in the out buffer.
+static void rms_norm_mul_add_f32(const void * restrict src0,
+                                 const void * restrict src1,
+                                 const void * restrict weight,
+                                 void * restrict sum,
+                                 void * restrict dst,
+                                 const uint32_t num_rows,
+                                 const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
+    float eps1 = 0.f, eps2 = 0.f;
+    memcpy(&eps1, &op_params[0], sizeof(float));
+    memcpy(&eps2, &op_params[1], sizeof(float));
+
+    const bool has_w2 = (uctx->octx->dsts[1] != NULL);
+    const uint8_t * w1 = (const uint8_t *) weight;
+    const uint8_t * w2 = has_w2 ? w1 + uctx->src1_row_size_aligned : NULL;
+    const float * scale = uctx->has_scale ? (const float *) (w1 + (has_w2 ? 2 : 1) * uctx->src1_row_size_aligned) : NULL;
+    uint8_t * y_base = has_w2 ? (uint8_t *) sum : (uint8_t *) dst;
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict x_local = (const uint8_t *) src0 + (ir * src0_row_size_aligned);
+        const uint8_t * restrict r_local = (const uint8_t *) src1 + (ir * src0_row_size_aligned);
+        uint8_t * restrict y_local       = y_base + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local     = (uint8_t *) dst + (ir * dst_row_size_aligned);
+
+        hvx_fast_rms_norm_mul_add_f32(x_local, r_local, w1, w2, y_local, dst_local, ne0, eps1, eps2, scale);
     }
 }
 
@@ -495,21 +563,6 @@ static void silu_f32(const void * restrict src,
         hvx_sigmoid_f32_aa(dst_local, src_local, ne0);
         hvx_mul_f32_aaa(dst_local, src_local, dst_local, ne0);
     }
-}
-
-// GELU uses the tanh approximation.
-static __attribute__((noinline)) HVX_Vector hvx_vec_gelu_f32(HVX_Vector x) {
-    const HVX_Vector half = hvx_vec_splat_f32(0.5f);
-    const HVX_Vector one  = hvx_vec_splat_f32(1.0f);
-
-    HVX_Vector inner = hvx_vec_mul_f32_f32(x, x);
-    inner = hvx_vec_mul_f32_f32(inner, hvx_vec_splat_f32(0.044715f));
-    inner = hvx_vec_add_f32_f32(inner, one);
-    inner = hvx_vec_mul_f32_f32(inner, x);
-    inner = hvx_vec_mul_f32_f32(inner, hvx_vec_splat_f32(0.7978845608028654f));
-
-    return hvx_vec_mul_f32_f32(hvx_vec_mul_f32_f32(half, x),
-                               hvx_vec_add_f32_f32(one, hvx_vec_tanh_f32(inner)));
 }
 
 static inline void hvx_gelu_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
@@ -1237,6 +1290,118 @@ static void unary_thread_rms_norm_mul_f32(unsigned int nth, unsigned int ith, vo
     dma_queue_flush(dma_q);
 }
 
+// 2b. ADD_RMS_NORM_MUL: add the two residual inputs, keep the sum in VTCM for the norm,
+// then write both the sum (next layer's residual) and the normalized result.
+static void unary_thread_add_rms_norm_mul_f32(unsigned int nth, unsigned int ith, void * data) {
+    (void) nth;
+    const struct htp_unary_context * uctx = (const struct htp_unary_context *) data;
+    struct htp_ops_context * octx = uctx->octx;
+    const struct htp_tensor * src = octx->src[0];
+    const struct htp_tensor * dst = octx->dsts[0];
+
+    htp_unary_preamble;
+
+    const uint32_t nrows_per_thread = uctx->src0_nrows_per_thread;
+    const uint32_t start_row = uctx->row_start + nrows_per_thread * ith;
+    const uint32_t end_row   = MIN(start_row + nrows_per_thread, uctx->row_start + uctx->src0_nrows);
+
+    if (start_row >= end_row) {
+        return;
+    }
+
+    const size_t row_aligned = uctx->src0_row_size_aligned;
+    const size_t row_bytes   = uctx->src0_data_row_size;
+    const uint32_t nb21      = octx->src[2]->nb[1];
+
+    // dsts[0] is the normalized result, dsts[1] is the residual sum.
+    // RMS_NORM_MUL_ADD without a second norm has only dsts[0], which then holds the sum.
+    const bool       has_sum  = (octx->dsts[1] != NULL);
+    const dma_addr_t data_sum = has_sum ? octx->dsts[1]->data : 0;
+    const uint32_t   nb_sum   = has_sum ? octx->dsts[1]->nb[1] : 0;
+
+    uint8_t * s0_vtcm  = uctx->vtcm_src0 + ith * uctx->vtcm_src0_size_per_thread;
+    uint8_t * s2_vtcm  = uctx->vtcm_src2 + ith * uctx->vtcm_src2_size_per_thread;
+    uint8_t * w_vtcm   = uctx->vtcm_src1 + ith * uctx->vtcm_src1_size_per_thread;
+    uint8_t * sum_vtcm = uctx->vtcm_sum  + ith * uctx->vtcm_sum_size_per_thread;
+    uint8_t * dst_vtcm = uctx->vtcm_dst  + ith * uctx->vtcm_dst_size_per_thread;
+
+    const size_t s0_half  = uctx->vtcm_src0_size_per_thread / 2;
+    const size_t s2_half  = uctx->vtcm_src2_size_per_thread / 2;
+    const size_t sum_half = uctx->vtcm_sum_size_per_thread / 2;
+    const size_t dst_half = uctx->vtcm_dst_size_per_thread / 2;
+
+    const uint32_t BLOCK = uctx->block;
+    dma_queue * dma_q = octx->ctx->dma[ith];
+
+    dma_queue_push(dma_q, dma_make_data(w_vtcm, uctx->data_src1),
+                   uctx->src1_row_size_aligned, 0, uctx->src1_data_row_size, 1);
+    if (octx->op == HTP_OP_RMS_NORM_MUL_ADD) {
+        uint32_t w_rows = 1;
+        if (has_sum) {
+            dma_queue_push(dma_q, dma_make_data(w_vtcm + uctx->src1_row_size_aligned, octx->src[3]->data),
+                           uctx->src1_row_size_aligned, 0, uctx->src1_data_row_size, 1);
+            w_rows = 2;
+        }
+        if (uctx->has_scale) {
+            dma_queue_push(dma_q, dma_make_data(w_vtcm + w_rows * uctx->src1_row_size_aligned, octx->src[4]->data),
+                           128, 0, sizeof(float), 1);
+        }
+    }
+    dma_queue_flush(dma_q);
+
+    for (uint32_t ir = start_row, slot = 0; ir < end_row && slot < 2; slot++) {
+        const uint32_t bs = MIN(BLOCK, end_row - ir);
+        // zero-height descriptors only hand the VTCM slot pointers back to the loop below
+        dma_queue_push(dma_q, dma_make_data(uctx->data_dst, dst_vtcm + slot * dst_half),
+                       nb1, row_aligned, row_bytes, 0);
+        if (has_sum) {
+            dma_queue_push(dma_q, dma_make_data(data_sum, sum_vtcm + slot * sum_half),
+                           nb_sum, row_aligned, row_bytes, 0);
+        }
+        dma_queue_push(dma_q, dma_make_data(s0_vtcm + slot * s0_half, uctx->data_src0 + ir * nb01),
+                       row_aligned, nb01, row_bytes, bs);
+        dma_queue_push(dma_q, dma_make_data(s2_vtcm + slot * s2_half, uctx->data_src2 + ir * nb21),
+                       row_aligned, nb21, row_bytes, bs);
+        ir += bs;
+    }
+
+    unary_add_rms_norm_mul_compute_fn_t compute = (unary_add_rms_norm_mul_compute_fn_t) uctx->compute;
+
+    for (uint32_t ir = start_row; ir < end_row; ) {
+        const uint32_t bs = MIN(BLOCK, end_row - ir);
+
+        void * out = (void *) (uintptr_t) dma_queue_pop(dma_q).src;
+        void * sum = has_sum ? (void *) (uintptr_t) dma_queue_pop(dma_q).src : NULL;
+        void * s0  = (void *) (uintptr_t) dma_queue_pop(dma_q).dst;
+        void * s2  = (void *) (uintptr_t) dma_queue_pop(dma_q).dst;
+
+        htp_trace_event_start(&octx->ctx->trace[ith], HTP_TRACE_EVT_HVX_COMP, ir);
+        compute(s0, s2, w_vtcm, sum, out, bs, uctx);
+        htp_trace_event_stop(&octx->ctx->trace[ith], HTP_TRACE_EVT_HVX_COMP, ir);
+
+        // the output-write descriptors double as the next iteration's buffer handles:
+        // popping one waits for the write and hands the VTCM slot back, so the push order
+        // here must match the pop order above (dst first, then sum)
+        dma_queue_push(dma_q, dma_make_data(uctx->data_dst + ir * nb1, out), nb1, row_aligned, row_bytes, bs);
+        if (has_sum) {
+            dma_queue_push(dma_q, dma_make_data(data_sum + ir * nb_sum, sum), nb_sum, row_aligned, row_bytes, bs);
+        }
+
+        const uint32_t next_ir = ir + bs;
+        if (next_ir < end_row) {
+            const uint32_t pref_ir = next_ir + MIN(BLOCK, end_row - next_ir);
+            if (pref_ir < end_row) {
+                const uint32_t pbs = MIN(BLOCK, end_row - pref_ir);
+                dma_queue_push(dma_q, dma_make_data(s0, uctx->data_src0 + pref_ir * nb01), row_aligned, nb01, row_bytes, pbs);
+                dma_queue_push(dma_q, dma_make_data(s2, uctx->data_src2 + pref_ir * nb21), row_aligned, nb21, row_bytes, pbs);
+            }
+        }
+        ir = next_ir;
+    }
+
+    dma_queue_flush(dma_q);
+}
+
 // 3. TRI row-block task with row index ir.
 static void unary_thread_tri_f32(unsigned int nth, unsigned int ith, void * data) {
     (void) nth;
@@ -1603,6 +1768,8 @@ static int execute_op_unary(struct htp_ops_context * octx) {
         case HTP_OP_NORM:            op_type = is_f16 ? "norm-f16"     : "norm-f32";         break;
         case HTP_OP_RMS_NORM:        op_type = is_f16 ? "rmsnorm-f16"  : "rmsnorm-f32";      break;
         case HTP_OP_RMS_NORM_MUL:    op_type = "rmsnorm-mul-f32";                            break;
+        case HTP_OP_ADD_RMS_NORM_MUL: op_type = "add-rmsnorm-mul-f32";                        break;
+        case HTP_OP_RMS_NORM_MUL_ADD: op_type = "rmsnorm-mul-add-f32";                        break;
         case HTP_OP_SCALE:           op_type = is_f16 ? "scale-f16"    : "scale-f32";        break;
         case HTP_OP_CLAMP:           op_type = is_f16 ? "clamp-f16"    : "clamp-f32";        break;
         case HTP_OP_LEAKY_RELU:      op_type = "leaky-relu-f32";                             break;
@@ -1691,7 +1858,7 @@ static int execute_op_unary(struct htp_ops_context * octx) {
 
     // RMS_NORM_MUL fusion is F32-only (its weight tensor is always F32; see
     // try_fuse_node()'s type guard), so this never triggers when is_f16 is true.
-    if (octx->op == HTP_OP_RMS_NORM_MUL) {
+    if (octx->op == HTP_OP_RMS_NORM_MUL || octx->op == HTP_OP_ADD_RMS_NORM_MUL || octx->op == HTP_OP_RMS_NORM_MUL_ADD) {
         src1 = octx->src[1];
         src1_data_row_size = src1->ne[0] * sizeof(float);
     }
@@ -1718,7 +1885,8 @@ static int execute_op_unary(struct htp_ops_context * octx) {
         .row_start             = row_start,
 
         .data_src0             = src0->data,
-        .data_src1             = (octx->op == HTP_OP_RMS_NORM_MUL) ? src1->data : 0,
+        .data_src1             = src1 ? src1->data : 0,
+        .data_src2             = (octx->op == HTP_OP_ADD_RMS_NORM_MUL || octx->op == HTP_OP_RMS_NORM_MUL_ADD) ? octx->src[2]->data : 0,
         .data_dst              = dst->data,
 
         .src0_data_row_size    = src0_data_row_size,
@@ -1741,10 +1909,21 @@ static int execute_op_unary(struct htp_ops_context * octx) {
         .vtcm_src0             = VTCM_LAYOUT_PTR(uint8_t, base, 0),
         .vtcm_src1             = VTCM_LAYOUT_PTR_OPTIONAL(uint8_t, base, kparams->vtcm_src0_size, kparams->vtcm_src1_size > 0),
         .vtcm_dst              = VTCM_LAYOUT_PTR(uint8_t, base, kparams->vtcm_src0_size + kparams->vtcm_src1_size),
+        .vtcm_src2             = VTCM_LAYOUT_PTR_OPTIONAL(uint8_t, base,
+                                     kparams->vtcm_src0_size + kparams->vtcm_src1_size + kparams->vtcm_dst_size,
+                                     kparams->vtcm_src2_size > 0),
+        .vtcm_sum              = VTCM_LAYOUT_PTR_OPTIONAL(uint8_t, base,
+                                     kparams->vtcm_src0_size + kparams->vtcm_src1_size + kparams->vtcm_dst_size +
+                                     kparams->vtcm_src2_size,
+                                     kparams->vtcm_sum_size > 0),
 
         .vtcm_src0_size_per_thread = kparams->vtcm_src0_size_per_thread,
         .vtcm_src1_size_per_thread = kparams->vtcm_src1_size_per_thread,
         .vtcm_dst_size_per_thread  = kparams->vtcm_dst_size_per_thread,
+        .vtcm_src2_size_per_thread = kparams->vtcm_src2_size_per_thread,
+        .vtcm_sum_size_per_thread  = kparams->vtcm_sum_size_per_thread,
+
+        .has_scale             = (octx->op == HTP_OP_RMS_NORM_MUL_ADD && octx->src[4] != NULL),
     };
 
     FARF(HIGH, "%s: %s mode (col_tile %u)\n", op_type, col_tile ? "tiled" : "row-block", col_tile);
@@ -1802,6 +1981,14 @@ static int execute_op_unary(struct htp_ops_context * octx) {
             case HTP_OP_RMS_NORM_MUL:
                 task_func    = unary_thread_rms_norm_mul_f32;
                 compute_func = (void *) rms_norm_mul_f32;
+                break;
+            case HTP_OP_ADD_RMS_NORM_MUL:
+                task_func    = unary_thread_add_rms_norm_mul_f32;
+                compute_func = (void *) add_rms_norm_mul_f32;
+                break;
+            case HTP_OP_RMS_NORM_MUL_ADD:
+                task_func    = unary_thread_add_rms_norm_mul_f32;
+                compute_func = (void *) rms_norm_mul_add_f32;
                 break;
             case HTP_OP_SCALE:           compute_func = (void *) scale_f32;               break;
             case HTP_OP_CLAMP:           compute_func = (void *) clamp_f32;               break;

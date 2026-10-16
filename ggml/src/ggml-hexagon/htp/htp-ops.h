@@ -118,6 +118,14 @@ enum htp_op_code {
     HTP_OP_POOL_2D,
     HTP_OP_POOL_1D,
     HTP_OP_UNARY_GELU_QUICK,
+    HTP_OP_MUL_MAT_NX_GEGLU,   // geglu(W0 x, W1 x) : gate/up matmul with fused gelu-gated epilogue
+    HTP_OP_MUL_MAT_NX_GEGLU_T, // same, but emits f16 in HMX activation-tile layout for a fused consumer
+    HTP_OP_MUL_MAT_AT,         // matmul whose activation is already f16 in HMX activation-tile layout
+    HTP_OP_ADD_RMS_NORM_MUL,   // y = add(a,b); out = rms_norm(y) * w : keeps y in VTCM
+    HTP_OP_RMS_NORM_MUL_ROPE,  // rope(rms_norm(x) * w) : norm runs on the rope scratchpad rows
+    HTP_OP_RMS_NORM_MUL_ADD,   // y = (rms_norm(x) * w1 + r) [* s]; [out = rms_norm(y) * w2]
+    HTP_OP_GELU_MUL,           // dst = gelu(src0) * src1 (row-wise, src1 may be strided)
+    HTP_OP_MUL_MAT_CAP,        // m=1 q4_0 mat-vec with the logit softcap epilogue: s2 * tanh(s1 * (W x)); params = [s1, s2]
 
     HTP_OP_INVALID
 };
