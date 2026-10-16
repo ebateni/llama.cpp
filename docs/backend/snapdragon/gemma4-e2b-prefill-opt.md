@@ -50,6 +50,36 @@ kernels, four fusions and the per-op bookkeeping only. Model, device and command
 - A first run after an idle gap can be 20-40% slow (pp 3000-5500, tg 25-43) on either package; the warmup run plus
   the median of the interleaved rounds are needed for a stable comparison.
 
+### Independent verification (separate session, not the author's measurement)
+
+A second session rebuilt this change set from scratch in its own source copy and build directory (`C:\bverify`,
+package `pkg-verify`; all 4 skels and the host binaries match the build dir byte for byte, `fc /b`) and measured it on
+the same kind of device (SC8480XP, HTP v81, Windows 11 ARM64), same model and command line as above. The author's
+table above is unchanged; the numbers below are the independent ones (analysis/STATUS.md sections 1 and 1.1,
+analysis/verify-progress.md pieces C, D, E).
+
+- Gates reproduced: the 48-token greedy output (`llama-completion`, `-n 48 --temp 0 --seed 1234`, HTP0) is
+  byte-identical (`fc /b`) to the author's package in the same session and to the author's `par_new.txt`; PPL
+  (`wiki.test.raw`, `-c 512 -b 512 --chunks 40`, HTP0) is 134.3955 +- 6.77407, identical to the author's package in the
+  same session.
+- Interleaved A/B (`llama-bench -p 512 -n 128 -r 5`, warmup run first, 30 s gaps), baseline `pkg-new` vs `pkg-verify`:
+
+| Medians | prefill pp512 (t/s) | decode tg128 (t/s) |
+|---|---|---|
+| baseline, 3 rounds | 7423.25 | 54.23 |
+| independent build, 3 rounds | 7701.94 (+3.75%) | 65.32 (+20.45%) |
+| baseline, 5 rounds | 7538.90 | 54.16 |
+| independent build, 5 rounds | 7865.12 (+4.33%) | 65.32 (+20.61%) |
+
+- Per round (3-round set, independent build): pp512 6492.27 / 7701.94 / 7900.76, tg128 54.87 / 66.07 / 65.32. Round 1
+  was a noisy outlier (in-run stdev 2982.67 for pp512 and 22.19 for tg128); it is kept in the medians, nothing was
+  dropped.
+- The independent medians are 1.0-1.7% below the author's own medians above (decode 65.32 vs 65.99, prefill 7701.94 vs
+  7834.33), which is inside the round-to-round noise of this device.
+- One `llama-bench` run of the independent package hung mid-round on the device (over 15 minutes, partial pp512 2760.14
+  +- 3502.10). The cause was not found; the same package was healthy before and after, and the supplementary rounds
+  were re-run alone and completed. The partial numbers are excluded from the table.
+
 ### 9. q4_0 packed weight DMA for the m=1 mat-vec
 
 - The m=1 HVX q4_0 kernels (`hvx_mv_2d_repacked_pk_q4_0`, `hvx_mm_nx_2d_repacked_pk_q4_0`) fetched each 32-row
