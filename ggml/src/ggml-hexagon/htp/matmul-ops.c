@@ -238,6 +238,7 @@ static const uint8_t __attribute__((aligned(VLEN))) kvalues_mxfp4_lut[] = {
 #include "hvx-mm-kernels-tiled.h"
 #include "hvx-mm-kernels-float.h"
 #include "hmx-mm-kernels-tiled.h"
+#include "hmx-mm-kernels-int8.h"
 
 // Specialized repacked matmul macros
 #define MATMUL_2D_REPACKED_IMPL(SUFFIX, TILE_SIZE, DOT_2X2, DOT_2X1)                                                                       \
@@ -3825,6 +3826,1024 @@ static int hmx_mm_nx_geglu_2d_f32(struct htp_ops_context * octx, const struct ht
     return HTP_STATUS_OK;
 }
 
+
+// ---- int8 HMX gate+up GEGLU (activation.ub x weight.b:deep, 64 filters per issue) ----
+
+typedef struct {
+    uint8_t *       out;
+    const uint8_t * act;
+    const uint8_t * wgt;
+    const uint8_t * bias;
+    uint32_t        n_row_tiles;
+    uint32_t        n_groups;
+    uint32_t        n_k;
+    size_t          wgt_stride;
+    size_t          bias_stride;
+} hmx_int8_job_t;
+
+static void hmx_int8_job_fn(void * data) {
+    hmx_int8_job_t * j = (hmx_int8_job_t *) data;
+    hmx_int8_core_dot_chunk(j->out, j->act, j->wgt, j->bias, j->n_row_tiles, j->n_groups, j->n_k, j->wgt_stride, j->bias_stride);
+}
+
+// per-chunk side tables of one expanded weight set (256 B aligned; bias tables first)
+struct hmx_int8_meta {
+    uint8_t * bias;     // [n_cols/64][512 B]
+    float *   s_n;      // [n_cols]
+    float *   col_mul;  // [n_cols]
+    int32_t * colsum;   // [n_cols]
+    int32_t * abssum;   // [n_cols]
+};
+
+typedef struct {
+    struct htp_thread_trace * traces;
+    uint8_t *                 dst;
+    const uint8_t *           src;
+    struct hmx_int8_meta      meta;
+    uint32_t                  n_ct;
+    uint32_t                  n_k_tiles;
+    uint32_t                  aligned_tile_size;
+    uint32_t                  n_cols;
+    uint32_t                  reduce;
+} int8_expand_state_t;
+
+static void int8_expand_worker_fn(unsigned int n, unsigned int i, void * data) {
+    int8_expand_state_t * st = (int8_expand_state_t *) data;
+    const uint32_t p0 = (st->n_ct * i) / n, p1 = (st->n_ct * (i + 1)) / n;
+    if (p0 == p1) { return; }
+    htp_trace_event_start(&st->traces[i], HTP_TRACE_EVT_HVX_W_DEQUANT, p0);
+    hmx_int8_expand_q4_0(st->dst, st->meta.s_n, st->meta.colsum, st->meta.abssum, st->src, p0, p1,
+                         st->n_k_tiles, st->aligned_tile_size);
+    hmx_int8_make_bias((uint32_t *) st->meta.bias, st->meta.col_mul, st->meta.s_n, st->meta.colsum,
+                           st->meta.abssum, p0, p1, st->reduce);
+    htp_trace_event_stop(&st->traces[i], HTP_TRACE_EVT_HVX_W_DEQUANT, p0);
+}
+
+typedef struct {
+    struct htp_context *      ctx;
+    struct htp_thread_trace * traces;
+    uint8_t *                 dst;
+    dma_addr_t                x;          // DDR address of row 0 of this m-block
+    float *                   a_scale;
+    float *                   stage;      // n_threads * 2 buffers * 2 rows * k floats
+    uint32_t                  m;
+    uint32_t                  k;
+    uint32_t                  x_stride;   // floats
+    uint32_t                  n_rt;
+    const float *             signs;      // non-NULL: rotate each row (Hadamard) before quantizing
+    uint8_t *                 dst2;       // non-NULL: A16 second pass (low residual pass) destination
+    float *                   a_scale2;   // A16 second pass row scales
+    bool                      tiled_f16;  // x is the tiled-f16 activation (HMX tile layout, from a fused GEGLU_T producer)
+    uint32_t                  pair0;      // first row pair (block-local) handled by this call
+    uint32_t                  pair_n;     // number of row pairs handled by this call
+    uint32_t                  first_w;    // 1: worker 0 (the caller, owner of dma[0] = weight DMA queue) takes no work
+    const float *             inv_s;      // non-NULL: x *= inv_s[k] (static activation smoothing, VTCM copy, 128 B aligned)
+} int8_quant_state_t;
+
+static void int8_quant_worker_fn(unsigned int n, unsigned int i, void * data) {
+    int8_quant_state_t * st = (int8_quant_state_t *) data;
+    // threads split the call's row PAIRS; with first_w the caller (thread 0, weight DMA owner) does nothing
+    if (i < st->first_w) { return; }
+    const uint32_t wi = i - st->first_w, wn = n - st->first_w;
+    const uint32_t p0 = st->pair0 + (st->pair_n * wi) / wn, p1 = st->pair0 + (st->pair_n * (wi + 1)) / wn;
+    if (p0 == p1) { return; }
+    htp_trace_event_start(&st->traces[i], HTP_TRACE_EVT_HVX_A_QUANT, p0);
+    dma_queue * q = st->ctx->dma[i];
+    const uint32_t k = st->k, nkc = k / 32;
+    float * stage[2] = { st->stage + (size_t) i * 4 * k, st->stage + (size_t) i * 4 * k + 2 * (size_t) k };
+    const uint32_t n_pairs = p1 - p0;
+    const size_t row_bytes = (size_t) k * sizeof(float), src_stride = (size_t) st->x_stride * sizeof(float);
+
+    // tiled-f16 input: row pair p of row tile rt is the 128 B vector p of each of the nkc 2 KB tiles of that row tile
+    // (lo halves = row 2p, hi halves = row 2p + 1). Two f16 stripe buffers sit behind the f32 pair area of the thread's stage.
+    uint8_t * h16[2] = { (uint8_t *) stage[0] + 2 * row_bytes, (uint8_t *) stage[0] + 2 * row_bytes + (size_t) nkc * 128 };
+    const HVX_Vector one16 = hvx_vec_splat_f16(1.0f);
+    #define Q8_PUSH(li) do {                                                                                   \
+        const uint32_t _gp  = p0 + (li);                                                                        \
+        const uint32_t _row = 2 * _gp;                                                                          \
+        if (_row < st->m) {                                                                                     \
+            if (st->tiled_f16) {                                                                                \
+                dma_queue_push(q, dma_make_data(h16[(li) & 1], st->x + (size_t) ((_gp >> 4) * nkc) * 2048 + (_gp & 15) * 128), \
+                               128, 2048, 128, nkc);                                                            \
+            } else {                                                                                            \
+                dma_queue_push(q, dma_make_data(stage[(li) & 1], st->x + (size_t) _row * src_stride), row_bytes, src_stride, row_bytes, \
+                               hex_smin(2u, st->m - _row));                                                     \
+            }                                                                                                   \
+        }                                                                                                       \
+    } while (0)
+
+    Q8_PUSH(0);
+    if (n_pairs > 1) { Q8_PUSH(1); }
+    float sc[2];
+    for (uint32_t li = 0; li < n_pairs; ++li) {
+        const uint32_t gp  = p0 + li;
+        const uint32_t row = 2 * gp;
+        const float * x0 = NULL, * x1 = NULL;
+        if (row < st->m) {
+            const float * buf = (const float *) dma_queue_pop(q).dst;
+            if (st->tiled_f16) {
+                const HVX_Vector * hv = (const HVX_Vector *) buf;
+                HVX_Vector * w0 = (HVX_Vector *) stage[0];
+                HVX_Vector * w1 = (HVX_Vector *) (stage[0] + k);
+                for (uint32_t kc = 0; kc < nkc; ++kc) {
+                    const HVX_VectorPair vp = Q6_Wqf32_vmpy_VhfVhf(hv[kc], one16);
+                    w0[kc] = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp));
+                    w1[kc] = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp));
+                }
+                buf = stage[0];
+            }
+            x0 = buf;
+            x1 = row + 1 < st->m ? buf + k : NULL;
+        }
+        if (st->inv_s) {
+            const HVX_Vector * sv = (const HVX_Vector *) st->inv_s;
+            if (x0) { HVX_Vector * xv = (HVX_Vector *) x0; for (uint32_t kc = 0; kc < nkc; ++kc) { xv[kc] = hvx_vec_mul_f32_f32(xv[kc], sv[kc]); } }
+            if (x1) { HVX_Vector * xv = (HVX_Vector *) x1; for (uint32_t kc = 0; kc < nkc; ++kc) { xv[kc] = hvx_vec_mul_f32_f32(xv[kc], sv[kc]); } }
+        }
+        if (st->signs) {
+            if (x0) { hmx_int8_rotate_row((HVX_Vector *) x0, (const HVX_Vector *) st->signs, k); }
+            if (x1) { hmx_int8_rotate_row((HVX_Vector *) x1, (const HVX_Vector *) st->signs, k); }
+        }
+        const size_t doff = (size_t) (gp >> 4) * nkc * HMX_INT8_CROUTON_A + (gp & 15) * 128;
+        uint8_t * dp = st->dst + doff;
+        if (st->dst2) {
+            float sc16[4];
+            hmx_int8_quant_pair_a16(dp, st->dst2 + doff, sc16, x0, x1, k);
+            if (x0) { st->a_scale[row] = sc16[0]; st->a_scale2[row] = sc16[2]; }
+            if (x1) { st->a_scale[row + 1] = sc16[1]; st->a_scale2[row + 1] = sc16[3]; }
+        } else {
+            hmx_int8_quant_pair(dp, sc, x0, x1, k);
+            if (x0) { st->a_scale[row] = sc[0]; }
+            if (x1) { st->a_scale[row + 1] = sc[1]; }
+        }
+        if (li + 2 < n_pairs) { Q8_PUSH(li + 2); }
+    }
+    #undef Q8_PUSH
+    htp_trace_event_stop(&st->traces[i], HTP_TRACE_EVT_HVX_A_QUANT, p0);
+}
+
+// int16 accumulator tiles -> scaled f16 tiles, in place: tile[v] (word c = rows 2v, 2v+1 of channel c)
+typedef struct {
+    struct htp_thread_trace * traces;
+    uint8_t *                 tiles;
+    const float *             col_mul;
+    const uint32_t *          a_scale16;  // row pair (2v, 2v+1) as one word of two f16
+    uint32_t                  n_rt;
+    uint32_t                  n_ct;
+} int8_convert_state_t;
+
+static void int8_convert_worker_fn(unsigned int n, unsigned int i, void * data) {
+    int8_convert_state_t * st = (int8_convert_state_t *) data;
+    const uint32_t c0 = (st->n_ct * i) / n, c1 = (st->n_ct * (i + 1)) / n;
+    if (c0 == c1) { return; }
+    htp_trace_event_start(&st->traces[i], HTP_TRACE_EVT_HVX_W_PREP, c0);
+    // per-column f16 scale vectors (word = channel, both halves) built once per column tile
+    HVX_Vector cm16[32];
+    for (uint32_t ct = c0; ct < c1; ct += 32) {
+        const uint32_t cn = hex_smin(32u, c1 - ct);
+        for (uint32_t t = 0; t < cn; ++t) {
+            const HVX_Vector cm = ((const HVX_Vector *) st->col_mul)[ct + t];
+            cm16[t] = hvx_vec_f32_to_f16_shuff(cm, cm);
+        }
+        for (uint32_t rt = 0; rt < st->n_rt; ++rt) {
+            const uint32_t * as = st->a_scale16 + rt * 16;
+            for (uint32_t v = 0; v < 16; ++v) {
+                const HVX_Vector asv = Q6_V_vsplat_R(as[v]);
+                for (uint32_t t = 0; t < cn; ++t) {
+                    HVX_Vector * tv = (HVX_Vector *) (st->tiles + ((size_t) rt * st->n_ct + ct + t) * 2048) + v;
+                    const HVX_Vector a = Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(*tv), asv);
+                    *tv = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_Vqf16Vhf(a, cm16[t]));
+                }
+            }
+        }
+    }
+    htp_trace_event_stop(&st->traces[i], HTP_TRACE_EVT_HVX_W_PREP, c0);
+}
+
+
+// Fused epilogue for the int8 path (tiled f16 output): int16 accumulator tiles of gate and up are scaled to f16
+// (row scale * column scale) in registers and fed straight into the GEGLU.
+typedef struct {
+    struct htp_thread_trace * traces;
+    __fp16 *                  dst;
+    const uint8_t *           gate;
+    const uint8_t *           up;
+    const float *             cm_gate;
+    const float *             cm_up;
+    const float *             ca_gate;   // per-column two-level-bias remainder (NULL when the record has none)
+    const float *             ca_up;
+    const uint32_t *          a_scale16;
+    uint32_t                  n_rt;
+    uint32_t                  n_ct;
+    uint32_t                  dst_tile_col;
+    uint32_t                  dst_k_tiles;
+} int8_geglu_state_t;
+
+// Mirrors transfer_output_geglu_tiled_col_chunk, with int16 accumulator inputs scaled by row/column f16 factors.
+static void int8_geglu_tiled_col_chunk(__fp16 *restrict dst, const int16_t *restrict gate, const int16_t *restrict up,
+                                       const uint32_t *restrict as16, const float *restrict cm_gate,
+                                       const float *restrict cm_up, const float *restrict ca_gate,
+                                       const float *restrict ca_up, uint32_t n_rows, uint32_t c_len,
+                                       uint32_t total_n_cols, uint32_t dst_tile_col, uint32_t dst_k_tiles) {
+    const size_t src_row_stride = (total_n_cols / HTP_MM_HMX_TILE_N_COLS) * HTP_MM_HMX_TILE_N_ELMS;
+    const size_t dst_row_stride = (size_t) dst_k_tiles * HTP_MM_HMX_TILE_N_ELMS;
+
+    const HVX_Vector c_a    = hvx_vec_splat_f16(2.0f * EXP_LOG2E_F * HTP_GELU_COEF_A * HTP_SQRT_2_OVER_PI);
+    const HVX_Vector c_s    = hvx_vec_splat_f16(2.0f * EXP_LOG2E_F * HTP_SQRT_2_OVER_PI);
+    const HVX_Vector x2_max = hvx_vec_splat_f16(256.0f);
+
+    const uint32_t n_row_tiles = hmx_ceil_div(n_rows, HTP_MM_HMX_TILE_N_ROWS);
+
+    for (uint32_t ct = 0; ct * HTP_MM_HMX_TILE_N_COLS < c_len; ++ct) {
+        const size_t so = (size_t) ct * HTP_MM_HMX_TILE_N_ELMS;
+        const size_t doff = (size_t) (dst_tile_col + ct) * HTP_MM_HMX_TILE_N_ELMS;
+        const HVX_Vector cmg0 = ((const HVX_Vector *) cm_gate)[ct];
+        const HVX_Vector cmu0 = ((const HVX_Vector *) cm_up)[ct];
+        const HVX_Vector cmg  = hvx_vec_f32_to_f16_shuff(cmg0, cmg0);
+        const HVX_Vector cmu  = hvx_vec_f32_to_f16_shuff(cmu0, cmu0);
+        HVX_Vector cag = Q6_V_vzero(), cau = Q6_V_vzero();
+        if (ca_gate) { const HVX_Vector x = ((const HVX_Vector *) ca_gate)[ct]; cag = hvx_vec_f32_to_f16_shuff(x, x); }
+        if (ca_up)   { const HVX_Vector x = ((const HVX_Vector *) ca_up)[ct];   cau = hvx_vec_f32_to_f16_shuff(x, x); }
+        for (uint32_t rt = 0; rt < n_row_tiles; ++rt) {
+            const HVX_Vector * g = (const HVX_Vector *) (gate + rt * src_row_stride + so);
+            const HVX_Vector * u = (const HVX_Vector *) (up + rt * src_row_stride + so);
+            HVX_Vector *       o = (HVX_Vector *) (dst + rt * dst_row_stride + doff);
+            const uint32_t *   a = as16 + rt * 16;
+            #pragma unroll(4)
+            for (uint32_t v = 0; v < HTP_MM_HMX_TILE_N_ROWS / 2; ++v) {
+                const HVX_Vector asv = Q6_V_vsplat_R(a[v]);
+                HVX_Vector gf  = hvx_vec_mul_f16_f16(hvx_vec_mul_f16_f16(Q6_Vhf_equals_Vh(g[v]), asv), cmg);
+                HVX_Vector uf  = hvx_vec_mul_f16_f16(hvx_vec_mul_f16_f16(Q6_Vhf_equals_Vh(u[v]), asv), cmu);
+                // remainder of the truncated bias word (accumulator domain) scales with the row factor; zero when the word is exact
+                gf = hvx_vec_add_f16_f16(gf, hvx_vec_mul_f16_f16(cag, asv));
+                uf = hvx_vec_add_f16_f16(uf, hvx_vec_mul_f16_f16(cau, asv));
+                o[v] = hvx_vec_geglu_f16(gf, uf, c_a, c_s, x2_max);
+            }
+        }
+    }
+}
+
+static void int8_geglu_tiled_worker_fn(unsigned int n, unsigned int i, void * data) {
+    int8_geglu_state_t * st = (int8_geglu_state_t *) data;
+    const uint32_t c0 = (st->n_ct * i) / n, c1 = (st->n_ct * (i + 1)) / n;
+    if (c0 == c1) { return; }
+    htp_trace_event_start(&st->traces[i], HTP_TRACE_EVT_HVX_O_PROC, c0);
+    int8_geglu_tiled_col_chunk(st->dst, (const int16_t *) st->gate + c0 * HTP_MM_HMX_TILE_N_ELMS,
+                               (const int16_t *) st->up + c0 * HTP_MM_HMX_TILE_N_ELMS, st->a_scale16,
+                               st->cm_gate + c0 * 32, st->cm_up + c0 * 32,
+                               st->ca_gate ? st->ca_gate + c0 * 32 : NULL, st->ca_up ? st->ca_up + c0 * 32 : NULL,
+                               st->n_rt * 32, (c1 - c0) * 32,
+                               st->n_ct * 32, st->dst_tile_col + c0, st->dst_k_tiles);
+    htp_trace_event_stop(&st->traces[i], HTP_TRACE_EVT_HVX_O_PROC, c0);
+}
+
+#define HMX_INT8_MAX_ROWS 1024
+
+struct hmx_int8_layout {
+    size_t off_act, off_ascale, off_ascale16, off_stage, off_raw[2], off_w8[2], off_meta[4], off_obuf[4], total;
+    size_t raw_bytes, w8_bytes, meta_bytes, obuf_bytes, bias_bytes;
+};
+
+static bool hmx_int8_layout_build(struct hmx_int8_layout * L, uint32_t k, size_t mc, size_t nc, uint32_t aligned_tile_size) {
+    const size_t nkt = k / 32;
+    const size_t act_bytes = (mc / 32) * nkt * HMX_INT8_CROUTON_A;
+    L->raw_bytes  = hex_align_up((nc / 32) * nkt * aligned_tile_size, 2048);
+    L->w8_bytes   = (nc / 64) * nkt * HMX_INT8_CROUTON_W;
+    L->bias_bytes = (nc / 64) * 512;
+    L->meta_bytes = hex_align_up(L->bias_bytes, 256) + 4 * hex_align_up(nc * 4, 256);
+    L->obuf_bytes = (mc / 32) * (nc / 32) * 2048;
+    size_t off = 0;
+    L->off_act = off;      off += hex_align_up(act_bytes, 2048);
+    L->off_ascale = off;   off += hex_align_up(mc * 4, 256);
+    L->off_ascale16 = off; off += hex_align_up(mc * 2, 256);
+    L->off_stage = off;    off += 8 * 4 * (size_t) k * sizeof(float);
+    for (int i = 0; i < 2; ++i) { L->off_raw[i] = off; off += L->raw_bytes; }
+    for (int i = 0; i < 2; ++i) { L->off_w8[i] = off;  off += hex_align_up(L->w8_bytes, 2048); }
+    for (int i = 0; i < 4; ++i) { L->off_meta[i] = off; off += L->meta_bytes; }
+    off = hex_align_up(off, 2048);
+    for (int i = 0; i < 4; ++i) { L->off_obuf[i] = off; off += L->obuf_bytes; }
+    L->total = off;
+    return true;
+}
+
+static bool hmx_int8_solve_geglu(uint32_t k, uint32_t n, uint32_t m, uint32_t aligned_tile_size, size_t budget,
+                                 size_t * mc_out, size_t * nc_out) {
+    const size_t m_pad = hex_align_up(m, 32);
+    size_t best_cost = SIZE_MAX, best_mc = 0, best_nc = 0;
+    for (size_t mc = m_pad; mc >= 32; mc -= 32) {
+        for (size_t nc = hex_align_down(hex_smin(n, 2048), 64); nc >= 64; nc -= 64) {
+            struct hmx_int8_layout L;
+            hmx_int8_layout_build(&L, k, mc, nc, aligned_tile_size);
+            if (L.total > budget) { continue; }
+            const size_t mb = (m + mc - 1) / mc, nb = (n + nc - 1) / nc;
+            const size_t cost = mb * n * HTP_MM_HMX_COST_W_DEQUANT + nb * mb * 64;
+            if (cost < best_cost) { best_cost = cost; best_mc = mc; best_nc = nc; }
+            break;
+        }
+        if (mc == 32) { break; }
+    }
+    if (!best_mc) { return false; }
+    *mc_out = best_mc; *nc_out = best_nc;
+    return true;
+}
+
+static void hmx_int8_meta_ptrs(struct hmx_int8_meta * M, uint8_t * base, size_t off, const struct hmx_int8_layout * L, size_t nc) {
+    uint8_t * p = base + off;
+    M->bias = p;                                   p += hex_align_up(L->bias_bytes, 256);
+    M->s_n = (float *) p;                          p += hex_align_up(nc * 4, 256);
+    M->col_mul = (float *) p;                      p += hex_align_up(nc * 4, 256);
+    M->colsum = (int32_t *) p;                     p += hex_align_up(nc * 4, 256);
+    M->abssum = (int32_t *) p;
+}
+
+static int hmx_mm_nx_geglu_2d_int8(struct htp_ops_context * octx, const struct htp_mm_kernel_params * kparams) {
+    struct htp_context * ctx = octx->ctx;
+    struct htp_thread_trace * tr = &ctx->trace[0];
+    htp_trace_event_start(tr, HTP_TRACE_EVT_INIT, 0);
+
+    const struct htp_tensor * restrict w_gate = octx->src[0];
+    const struct htp_tensor * restrict w_up   = octx->src[1];
+    const struct htp_tensor * restrict act    = octx->src[2];
+    const struct htp_tensor * restrict dst    = octx->dsts[0];
+
+    const int    k          = (int) act->ne[0];
+    const int    m          = (int) (act->ne[1] * act->ne[2] * act->ne[3]);
+    const int    act_stride = (int) (act->nb[1] / sizeof(float));
+    const size_t n          = w_gate->ne[1];
+    const bool   tiled_out  = (octx->op == HTP_OP_MUL_MAT_NX_GEGLU_T);
+
+    if (w_gate->type != HTP_TYPE_Q4_0 || w_up->type != HTP_TYPE_Q4_0 || act->type != HTP_TYPE_F32 || k % 32 != 0 ||
+        n % 64 != 0 || m < 64 || w_up->ne[1] != n || ctx->mdev.count > 1 || (act->data & (VLEN - 1)) != 0 ||
+        (tiled_out && ((size_t) dst->ne[0] != n || (dst->data & (VLEN - 1)) != 0))) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+
+    const uint32_t tile_size         = kparams->tile_size;
+    const uint32_t aligned_tile_size = kparams->aligned_tile_size;
+    size_t mc = 0, nc = 0;
+    if (!hmx_int8_solve_geglu(k, n, m, aligned_tile_size, ctx->vtcm_size, &mc, &nc)) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+    if ((tiled_out && (mc % 32)) || mc > HMX_INT8_MAX_ROWS) { return HTP_STATUS_NO_SUPPORT; }
+
+    const int n_k_tiles = k / 32;
+    const int n_threads = octx->n_threads;
+    struct hmx_int8_layout L;
+    hmx_int8_layout_build(&L, k, mc, nc, aligned_tile_size);
+
+    uint8_t * const base = (uint8_t *) ctx->vtcm_base;
+    uint8_t * a_u8     = base + L.off_act;
+    float *   a_scale  = (float *) (base + L.off_ascale);
+    uint32_t * a_scale16 = (uint32_t *) (base + L.off_ascale16);
+    uint32_t   as16_ddr[HMX_INT8_MAX_ROWS / 2] __attribute__((aligned(128)));
+    (void) a_scale16;
+    uint8_t * raw[2]   = { base + L.off_raw[0], base + L.off_raw[1] };
+    uint8_t * w8[2]    = { base + L.off_w8[0], base + L.off_w8[1] };
+    uint8_t * obuf[4]  = { base + L.off_obuf[0], base + L.off_obuf[1], base + L.off_obuf[2], base + L.off_obuf[3] };
+    struct hmx_int8_meta meta[4];
+    for (int i = 0; i < 4; ++i) { hmx_int8_meta_ptrs(&meta[i], base, L.off_meta[i], &L, nc); }
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_INIT, 0);
+
+    dma_queue * weight_dma = ctx->dma[0];
+    const struct htp_tensor * ws[2] = { w_gate, w_up };
+
+    __fp16 * const dst_tiled = (__fp16 *) dst->data;
+    float *  const dst_ptr   = (float *) dst->data;
+    const size_t dst_stride  = dst->nb[1] / sizeof(float);
+    const int dst_cols       = (int) dst->ne[0];
+    const int dst_k_tiles    = (int) n / 32;
+    const int n_chunk_cnt    = hmx_ceil_div(n, nc);
+    const int n_steps        = 2 * n_chunk_cnt;
+
+    #define GEGLU8_PUSH_W(step, buf) do {                                                                       \
+        const int    _c    = (step) / 2;                                                                        \
+        const int    _w    = (step) % 2;                                                                        \
+        const size_t _nc   = (size_t) _c * nc;                                                                  \
+        const size_t _cols = hex_smin(n - _nc, nc);                                                             \
+        dma_queue_push(weight_dma, dma_make_data((buf), ws[_w]->data + _nc * ws[_w]->nb[1]),                    \
+                       aligned_tile_size, tile_size, tile_size, (_cols / 32) * n_k_tiles);                      \
+    } while (0)
+
+    hmx_int8_job_t job_slots[4];
+    #define GEGLU8_EPILOGUE(c_, mr_, n_rows_) do {                                                              \
+        const size_t _ncc  = (size_t) (c_) * nc;                                                                \
+        const size_t _cols = hex_smin(n - _ncc, nc);                                                            \
+        const int    _pb   = ((c_) % 2) * 2;                                                                    \
+        const int    _dcols = dst_cols - (int) _ncc;                                                            \
+        if (tiled_out) {                                                                                        \
+            int8_geglu_state_t gs = { ctx->trace, dst_tiled + ((mr_) / 32) * (size_t) dst_k_tiles * 1024,       \
+                                      obuf[_pb], obuf[_pb + 1], meta[_pb].col_mul, meta[_pb + 1].col_mul,       \
+                                      NULL, NULL, as16_ddr, (uint32_t) hmx_ceil_div((n_rows_), 32), (uint32_t) (_cols / 32),\
+                                      (uint32_t) (_ncc / 32), (uint32_t) dst_k_tiles };                         \
+            const int nth = (int) hex_smin((uint32_t) n_threads, gs.n_ct);                                      \
+            if (nth <= 1) { int8_geglu_tiled_worker_fn(1, 0, &gs); } else { worker_pool_run_func(ctx->worker_pool, int8_geglu_tiled_worker_fn, &gs, nth); } \
+        } else if (_dcols > 0) {                                                                                \
+            for (int _w = 0; _w < 2; ++_w) {                                                                    \
+                int8_convert_state_t cs = { ctx->trace, obuf[_pb + _w], meta[_pb + _w].col_mul, as16_ddr,       \
+                                            (uint32_t) hmx_ceil_div((n_rows_), 32), (uint32_t) (_cols / 32) };  \
+                const int nth = (int) hex_smin((uint32_t) n_threads, cs.n_ct);                                  \
+                if (nth <= 1) { int8_convert_worker_fn(1, 0, &cs); } else { worker_pool_run_func(ctx->worker_pool, int8_convert_worker_fn, &cs, nth); } \
+            }                                                                                                   \
+            transfer_output_geglu_threaded(ctx, dst_ptr + (mr_) * dst_stride + _ncc, (const __fp16 *) obuf[_pb],\
+                                           (const __fp16 *) obuf[_pb + 1], (int) (n_rows_), (int) _cols, (int) dst_stride, _dcols, n_threads); \
+        }                                                                                                       \
+    } while (0)
+
+    for (size_t mr = 0; mr < (size_t) m; mr += mc) {
+        const size_t n_rows = hex_smin((size_t) m - mr, mc);
+        const uint32_t n_rt = hmx_ceil_div(n_rows, 32);
+
+        memset(a_scale, 0, hex_align_up((size_t) n_rt * 32, 64) * sizeof(float));
+        {
+            int8_quant_state_t qs = { ctx, ctx->trace, a_u8, act->data + mr * act_stride * sizeof(float), a_scale,
+                                      (float *) (base + L.off_stage), (uint32_t) n_rows, (uint32_t) k, (uint32_t) act_stride, n_rt, NULL, NULL, NULL, false, 0, n_rt * 16, 0, NULL };
+            const int nth = (int) hex_smin((uint32_t) n_threads, n_rt);
+            if (nth <= 1) { int8_quant_worker_fn(1, 0, &qs); } else { worker_pool_run_func(ctx->worker_pool, int8_quant_worker_fn, &qs, nth); }
+        }
+        for (uint32_t r = 0; r < n_rt * 32; r += 64) {
+            hvx_vmem((__fp16 *) as16_ddr + r) = hvx_vec_f32_to_f16(hvx_vmem(a_scale + r), hvx_vmem(a_scale + r + 32));
+        }
+
+        GEGLU8_PUSH_W(0, raw[0]);
+        if (n_steps > 1) { GEGLU8_PUSH_W(1, raw[1]); }
+
+        for (int s = 0; s < n_steps; ++s) {
+            const int    c      = s / 2;
+            const int    w      = s % 2;
+            const size_t ncc    = (size_t) c * nc;
+            const size_t n_cols = hex_smin(n - ncc, nc);
+            const int    ob     = (c % 2) * 2 + w;
+
+            void * curr_raw = (void *) dma_queue_pop(weight_dma).dst;
+
+            {
+                int8_expand_state_t es = { ctx->trace, w8[w], (const uint8_t *) curr_raw, meta[ob], (uint32_t) (n_cols / 32),
+                                           (uint32_t) n_k_tiles, aligned_tile_size, (uint32_t) n_cols, (uint32_t) 4 };
+                const int nth = (int) hex_smin((uint32_t) n_threads, es.n_ct);
+                if (nth <= 1) { int8_expand_worker_fn(1, 0, &es); } else { worker_pool_run_func(ctx->worker_pool, int8_expand_worker_fn, &es, nth); }
+            }
+
+            if (s + 2 < n_steps) { GEGLU8_PUSH_W(s + 2, curr_raw); }
+
+            job_slots[ob] = (hmx_int8_job_t) { obuf[ob], a_u8, w8[w], meta[ob].bias, n_rt, (uint32_t) (n_cols / 64), (uint32_t) n_k_tiles, (size_t) n_k_tiles * HMX_INT8_CROUTON_W, 512 };
+            hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_int8_job_fn, &job_slots[ob]));
+
+            if (s > 0) { hmx_queue_pop(ctx->hmx_queue); }
+
+            if (w == 1 && c > 0) { GEGLU8_EPILOGUE(c - 1, mr, n_rows); }
+        }
+
+        hmx_queue_pop(ctx->hmx_queue);
+        GEGLU8_EPILOGUE(n_chunk_cnt - 1, mr, n_rows);
+    }
+    #undef GEGLU8_PUSH_W
+    #undef GEGLU8_EPILOGUE
+
+    return HTP_STATUS_OK;
+}
+
+
+// Rotated int8 gate+up: weights come as pre-rotated int8 records (hex-int8-pack.h), the activation rows are rotated on HVX.
+static int hmx_mm_nx_geglu_2d_int8_rot(struct htp_ops_context * octx, const struct htp_mm_kernel_params * kparams) {
+    struct htp_context * ctx = octx->ctx;
+    struct htp_thread_trace * tr = &ctx->trace[0];
+    htp_trace_event_start(tr, HTP_TRACE_EVT_INIT, 0);
+
+    const struct htp_tensor * restrict w_gate = octx->src[0];
+    const struct htp_tensor * restrict w_up   = octx->src[1];
+    const struct htp_tensor * restrict act    = octx->src[2];
+    const struct htp_tensor * restrict dst    = octx->dsts[0];
+
+    const int    k          = (int) act->ne[0];
+    const int    m          = (int) (act->ne[1] * act->ne[2] * act->ne[3]);
+    const int    act_stride = (int) (act->nb[1] / sizeof(float));
+    const size_t n          = w_gate->ne[1];
+    const bool   tiled_out  = (octx->op == HTP_OP_MUL_MAT_NX_GEGLU_T);
+
+    if (w_gate->type != HTP_TYPE_Q4_0 || w_up->type != HTP_TYPE_Q4_0 || act->type != HTP_TYPE_F32 || k != 1536 ||
+        n % 64 != 0 || m < 64 || w_up->ne[1] != n || ctx->mdev.count > 1 || (act->data & (VLEN - 1)) != 0 ||
+        (tiled_out && ((size_t) dst->ne[0] != n || (dst->data & (VLEN - 1)) != 0))) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+
+    const int      n_k_tiles = k / 32;
+    const size_t   rec_bytes = (size_t) n_k_tiles * 2048 + 2048;                // one 64-column record (2 KB multiple)
+    // int8 data starts after the tiled Q4_0 data of the tensor (128 B aligned), see ggml_hexagon_int8_rot_offset()
+    const size_t   int8_off  = hex_align_up((size_t) (k / 32) * 18 * hex_align_up(n, 32), 128);   // = (n/32)*(k/32)*576 tiled bytes
+
+    // VTCM: act u8 | row scales | f32 stage | [2 raw record chunks] | meta (col_mul) | 4 output buffers
+    // chunk = nc columns = nc/64 records; raw chunk holds records contiguously
+    size_t mc = 0, nc = 0;
+    {
+        const size_t m_pad = hex_align_up(m, 32);
+        size_t best = SIZE_MAX;
+        for (size_t mc_c = m_pad; mc_c >= 32; mc_c -= 32) {
+            for (size_t nc_c = hex_align_down(hex_smin(n, 1024), 64); nc_c >= 64; nc_c -= 64) {
+                const size_t act_b = (mc_c / 32) * n_k_tiles * HMX_INT8_CROUTON_A;
+                const size_t tot = hex_align_up(act_b, 2048) + hex_align_up(mc_c * 4, 256) + hex_align_up(mc_c * 2, 256) + hex_smin(8u, hmx_ceil_div(mc_c, 32)) * 4 * (size_t) k * 4 + (kparams->smooth ? hex_align_up((size_t) k * 4, 2048) : 0) +
+                                   2 * hex_align_up((nc_c / 64) * rec_bytes, 2048) + 4 * hex_align_up(2 * nc_c * 4, 256) +
+                                   4 * hex_align_up((mc_c / 32) * (nc_c / 32) * 2048, 2048) + k * 4 + 4096;
+                if (tot > ctx->vtcm_size) { continue; }
+                const size_t mb = (m + mc_c - 1) / mc_c, nb = (n + nc_c - 1) / nc_c;
+                const size_t cost = mb * n * 2 + nb * mb * 64;
+                if (cost < best) { best = cost; mc = mc_c; nc = nc_c; }
+                break;
+            }
+            if (mc_c == 32) { break; }
+        }
+    }
+    if (!mc || mc > HMX_INT8_MAX_ROWS || (tiled_out && (mc % 32))) { return HTP_STATUS_NO_SUPPORT; }
+
+    const int n_threads = octx->n_threads;
+    uint8_t * const base = (uint8_t *) ctx->vtcm_base;
+    size_t off = 0;
+    #define ROT_ALLOC(var, bytes) do { var = off; off += hex_align_up((bytes), 2048); } while (0)
+    size_t o_act, o_asc, o_asc16, o_stage, o_raw[2], o_meta[4], o_obuf[4], o_sign;
+    ROT_ALLOC(o_act, (mc / 32) * n_k_tiles * HMX_INT8_CROUTON_A);
+    ROT_ALLOC(o_asc, mc * 4);
+    ROT_ALLOC(o_asc16, mc * 2);
+    ROT_ALLOC(o_stage, hex_smin(8u, hmx_ceil_div(mc, 32)) * 4 * (size_t) k * 4);
+    ROT_ALLOC(o_sign, (size_t) k * 4);
+    size_t o_smooth = 0;
+    if (kparams->smooth) { ROT_ALLOC(o_smooth, (size_t) k * 4); }
+    for (int i = 0; i < 2; ++i) { ROT_ALLOC(o_raw[i], (nc / 64) * rec_bytes); }
+    for (int i = 0; i < 4; ++i) { ROT_ALLOC(o_meta[i], 2 * nc * 4); }
+    for (int i = 0; i < 4; ++i) { ROT_ALLOC(o_obuf[i], (mc / 32) * (nc / 32) * 2048); }
+    #undef ROT_ALLOC
+    if (off > ctx->vtcm_size) { return HTP_STATUS_VTCM_TOO_SMALL; }
+
+    uint8_t *  a_u8      = base + o_act;
+    float *    a_scale   = (float *) (base + o_asc);
+    static float g_rot_signs[1536] __attribute__((aligned(128)));
+    static int   g_rot_signs_init = 0;
+    if (!g_rot_signs_init) { hmx_int8_make_signs(g_rot_signs, 1536); g_rot_signs_init = 1; }
+    float *    signs     = (float *) (base + o_sign);
+    hmx_int8_make_signs(signs, 1536);
+    (void) g_rot_signs; (void) g_rot_signs_init;
+    uint32_t   as16_ddr[HMX_INT8_MAX_ROWS / 2] __attribute__((aligned(128)));
+    uint8_t *  raw[2]    = { base + o_raw[0], base + o_raw[1] };
+    uint8_t *  obuf[4]   = { base + o_obuf[0], base + o_obuf[1], base + o_obuf[2], base + o_obuf[3] };
+    float *    colmul[4] = { (float *) (base + o_meta[0]), (float *) (base + o_meta[1]), (float *) (base + o_meta[2]), (float *) (base + o_meta[3]) };
+    float *    coladd[4] = { (float *) (base + o_meta[0]) + nc, (float *) (base + o_meta[1]) + nc, (float *) (base + o_meta[2]) + nc, (float *) (base + o_meta[3]) + nc };
+    (void) o_asc16;
+
+    // static activation smoothing: 1/s_k behind the packed records of the gate weight; copy to VTCM once
+    const float * inv_s_vtcm = NULL;
+    if (kparams->smooth) {
+        float * dstv = (float *) (base + o_smooth);
+        dma_queue_push(ctx->dma[0], dma_make_data(dstv, w_gate->data + int8_off + (n / 64) * rec_bytes), (size_t) k * 4, (size_t) k * 4, (size_t) k * 4, 1);
+        (void) dma_queue_pop(ctx->dma[0]);
+        inv_s_vtcm = dstv;
+    }
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_INIT, 0);
+
+    dma_queue * weight_dma = ctx->dma[0];
+    const struct htp_tensor * ws[2] = { w_gate, w_up };
+
+    __fp16 * const dst_tiled = (__fp16 *) dst->data;
+    float *  const dst_ptr   = (float *) dst->data;
+    const size_t dst_stride  = dst->nb[1] / sizeof(float);
+    const int dst_cols       = (int) dst->ne[0];
+    const int dst_k_tiles    = (int) n / 32;
+    const int n_chunk_cnt    = hmx_ceil_div(n, nc);
+    const int n_steps        = 2 * n_chunk_cnt;
+
+    #define ROT_PUSH_W(step, buf) do {                                                                          \
+        const int    _c   = (step) / 2;                                                                         \
+        const int    _w   = (step) % 2;                                                                         \
+        const size_t _nc  = (size_t) _c * nc;                                                                   \
+        const size_t _cols = hex_smin(n - _nc, nc);                                                             \
+        const size_t _bytes = (_cols / 64) * rec_bytes;                                                         \
+        dma_queue_push(weight_dma, dma_make_data((buf), ws[_w]->data + int8_off + (_nc / 64) * rec_bytes),      \
+                       _bytes, _bytes, _bytes, 1);                                                              \
+    } while (0)
+
+    hmx_int8_job_t job_slots[4];
+    #define ROT_EPILOGUE(c_, mr_, n_rows_) do {                                                                 \
+        const size_t _ncc  = (size_t) (c_) * nc;                                                                \
+        const size_t _cols = hex_smin(n - _ncc, nc);                                                            \
+        const int    _pb   = ((c_) % 2) * 2;                                                                    \
+        const int    _dcols = dst_cols - (int) _ncc;                                                            \
+        if (tiled_out) {                                                                                        \
+            int8_geglu_state_t gs = { ctx->trace, dst_tiled + ((mr_) / 32) * (size_t) dst_k_tiles * 1024,       \
+                                      obuf[_pb], obuf[_pb + 1], colmul[_pb], colmul[_pb + 1],                   \
+                                      kparams->bias2 ? coladd[_pb] : NULL, kparams->bias2 ? coladd[_pb + 1] : NULL, as16_ddr, \
+                                      (uint32_t) hmx_ceil_div((n_rows_), 32), (uint32_t) (_cols / 32),\
+                                      (uint32_t) (_ncc / 32), (uint32_t) dst_k_tiles };                         \
+            const int nth = (int) hex_smin((uint32_t) n_threads, gs.n_ct);                                      \
+            if (nth <= 1) { int8_geglu_tiled_worker_fn(1, 0, &gs); } else { worker_pool_run_func(ctx->worker_pool, int8_geglu_tiled_worker_fn, &gs, nth); } \
+        } else if (_dcols > 0) {                                                                                \
+            for (int _w = 0; _w < 2; ++_w) {                                                                    \
+                int8_convert_state_t cs = { ctx->trace, obuf[_pb + _w], colmul[_pb + _w], as16_ddr,             \
+                                            (uint32_t) hmx_ceil_div((n_rows_), 32), (uint32_t) (_cols / 32) };  \
+                const int nth = (int) hex_smin((uint32_t) n_threads, cs.n_ct);                                  \
+                if (nth <= 1) { int8_convert_worker_fn(1, 0, &cs); } else { worker_pool_run_func(ctx->worker_pool, int8_convert_worker_fn, &cs, nth); } \
+            }                                                                                                   \
+            transfer_output_geglu_threaded(ctx, dst_ptr + (mr_) * dst_stride + _ncc, (const __fp16 *) obuf[_pb],\
+                                           (const __fp16 *) obuf[_pb + 1], (int) (n_rows_), (int) _cols, (int) dst_stride, _dcols, n_threads); \
+        }                                                                                                       \
+    } while (0)
+
+    for (size_t mr = 0; mr < (size_t) m; mr += mc) {
+        const size_t n_rows = hex_smin((size_t) m - mr, mc);
+        const uint32_t n_rt = hmx_ceil_div(n_rows, 32);
+
+        memset(a_scale, 0, hex_align_up((size_t) n_rt * 32, 64) * sizeof(float));
+        {
+            int8_quant_state_t qs = { ctx, ctx->trace, a_u8, act->data + mr * act_stride * sizeof(float), a_scale,
+                                      (float *) (base + o_stage), (uint32_t) n_rows, (uint32_t) k, (uint32_t) act_stride, n_rt, (kparams->int_mm == 2 || kparams->int_mm == 4) ? signs : NULL, NULL, NULL, false, 0, n_rt * 16, 0, inv_s_vtcm };   // 2/4: rotate activations; 3/5: weights-only rotation, act unrotated
+            const int nth = (int) hex_smin((uint32_t) n_threads, n_rt);
+            if (nth <= 1) { int8_quant_worker_fn(1, 0, &qs); } else { worker_pool_run_func(ctx->worker_pool, int8_quant_worker_fn, &qs, nth); }
+        }
+        for (uint32_t r = 0; r < n_rt * 32; r += 64) {
+            hvx_vmem((__fp16 *) as16_ddr + r) = hvx_vec_f32_to_f16(hvx_vmem(a_scale + r), hvx_vmem(a_scale + r + 32));
+        }
+
+        ROT_PUSH_W(0, raw[0]);
+        if (n_steps > 1) { ROT_PUSH_W(1, raw[1]); }
+
+        // step s uses raw[s % 2] and obuf[ob]; raw[s % 2] is refilled with step s + 2 only after job s has retired
+        for (int s = 0; s < n_steps; ++s) {
+            const int    c      = s / 2;
+            const int    w      = s % 2;
+            const size_t ncc    = (size_t) c * nc;
+            const size_t n_cols = hex_smin(n - ncc, nc);
+            const int    ob     = (c % 2) * 2 + w;
+
+            uint8_t * curr_raw = (uint8_t *) dma_queue_pop(weight_dma).dst;
+
+            {
+                const size_t n_rec = n_cols / 64;
+                for (size_t r = 0; r < n_rec; ++r) {
+                    const float * cm = (const float *) (curr_raw + r * rec_bytes + (size_t) n_k_tiles * 2048 + 512);
+                    hvx_vmem(colmul[ob] + r * 64)      = hvx_vmem(cm);
+                    hvx_vmem(colmul[ob] + r * 64 + 32) = hvx_vmem(cm + 32);
+                    const float * ca = (const float *) (curr_raw + r * rec_bytes + (size_t) n_k_tiles * 2048 + 768);
+                    hvx_vmem(coladd[ob] + r * 64)      = hvx_vmem(ca);
+                    hvx_vmem(coladd[ob] + r * 64 + 32) = hvx_vmem(ca + 32);
+                }
+            }
+
+            job_slots[ob] = (hmx_int8_job_t) { obuf[ob], a_u8, curr_raw, curr_raw + (size_t) n_k_tiles * 2048, n_rt,
+                                               (uint32_t) (n_cols / 64), (uint32_t) n_k_tiles, rec_bytes, rec_bytes };
+            hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_int8_job_fn, &job_slots[ob]));
+
+            if (s > 0) {
+                hmx_queue_pop(ctx->hmx_queue);                       // retire job s - 1
+                if (s + 1 < n_steps) {
+                    ROT_PUSH_W(s + 1, raw[(s - 1) % 2]);             // its raw buffer takes step s + 1 (same parity as s - 1)
+                }
+            }
+            if (w == 1 && c > 0) { ROT_EPILOGUE(c - 1, mr, n_rows); }
+        }
+
+        hmx_queue_pop(ctx->hmx_queue);
+        ROT_EPILOGUE(n_chunk_cnt - 1, mr, n_rows);
+    }
+    #undef ROT_PUSH_W
+    #undef ROT_EPILOGUE
+
+    return HTP_STATUS_OK;
+}
+
+// one sign table for all int8 jobs (i/sqrt(512), the Hadamard rotation pattern; see hex-int8-pack.h)
+static const float * get_int8_signs(void) {
+    static float tbl[4096] __attribute__((aligned(128)));
+    static int   init = 0;
+    if (!init) { hmx_int8_make_signs(tbl, 4096); init = 1; }
+    return tbl;
+}
+
+// ---- int8 packet-loaded matmul with f32 output (qkv, o-proj, down, PLE model_proj) ----
+// Weights are the packed int8 records produced by hex-int8-pack.h behind the Q4_0 tensor (GGML_HEXAGON_INT_MM >= 2).
+
+typedef struct {
+    struct htp_thread_trace * traces;
+    float *                   dst;          // [rows][dst_stride]
+    const uint8_t *           tiles16;      // [n_rt][n_ct] 2 KB int16 tiles (pass 1)
+    const uint8_t *           tiles16_b;    // A16 pass 2 tiles (NULL for A8)
+    const float *             cm;           // [n_ct * 32]
+    const float *             a_scale;      // [rows]
+    const float *             a_scale_b;    // A16 pass 2 row scales (NULL for A8)
+    const float *             cm_add;       // per-column additive zero-point remainder (two-level bias, see hex-int8-pack.h)
+    uint32_t                  n_rt, n_ct, dst_stride, dst_cols, col0, c_first_base;
+    uint32_t                  n_rows_stop;   // rows >= this are padding (m not a multiple of 32)
+} int8_f32_state_t;
+
+// Threads split the row pairs (not the column tiles) and walk the column tiles inside, so each thread writes whole
+// contiguous destination rows (like the fp16 transfer) and every thread has work even when nc is as small as 64.
+static void int8_f32_out_worker_fn(unsigned int n, unsigned int i, void * data) {
+    int8_f32_state_t * st = (int8_f32_state_t *) data;
+    const uint32_t n_pairs = st->n_rt * 16;
+    const uint32_t p0 = (n_pairs * i) / n, p1 = (n_pairs * (i + 1)) / n;
+    if (p0 == p1 || st->col0 >= st->dst_cols) { return; }
+    htp_trace_event_start(&st->traces[i], HTP_TRACE_EVT_HVX_O_PROC, p0);
+    const uint32_t ct_valid = hex_smin(st->n_ct, (st->dst_cols - st->col0 + 31) / 32);
+    for (uint32_t p = p0; p < p1; ++p) {
+        const uint32_t rt = p >> 4, v = p & 15;
+        const uint32_t row0 = rt * 32 + 2 * v;
+        if (row0 >= st->n_rows_stop) { break; }
+        const bool second = (row0 + 1) < st->n_rows_stop;
+        const HVX_Vector as0 = hvx_vec_splat_f32(st->a_scale[row0]);
+        const HVX_Vector as1 = hvx_vec_splat_f32(st->a_scale[row0 + 1]);
+        HVX_Vector bs0 = Q6_V_vzero(), bs1 = Q6_V_vzero();
+        if (st->tiles16_b) { bs0 = hvx_vec_splat_f32(st->a_scale_b[row0]); bs1 = hvx_vec_splat_f32(st->a_scale_b[row0 + 1]); }
+        const HVX_Vector ras0 = hvx_vec_add_f32_f32(as0, bs0), ras1 = hvx_vec_add_f32_f32(as1, bs1);
+        float * o0 = st->dst + (size_t) row0 * st->dst_stride + st->col0;
+        float * o1 = o0 + st->dst_stride;
+        const uint8_t * t  = st->tiles16 + ((size_t) rt * st->n_ct * 2048) + (size_t) v * 128;
+        const uint8_t * tb = st->tiles16_b ? st->tiles16_b + ((size_t) rt * st->n_ct * 2048) + (size_t) v * 128 : NULL;
+        #pragma unroll(2)
+        for (uint32_t ct = 0; ct < ct_valid; ++ct) {
+            const HVX_Vector cmv = hvx_vmem(st->cm + ct * 32);
+            const HVX_Vector x = *(const HVX_Vector *) (t + (size_t) ct * 2048);
+            HVX_Vector a0 = hvx_vec_mul_f32_f32(Q6_Vsf_equals_Vw(Q6_Vw_vasr_VwR(Q6_Vw_vasl_VwR(x, 16), 16)), as0);
+            HVX_Vector a1 = hvx_vec_mul_f32_f32(Q6_Vsf_equals_Vw(Q6_Vw_vasr_VwR(x, 16)), as1);
+            if (tb) {
+                const HVX_Vector xb = *(const HVX_Vector *) (tb + (size_t) ct * 2048);
+                a0 = hvx_vec_add_f32_f32(a0, hvx_vec_mul_f32_f32(Q6_Vsf_equals_Vw(Q6_Vw_vasr_VwR(Q6_Vw_vasl_VwR(xb, 16), 16)), bs0));
+                a1 = hvx_vec_add_f32_f32(a1, hvx_vec_mul_f32_f32(Q6_Vsf_equals_Vw(Q6_Vw_vasr_VwR(xb, 16)), bs1));
+            }
+            HVX_Vector s0 = hvx_vec_mul_f32_f32(a0, cmv);
+            HVX_Vector s1 = hvx_vec_mul_f32_f32(a1, cmv);
+            if (st->cm_add) {
+                // remainder of the truncated bias word lives in the accumulator domain: it scales with the row factor of
+                // every pass (A16: both passes carry the same bias word)
+                const HVX_Vector cav = hvx_vmem(st->cm_add + ct * 32);
+                s0 = hvx_vec_add_f32_f32(s0, hvx_vec_mul_f32_f32(cav, ras0));
+                s1 = hvx_vec_add_f32_f32(s1, hvx_vec_mul_f32_f32(cav, ras1));
+            }
+            const uint32_t col = ct * 32;
+            const uint32_t ncol = hex_smin(32u, st->dst_cols - (st->col0 + col));
+            if (ncol == 32) {
+                hvx_vmemu(o0 + col) = s0;
+                if (second) { hvx_vmemu(o1 + col) = s1; }
+            } else {
+                hvx_vec_store_u(o0 + col, ncol * 4, s0);
+                if (second) { hvx_vec_store_u(o1 + col, ncol * 4, s1); }
+            }
+        }
+    }
+    htp_trace_event_stop(&st->traces[i], HTP_TRACE_EVT_HVX_O_PROC, p0);
+}
+
+typedef struct {
+    uint8_t *       out;
+    const uint8_t * act;
+    const uint8_t * wgt;
+    const uint8_t * bias;
+    uint32_t        n_row_tiles, n_groups, n_k;
+    size_t          wgt_stride, bias_stride;
+} hmx_int8_job1_t;
+
+static void hmx_int8_job1_fn(void * data) {
+    hmx_int8_job1_t * j = (hmx_int8_job1_t *) data;
+    hmx_int8_core_dot_chunk(j->out, j->act, j->wgt, j->bias, j->n_row_tiles, j->n_groups, j->n_k, j->wgt_stride, j->bias_stride);
+}
+
+static int hmx_mm_nx_2d_int8_f32(struct htp_ops_context * octx, const struct htp_mm_kernel_params * kparams) {
+    struct htp_context * ctx = octx->ctx;
+    struct htp_thread_trace * tr = &ctx->trace[0];
+    htp_trace_event_start(tr, HTP_TRACE_EVT_INIT, 0);
+
+    // plain MUL_MAT (o-proj, down, PLE) has kparams->n_weights == 0: one weight, act in src[1], dst in dsts[0]
+    const uint32_t n_weights = kparams->n_weights ? kparams->n_weights : 1;
+    if (n_weights > 4) { return HTP_STATUS_NO_SUPPORT; }
+    if (octx->op == HTP_OP_MUL_MAT_ADD) { return HTP_STATUS_NO_SUPPORT; }
+    const bool act_tiled = (octx->op == HTP_OP_MUL_MAT_AT);   // x = tiled f16 activation from the fused GEGLU_T producer
+
+    const struct htp_tensor * restrict act = octx->src[n_weights];
+    const int    k          = (int) act->ne[0];
+    const int    m          = (int) (act->ne[1] * act->ne[2] * act->ne[3]);
+    const int    act_stride = (int) (act->nb[1] / sizeof(float));
+
+    if (act->type != HTP_TYPE_F32 || k % 32 != 0 || m < 1 || m > HMX_INT8_MAX_ROWS || ctx->mdev.count > 1 ||
+        (act->data & (VLEN - 1)) != 0) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+    // per-weight checks (fused NX with several weights shares one activation); n_max sizes the VTCM layout
+    size_t n_max = 0;
+    for (uint32_t wi = 0; wi < n_weights; ++wi) {
+        const struct htp_tensor * w   = octx->src[wi];
+        const struct htp_tensor * dst = octx->dsts[wi];
+        if (!w || !dst || w->type != HTP_TYPE_Q4_0 || w->ne[1] % 64 != 0 || dst->ne[0] > w->ne[1] ||
+            (dst->data & (VLEN - 1)) != 0) {
+            return HTP_STATUS_NO_SUPPORT;
+        }
+        n_max = hex_smax(n_max, (size_t) w->ne[1]);
+    }
+
+    const bool     a16       = (kparams->int_mm == 6);
+    const int      n_k_tiles = k / 32;
+    const size_t   rec_bytes = (size_t) n_k_tiles * 2048 + 2048;
+    const int      n_threads = octx->n_threads;
+
+    // VTCM: act u8 | row scales f32 | f32 quant stage | 2 raw record chunks | 4 col_mul areas | 2 int16 out buffers
+    size_t mc = 0, nc = 0;
+    {
+        const size_t m_pad = hex_align_up(m, 32);
+        size_t best = SIZE_MAX;
+        for (size_t mc_c = m_pad; mc_c >= 32; mc_c -= 32) {
+            for (size_t nc_c = hex_align_down(hex_smin(n_max, 1024), 64); nc_c >= 64; nc_c -= 64) {
+                const size_t act_b = (mc_c / 32) * n_k_tiles * HMX_INT8_CROUTON_A;
+                const size_t passes = a16 ? 2 : 1;
+                const size_t tot = passes * hex_align_up(act_b, 2048) + passes * hex_align_up(mc_c * 4, 256) + hex_smin(8u, hmx_ceil_div(mc_c, 32)) * 4 * (size_t) k * 4 + (kparams->smooth ? hex_align_up((size_t) k * 4, 2048) : 0) +
+                                   2 * hex_align_up((nc_c / 64) * rec_bytes, 2048) + 2 * hex_align_up(2 * nc_c * 4, 256) +
+                                   passes * 2 * hex_align_up((mc_c / 32) * (nc_c / 32) * 2048, 2048);
+                if (tot > ctx->vtcm_size) { continue; }
+                // cycles: the packed records are re-streamed once per m block at ~8 B/cycle (measured weight DMA: 9.4 MB in
+                // 1.2M cycles for down), plus ~16k cycles of queue/dispatch bubble per chunk step
+                const size_t mb = (m + mc_c - 1) / mc_c, nb = (n_max + nc_c - 1) / nc_c;
+                const size_t cost = mb * n_max * ((size_t) k + 32) / 8 + nb * mb * 16384;
+                if (cost < best) { best = cost; mc = mc_c; nc = nc_c; }
+                break;
+            }
+            if (mc_c == 32) { break; }
+        }
+    }
+    if (!mc) { return HTP_STATUS_NO_SUPPORT; }
+
+    uint8_t * const base = (uint8_t *) ctx->vtcm_base;
+    size_t off = 0;
+    size_t o_act, o_act2, o_asc, o_asc2, o_stage, o_raw[2], o_meta[2], o_obuf[2], o_obuf2[2];
+    #define I8F_ALLOC(var, bytes) do { var = off; off += hex_align_up((bytes), 2048); } while (0)
+    I8F_ALLOC(o_act, (mc / 32) * n_k_tiles * HMX_INT8_CROUTON_A);
+    o_act2 = o_act; if (a16) { I8F_ALLOC(o_act2, (mc / 32) * n_k_tiles * HMX_INT8_CROUTON_A); }
+    I8F_ALLOC(o_asc, mc * 4);
+    o_asc2 = o_asc; if (a16) { I8F_ALLOC(o_asc2, mc * 4); }
+    I8F_ALLOC(o_stage, hex_smin(8u, hmx_ceil_div(mc, 32)) * 4 * (size_t) k * 4);
+    size_t o_smooth = 0;
+    if (kparams->smooth) { I8F_ALLOC(o_smooth, (size_t) k * 4); }
+    for (int i = 0; i < 2; ++i) { I8F_ALLOC(o_raw[i], (nc / 64) * rec_bytes); }
+    for (int i = 0; i < 2; ++i) { I8F_ALLOC(o_meta[i], 2 * nc * 4); }
+    for (int i = 0; i < 2; ++i) { I8F_ALLOC(o_obuf[i], (mc / 32) * (nc / 32) * 2048); }
+    for (int i = 0; i < 2; ++i) { o_obuf2[i] = o_obuf[i]; if (a16) { I8F_ALLOC(o_obuf2[i], (mc / 32) * (nc / 32) * 2048); } }
+    #undef I8F_ALLOC
+    if (off > ctx->vtcm_size) { return HTP_STATUS_VTCM_TOO_SMALL; }
+
+    uint8_t *  a_u8     = base + o_act;
+    uint8_t *  a_u8_2   = base + o_act2;
+    float *    a_scale  = (float *) (base + o_asc);
+    float *    a_scale_2 = (float *) (base + o_asc2);
+    uint8_t *  raw[2]   = { base + o_raw[0], base + o_raw[1] };
+    uint8_t *  obuf[2]  = { base + o_obuf[0], base + o_obuf[1] };
+    uint8_t *  obuf2[2] = { base + o_obuf2[0], base + o_obuf2[1] };
+    float *    colmul[2] = { (float *) (base + o_meta[0]), (float *) (base + o_meta[1]) };
+    float *    coladd[2] = { (float *) (base + o_meta[0]) + nc, (float *) (base + o_meta[1]) + nc };   // col_mul then col_add, nc floats each
+
+    // static activation smoothing: 1/s_k sits behind the packed records of weight 0 (see hex-int8-pack.h); copy it to VTCM once
+    const float * inv_s_vtcm = NULL;
+    if (kparams->smooth) {
+        const struct htp_tensor * w0 = octx->src[0];
+        const size_t sm_off = hex_align_up((size_t) (k / 32) * 18 * hex_align_up((size_t) w0->ne[1], 32), 128) +
+                              (size_t) (w0->ne[1] / 64) * rec_bytes;
+        float * dstv = (float *) (base + o_smooth);
+        dma_queue_push(ctx->dma[0], dma_make_data(dstv, w0->data + sm_off), (size_t) k * 4, (size_t) k * 4, (size_t) k * 4, 1);
+        (void) dma_queue_pop(ctx->dma[0]);
+        inv_s_vtcm = dstv;
+    }
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_INIT, 0);
+
+    dma_queue * weight_dma = ctx->dma[0];
+
+    #define I8F_PUSH(step, buf) do {                                                                         \
+        const int    _c    = (step);                                                                         \
+        const size_t _nc   = (size_t) _c * nc;                                                               \
+        const size_t _cols = hex_smin(n - _nc, nc);                                                          \
+        const size_t _bytes = (_cols / 64) * rec_bytes;                                                      \
+        dma_queue_push(weight_dma, dma_make_data((buf), w->data + int8_off + (_nc / 64) * rec_bytes),        \
+                       _bytes, _bytes, _bytes, 1);                                                           \
+    } while (0)
+
+    hmx_int8_job1_t job_slots[4];   // [ob * 2 + pass]; a slot is reused only after its job has been popped
+
+    // Quantize a row-pair range of the current m block. first_w = 1 keeps the caller (owner of the weight DMA queue dma[0],
+    // whose FIFO would otherwise hand back weight entries) out of the activation DMA.
+    #define I8F_QUANT(mr_, n_rows_, n_rt_, pair0_, pair_n_, first_w_) do {                                         \
+        int8_quant_state_t _qs = { ctx, ctx->trace, a_u8,                                                           \
+                                   act_tiled ? act->data + (size_t) ((mr_) / 32) * n_k_tiles * 2048 : act->data + (mr_) * act_stride * sizeof(float), a_scale, \
+                                   (float *) (base + o_stage), (uint32_t) (n_rows_), (uint32_t) k, (uint32_t) act_stride, (n_rt_), \
+                                   kparams->int_mm == 2 ? (const float *) get_int8_signs() : NULL,                  \
+                                   a16 ? a_u8_2 : NULL, a16 ? a_scale_2 : NULL, act_tiled, (pair0_), (pair_n_), (first_w_), inv_s_vtcm }; \
+        const int _nth = (int) hex_smin(hex_smin((uint32_t) n_threads, (uint32_t) (pair_n_) + (first_w_)),             \
+                                        hex_smin(8u, (uint32_t) hmx_ceil_div(mc, 32)));                              \
+        if (_nth <= 1) { int8_quant_worker_fn(1, 0, &_qs); } else { worker_pool_run_func(ctx->worker_pool, int8_quant_worker_fn, &_qs, _nth); } \
+    } while (0)
+
+    for (size_t mr = 0; mr < (size_t) m; mr += mc) {
+        const size_t n_rows = hex_smin((size_t) m - mr, mc);
+        const uint32_t n_rt = hmx_ceil_div(n_rows, 32);
+
+        memset(a_scale, 0, hex_align_up((size_t) n_rt * 32, 64) * sizeof(float));
+        if (a16) { memset(a_scale_2, 0, hex_align_up((size_t) n_rt * 32, 64) * sizeof(float)); }
+
+        // Two row sub-blocks: sub 0 is quantized up front, sub 1 is quantized by the HVX threads while the HMX works on sub 0
+        // (the row tiles are independent in a_u8 / a_scale / the output buffers). The weights are streamed once per sub-block.
+        const bool     split    = (kparams->int8_split != 0) && n_rt >= 2 && n_threads >= 3;
+        const uint32_t rt_split = split ? (n_rt + 1) / 2 : n_rt;
+        I8F_QUANT(mr, n_rows, n_rt, 0, rt_split * 16, 0);
+
+        for (int sub = 0; sub < (split ? 2 : 1); ++sub) {
+        const uint32_t rt_lo   = sub ? rt_split : 0;
+        const uint32_t rt_hi   = sub ? n_rt : rt_split;
+        const uint32_t n_rt_s  = rt_hi - rt_lo;
+        const size_t   row_lo  = (size_t) rt_lo * 32;
+        const size_t   rows_s  = hex_smin(n_rows, (size_t) rt_hi * 32) - row_lo;
+        const size_t   act_off = (size_t) rt_lo * n_k_tiles * HMX_INT8_CROUTON_A;
+
+        // fused NX: weights share the activation quantization above, then run one after another reusing the same buffers
+        for (uint32_t wi = 0; wi < n_weights; ++wi) {
+        const struct htp_tensor * restrict w   = octx->src[wi];
+        const struct htp_tensor * restrict dst = octx->dsts[wi];
+        const size_t   n        = w->ne[1];
+        const int      dst_stride = (int) (dst->nb[1] / sizeof(float));
+        const int      dst_cols   = (int) dst->ne[0];
+        const size_t   int8_off = hex_align_up((size_t) (k / 32) * 18 * hex_align_up(n, 32), 128);
+        const int      n_chunk_cnt = hmx_ceil_div(n, nc);
+        float * const  dst_ptr  = (float *) dst->data + (mr + row_lo) * dst_stride;
+
+        I8F_PUSH(0, raw[0]);
+        if (n_chunk_cnt > 1) { I8F_PUSH(1, raw[1]); }
+
+        for (int c = 0; c < n_chunk_cnt; ++c) {
+            const size_t ncc = (size_t) c * nc;
+            const size_t n_cols = hex_smin(n - ncc, nc);
+            const int    ob = c % 2;
+            uint8_t * curr_raw = (uint8_t *) dma_queue_pop(weight_dma).dst;
+
+            {
+                const size_t n_rec = n_cols / 64;
+                for (size_t r = 0; r < n_rec; ++r) {
+                    const float * cm = (const float *) (curr_raw + r * rec_bytes + (size_t) n_k_tiles * 2048 + 512);
+                    hvx_vmem(colmul[ob] + r * 64)      = hvx_vmem(cm);
+                    hvx_vmem(colmul[ob] + r * 64 + 32) = hvx_vmem(cm + 32);
+                    const float * ca = (const float *) (curr_raw + r * rec_bytes + (size_t) n_k_tiles * 2048 + 768);
+                    hvx_vmem(coladd[ob] + r * 64)      = hvx_vmem(ca);
+                    hvx_vmem(coladd[ob] + r * 64 + 32) = hvx_vmem(ca + 32);
+                }
+            }
+
+            job_slots[ob * 2 + 0] = (hmx_int8_job1_t) { obuf[ob], a_u8 + act_off, curr_raw, curr_raw + (size_t) n_k_tiles * 2048, n_rt_s,
+                                                        (uint32_t) (n_cols / 64), (uint32_t) n_k_tiles, rec_bytes, rec_bytes };
+            hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_int8_job1_fn, &job_slots[ob * 2 + 0]));
+            if (a16) {
+                job_slots[ob * 2 + 1] = (hmx_int8_job1_t) { obuf2[ob], a_u8_2 + act_off, curr_raw, curr_raw + (size_t) n_k_tiles * 2048, n_rt_s,
+                                                            (uint32_t) (n_cols / 64), (uint32_t) n_k_tiles, rec_bytes, rec_bytes };
+                hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_int8_job1_fn, &job_slots[ob * 2 + 1]));
+            }
+
+            // overlap: HMX job c is running; quantize slice c of the second sub-block on workers 1..n-1 (weight DMA owner
+            // stays out). One slice per chunk of the first weight, so every pair is done before sub-block 1 starts.
+            if (split && sub == 0 && wi == 0) {
+                const uint32_t P = (n_rt - rt_split) * 16;
+                const uint32_t pa = (uint32_t) (((uint64_t) P * c) / n_chunk_cnt), pb = (uint32_t) (((uint64_t) P * (c + 1)) / n_chunk_cnt);
+                if (pb > pa) { I8F_QUANT(mr, n_rows, n_rt, rt_split * 16 + pa, pb - pa, 1); }
+            }
+
+            if (c > 0) {
+                hmx_queue_pop(ctx->hmx_queue);                       // retire job c-1 (pass 1)
+                if (a16) { hmx_queue_pop(ctx->hmx_queue); }          // retire job c-1 (pass 2)
+                if (c + 1 < n_chunk_cnt) { I8F_PUSH(c + 1, raw[(c - 1) % 2]); }
+            }
+
+            if (c > 0) {
+                const size_t ncc_p = (size_t) (c - 1) * nc;
+                const uint32_t ncols_p = (uint32_t) hex_smin(n - ncc_p, nc);
+                int8_f32_state_t st = { ctx->trace, dst_ptr, obuf[(c - 1) % 2],
+                                        a16 ? obuf2[(c - 1) % 2] : NULL, colmul[(c - 1) % 2], a_scale + row_lo, a16 ? a_scale_2 + row_lo : NULL,
+                                        kparams->bias2 ? coladd[(c - 1) % 2] : NULL,
+                                        n_rt_s, ncols_p / 32, (uint32_t) dst_stride, (uint32_t) dst_cols, (uint32_t) ncc_p, 0,
+                                        (uint32_t) rows_s };
+                const int nth = (int) hex_smin((uint32_t) n_threads, st.n_rt * 16);
+                if (nth <= 1) { int8_f32_out_worker_fn(1, 0, &st); } else { worker_pool_run_func(ctx->worker_pool, int8_f32_out_worker_fn, &st, nth); }
+            }
+        }
+
+        hmx_queue_pop(ctx->hmx_queue);
+        if (a16) { hmx_queue_pop(ctx->hmx_queue); }
+        {
+            const int    c_last = n_chunk_cnt - 1;
+            const size_t ncc_p  = (size_t) c_last * nc;
+            const uint32_t ncols_p = (uint32_t) hex_smin(n - ncc_p, nc);
+            int8_f32_state_t st = { ctx->trace, dst_ptr, obuf[c_last % 2],
+                                    a16 ? obuf2[c_last % 2] : NULL, colmul[c_last % 2], a_scale + row_lo, a16 ? a_scale_2 + row_lo : NULL,
+                                    kparams->bias2 ? coladd[c_last % 2] : NULL,
+                                    n_rt_s, ncols_p / 32, (uint32_t) dst_stride, (uint32_t) dst_cols, (uint32_t) ncc_p, 0,
+                                    (uint32_t) rows_s };
+            const int nth = (int) hex_smin((uint32_t) n_threads, st.n_rt * 16);
+            if (nth <= 1) { int8_f32_out_worker_fn(1, 0, &st); } else { worker_pool_run_func(ctx->worker_pool, int8_f32_out_worker_fn, &st, nth); }
+        }
+        }   // wi
+        }   // sub
+    }
+    #undef I8F_QUANT
+    #undef I8F_PUSH
+
+    return HTP_STATUS_OK;
+}
+
 static int hmx_mm_nx_2d_f32(struct htp_ops_context * octx, const struct htp_mm_kernel_params * kparams) {
     struct htp_context * ctx = octx->ctx;
     struct htp_thread_trace * tr = &ctx->trace[0];
@@ -4741,6 +5760,10 @@ static int op_matmul_impl(struct htp_ops_context * octx) {
     }
 
     if (kparams->n_hmx) {
+        if (kparams->int_mm >= 2) {
+            const int rc8 = hmx_mm_nx_2d_int8_f32(octx, kparams);
+            if (rc8 != HTP_STATUS_NO_SUPPORT) { return rc8; }
+        }
         return hmx_mm_op_matmul(octx, kparams);
     }
 
@@ -5396,11 +6419,21 @@ static int op_matmul_nx_impl(struct htp_ops_context * octx) {
         return status;
     }
 
+    // Merge decision: int8 HMX geglu (int branch) first, then HMX f32 geglu;
+    // n_hmx == 0 falls through to the HVX geglu kernel (fuse branch).
     if ((octx->op == HTP_OP_MUL_MAT_NX_GEGLU || octx->op == HTP_OP_MUL_MAT_NX_GEGLU_T) && kparams->n_hmx) {
+        if (kparams->int_mm) {
+            const int rc = kparams->int_mm >= 2 ? hmx_mm_nx_geglu_2d_int8_rot(octx, kparams) : hmx_mm_nx_geglu_2d_int8(octx, kparams);
+            if (rc != HTP_STATUS_NO_SUPPORT) { return rc; }
+        }
         return hmx_mm_nx_geglu_2d_f32(octx, kparams);
     }
 
     if (kparams->n_hmx) {
+        if (kparams->int_mm >= 2) {
+            const int rc8 = hmx_mm_nx_2d_int8_f32(octx, kparams);
+            if (rc8 != HTP_STATUS_NO_SUPPORT) { return rc8; }
+        }
         return hmx_mm_nx_2d_f32(octx, kparams);
     }
 

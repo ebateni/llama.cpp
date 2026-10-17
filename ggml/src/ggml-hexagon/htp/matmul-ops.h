@@ -97,6 +97,11 @@ struct htp_mm_kernel_params {
     uint8_t  n_prefetch;         // Prefetch lookahead buffers/rows in VTCM
     uint8_t  n_weights;          // Number of weights for fused NX
 
+    uint8_t  int_mm;             // 1 = int8 HMX path allowed (fused gate+up)
+    uint8_t  bias2;              // 1 = the packed int8 records carry the two-level zero-point remainder (col_add)
+    uint8_t  int8_split;         // 1 = plain int8 op quantizes the second row sub-block while the HMX works on the first
+    uint8_t  smooth;             // 1 = a 1/s_k activation smoothing vector sits behind the packed records of weight 0
+
     int32_t  m_chunk;            // Row chunk size (M chunk)
     int32_t  n_chunk;            // Col chunk size (N chunk)
     int32_t  tile_size;          // Weight tile size

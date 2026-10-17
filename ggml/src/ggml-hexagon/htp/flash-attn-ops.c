@@ -1154,7 +1154,75 @@ static inline void fa_softmax_impl(
             const __fp16 * s_ld_base = factx->vtcm_s_tiles[args->buf_idx] + r0 * HMX_FP16_TILE_N_ROWS * Bc;
             __fp16 *       p_st_base = factx->vtcm_p_tiles[args->buf_idx] + r0 * HMX_FP16_TILE_N_ROWS * Bc;
 
-            // Decode 2 rows from S tiles into per-thread row buffers
+            // Decode 2 rows from S tiles into per-thread row buffers.
+            // F1b: for the plain masked case (no softcap, no alibi) the mask add and the rowmax run inside this
+            // decode loop, with the same operations in the same order as the separate passes below, so the row
+            // buffers are written once and read once (by the exp pass) instead of being written, re-read for the
+            // mask and read again for exp. The row-buffer contents and the rowmax are bit-identical.
+            const bool fused_mask_max = has_mask && !has_softcap && !has_alibi;
+            HVX_Vector v_s_rowmax0 = v_neg_inf;
+            HVX_Vector v_s_rowmax1 = v_neg_inf;
+            if (fused_mask_max) {
+                const HVX_Vector v_log2e_f      = hvx_vec_splat_f16(EXP_LOG2E_F);
+                const HVX_Vector v_threshold_f  = Q6_Vh_vsplat_R(0xcc00);  // fp16 -16.0
+                for (size_t c = 0; c < kv_rows; c += 64) {
+                    const size_t         ci          = c / 64;
+                    const size_t         ne          = hex_smin(kv_rows - c, 64);
+                    HVX_VectorPred       q_tail_keep = Q6_Q_vsetq2_R(ne * sizeof(__fp16));
+                    const __fp16 *       in_dtile    = s_ld_base + ci * HMX_FP16_TILE_N_ELMS * 2;
+                    const HVX_Vector *   pv_s_in0    = ((const HVX_Vector *) in_dtile) + r1 / 2;
+                    const HVX_Vector *   pv_s_in1    = pv_s_in0 + 16;
+
+                    HVX_VectorPair vp_s_drow = Q6_W_vdeal_VVR(*pv_s_in1, *pv_s_in0, -2);
+                    HVX_Vector     v_s0      = Q6_V_lo_W(vp_s_drow);
+                    HVX_Vector     v_s1      = Q6_V_hi_W(vp_s_drow);
+
+                    HVX_Vector v_mask0, v_mask1;
+                    if (mask_broadcast) {
+                        if (is_g1) {
+                            const size_t qi0 = r + 0;
+                            v_mask0 = *(const HVX_Vector *) (args->mask_vtcm + qi0 * args->mask_vtcm_row_stride + c);
+                            v_mask1 = v_neg_inf;
+                            if (r + 1 < n_rows_g) {
+                                const size_t qi1 = r + 1;
+                                v_mask1 = *(const HVX_Vector *) (args->mask_vtcm + qi1 * args->mask_vtcm_row_stride + c);
+                            }
+                        } else {
+                            const size_t qi0 = fastdiv(r + 0, &factx->div_G);
+                            v_mask0 = *(const HVX_Vector *) (args->mask_vtcm + qi0 * args->mask_vtcm_row_stride + c);
+                            v_mask1 = v_neg_inf;
+                            if (r + 1 < n_rows_g) {
+                                const size_t qi1 = fastdiv(r + 1, &factx->div_G);
+                                if (qi1 == qi0) {
+                                    v_mask1 = v_mask0;
+                                } else {
+                                    v_mask1 = *(const HVX_Vector *) (args->mask_vtcm + qi1 * args->mask_vtcm_row_stride + c);
+                                }
+                            }
+                        }
+                    } else {
+                        // Head-dependent mask: pre-interleaved per row r.
+                        v_mask0 = *(const HVX_Vector *) (args->mask_vtcm + (r + 0) * args->mask_vtcm_row_stride + c);
+                        v_mask1 = v_neg_inf;
+                        if (r + 1 < n_rows_g) {
+                            v_mask1 = *(const HVX_Vector *) (args->mask_vtcm + (r + 1) * args->mask_vtcm_row_stride + c);
+                        }
+                    }
+
+                    const HVX_VectorPred q_keep0 = Q6_Q_and_QQ(Q6_Q_vcmp_gt_VhfVhf(v_mask0, v_threshold_f), q_tail_keep);
+                    const HVX_VectorPred q_keep1 = Q6_Q_and_QQ(Q6_Q_vcmp_gt_VhfVhf(v_mask1, v_threshold_f), q_tail_keep);
+
+                    HVX_Vector v_mask0_scaled = hvx_vec_mul_f16_f16(v_mask0, v_log2e_f);
+                    HVX_Vector v_mask1_scaled = hvx_vec_mul_f16_f16(v_mask1, v_log2e_f);
+
+                    my_row_buf0[ci] = Q6_V_vmux_QVV(q_keep0, hvx_vec_add_f16_f16(v_s0, v_mask0_scaled), v_neg_inf);
+                    my_row_buf1[ci] = Q6_V_vmux_QVV(q_keep1, hvx_vec_add_f16_f16(v_s1, v_mask1_scaled), v_neg_inf);
+
+                    v_s_rowmax0 = Q6_Vhf_vmax_VhfVhf(v_s_rowmax0, my_row_buf0[ci]);
+                    v_s_rowmax1 = Q6_Vhf_vmax_VhfVhf(v_s_rowmax1, my_row_buf1[ci]);
+                }
+            }
+            if (!fused_mask_max) {
             if (has_softcap) {
                 const HVX_Vector v_cap = hvx_vec_splat_f16(factx->logit_softcap);
                 for (size_t c = 0; c < kv_rows; c += 64) {
@@ -1204,6 +1272,7 @@ static inline void fa_softmax_impl(
                     my_row_buf1[ci]          = Q6_V_hi_W(vp_s_drow);
                 }
             }
+            }   // end of the !fused_mask_max decode path
 
             // Apply mask & compute rowmax(S)
             HVX_Vector v_slope0 = Q6_V_vzero();
@@ -1215,9 +1284,8 @@ static inline void fa_softmax_impl(
 
             const HVX_Vector v_threshold = Q6_Vh_vsplat_R(0xcc00);  // fp16 -16.0
 
-            HVX_Vector v_s_rowmax0 = v_neg_inf;
-            HVX_Vector v_s_rowmax1 = v_neg_inf;
             if (has_mask) {
+                if (!fused_mask_max) {
                 for (size_t c = 0; c < kv_rows; c += 64) {
                     size_t         ci          = c / 64;
                     const size_t   ne          = hex_smin(kv_rows - c, 64);
@@ -1279,6 +1347,7 @@ static inline void fa_softmax_impl(
 
                     v_s_rowmax0 = Q6_Vhf_vmax_VhfVhf(v_s_rowmax0, my_row_buf0[ci]);
                     v_s_rowmax1 = Q6_Vhf_vmax_VhfVhf(v_s_rowmax1, my_row_buf1[ci]);
+                }
                 }
             } else {
                 size_t c = 0;

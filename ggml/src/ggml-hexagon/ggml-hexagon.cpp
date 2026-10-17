@@ -1,6 +1,7 @@
 #define _USE_MATH_DEFINES
 
 #include <assert.h>
+#include "hex-int8-pack.h"
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,7 +15,9 @@
 #include <thread>
 #include <cstddef>
 #include <stdexcept>
+#include <map>
 #include <string>
+#include <vector>
 #include <sstream>
 #include <iomanip>
 #include <unordered_set>
@@ -112,6 +115,33 @@ static size_t opt_mbuf_dyn    = 512ul * 1024 * 1024;      // max dynamic (comput
 static size_t opt_mbuf_static = 1ul * 1024 * 1024 * 1024; // max static (weight/KV) buffer size
 static size_t opt_mbuf_total  = 0;                        // total buffer space limit (0 = unconstrained)
 
+static int    opt_int_mm     = 0; // 1 = int8 HMX for fused gate+up (GGML_HEXAGON_INT_MM)
+static uint64_t opt_int_mm_layers = ~0ull; // bitmask of layers allowed to use it (GGML_HEXAGON_INT_MM_LAYERS, hex)
+static uint64_t opt_int_mm_layers_gate = ~0ull; // same for the gate+up class (GGML_HEXAGON_INT_MM_LAYERS_GATE, default = LAYERS)
+static uint32_t opt_int_mm_reduce_big = 0; // window headroom for the k = 12288 class (GGML_HEXAGON_INT_MM_REDUCE_BIG)
+static uint32_t opt_int_mm_reduce = 4;     // window headroom bits for the rotated int8 packing (GGML_HEXAGON_INT_MM_REDUCE)
+// Per-class enable mask for the int8 HMX path (GGML_HEXAGON_INT_MM_MASK, hex). Bits: 0 qkv, 1 o-proj, 2 gate+up, 3 down,
+// 4 lm_head, 5 PLE model_proj, 6 PLE inp_gate + proj, 7 the k = 12288 (KV-shared) layers. Only meaningful when
+// GGML_HEXAGON_INT_MM >= 1; the fp16 path stays the default and the fallback (GGML_HEXAGON_INT_MM = 0).
+static uint32_t opt_int_mm_mask = 0x000000EF;
+// Per-class mask of classes that use A16 (two int8 passes, mode 6) instead of A8 (GGML_HEXAGON_INT_MM_MASK16, hex, same bit order).
+// A16 is the fallback for classes whose A8 error fails the KLD gate (measured: A16 cuts the error 3-10x in every class, see M20/M23).
+static uint32_t opt_int_mm_mask16 = 0;
+// weight scheme inside the packed int8 area: 0 = per-row int8 of the (optionally rotated) dequantized weights (W8A8 numerics or W8A8+rotation),
+// 1 = the shipped W4A8 numerics computed at load time (Q4.4 croutons, same values the on-the-fly expand produces). GGML_HEXAGON_INT_MM_SCHEME.
+static uint32_t opt_int_mm_scheme = 0;
+// Static per-input-channel activation smoothing (GGML_HEXAGON_INT_SMOOTH=<file from smooth_calib.py>): W' = W * s_k is packed,
+// the DSP divides the activation by s_k. Keyed by the first weight of a group (attn_q for qkv, ffn_gate for gate+up, attn_output).
+static std::map<std::string, std::vector<float>> g_int_smooth;
+// File format (analysis/hmxlab/smooth_calib.py -> smooth.bin, ~0.8 MB): repeated [u32 name_len][name][u32 k][f32 s[k]].
+// Calibrated on 6 x ~9 KB of wiki.test.raw text (about 10 minutes on a host CPU, 6 forward passes of the model); domain transfer to
+// other text is UNTESTED. Behaviour when the file is missing, unreadable or lacks the tensor (defined, no silent degradation):
+// the A8 classes that need smoothing (gate+up always, qkv and o-proj unless they run A16) are NOT packed and stay on the fp16
+// path, because unsmoothed A8 on all 35 layers measures KLD 0.033 (gate 0.008). GGML_HEXAGON_INT_SMOOTH_OPTIONAL=1 overrides
+// that for diagnostics (runs unsmoothed A8 and logs a warning).
+static bool g_int_smooth_optional = false;
+static bool g_int_smooth_warned   = false;
+static int      opt_int_split = 0;     // GGML_HEXAGON_INT_SPLIT=1 enables the m-split overlap of the plain int8 op (measured slower, see log M75)
 static int    opt_mm_select  = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
 static int    opt_fa_select  = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
 static int    opt_fa_head_split = 1; // 1 = partition flash_attn by KV heads in multicore (default on), 0 = token-based (original)
@@ -321,6 +351,165 @@ static inline size_t ggml_hexagon_tiled_row_size(enum ggml_type type, int64_t ne
         return (size_t) (ne0 / 32) * (HTP_MM_WEIGHT_TILE_SIZE_Q2_K / 32);
     }
     return ggml_row_size(type, ne0);
+}
+
+
+// Tensors that carry a Hadamard-rotated int8 copy of their weights behind the tiled Q4_0 data (GGML_HEXAGON_INT_MM=2)
+enum {
+    HTP_INT8_CLASS_QKV    = 1 << 0,
+    HTP_INT8_CLASS_O      = 1 << 1,
+    HTP_INT8_CLASS_GATE   = 1 << 2,  // gate+up (fused GEGLU)
+    HTP_INT8_CLASS_DOWN   = 1 << 3,
+    HTP_INT8_CLASS_LMHEAD = 1 << 4,
+    HTP_INT8_CLASS_PLE_MP = 1 << 5,  // PLE model_proj
+    HTP_INT8_CLASS_PLE_GP = 1 << 6,  // PLE per-layer inp_gate / proj
+    HTP_INT8_CLASS_K12288 = 1 << 7,  // layers with k = 12288 (weights only, 1 row in prefill)
+};
+
+// class of a weight tensor (0 = not an int8 candidate)
+static inline uint32_t ggml_hexagon_int8_class(const struct ggml_tensor * t) {
+    int  il = -1;
+    char tail[64] = { 0 };
+
+    if (sscanf(t->name, "blk.%d.%63s", &il, tail) == 2 && il >= 0 && il < 256) {
+        const bool big_k = t->ne[0] > 8192;   // only the k = 12288 tensors (L15-34 ffn_down); k = 6144 stays the down class
+        if (strcmp(tail, "attn_q.weight") == 0 || strcmp(tail, "attn_k.weight") == 0 || strcmp(tail, "attn_v.weight") == 0) {
+            return big_k ? HTP_INT8_CLASS_K12288 : HTP_INT8_CLASS_QKV;
+        }
+        if (strcmp(tail, "attn_output.weight") == 0) {
+            return HTP_INT8_CLASS_O;
+        }
+        if (strcmp(tail, "ffn_gate.weight") == 0 || strcmp(tail, "ffn_up.weight") == 0) {
+            return big_k ? HTP_INT8_CLASS_K12288 : HTP_INT8_CLASS_GATE;
+        }
+        if (strcmp(tail, "ffn_down.weight") == 0) {
+            return big_k ? HTP_INT8_CLASS_K12288 : HTP_INT8_CLASS_DOWN;
+        }
+        if (strcmp(tail, "per_layer_inp_gate.weight") == 0 || strcmp(tail, "per_layer_proj.weight") == 0) {
+            return HTP_INT8_CLASS_PLE_GP;
+        }
+        return 0;
+    }
+    if (strcmp(t->name, "per_layer_model_proj.weight") == 0) {
+        return HTP_INT8_CLASS_PLE_MP;
+    }
+    if (strcmp(t->name, "output.weight") == 0 || strcmp(t->name, "token_embd.weight") == 0) {
+        return HTP_INT8_CLASS_LMHEAD;
+    }
+    return 0;
+}
+
+static inline bool ggml_hexagon_int8_class_enabled(const struct ggml_tensor * t) {
+    const uint32_t cls = ggml_hexagon_int8_class(t);
+    if (cls == 0 || (opt_int_mm_mask & cls) == 0) {
+        return false;
+    }
+    int il = -1;
+    if (sscanf(t->name, "blk.%d.", &il) == 1 && il >= 0 && il < 64) {
+        return (((cls == HTP_INT8_CLASS_GATE ? opt_int_mm_layers_gate : opt_int_mm_layers) >> il) & 1) != 0;
+    }
+    return true;  // global tensors (lm_head, PLE model_proj) are gated by the class mask only
+}
+
+// classes the DSP currently has an int8 op for
+static inline bool ggml_hexagon_int8_class_has_op(uint32_t cls) {
+    return cls == HTP_INT8_CLASS_GATE || cls == HTP_INT8_CLASS_QKV || cls == HTP_INT8_CLASS_O ||
+           cls == HTP_INT8_CLASS_DOWN || cls == HTP_INT8_CLASS_PLE_MP || cls == HTP_INT8_CLASS_K12288;
+}
+
+static inline const std::vector<float> * ggml_hexagon_int8_smooth_vec(const struct ggml_tensor * t);
+
+// A8 classes that need the smoothing vectors (mode 3): gate+up always A8; qkv and o-proj unless the class runs A16 (MASK16)
+static inline bool ggml_hexagon_int8_needs_smooth(const struct ggml_tensor * t, uint32_t cls) {
+    GGML_UNUSED(t);
+    if (opt_int_mm != 3 && opt_int_mm != 6) { return false; }
+    if (cls == HTP_INT8_CLASS_GATE) { return true; }   // the fused gate+up op is A8 in every mode
+    return (cls == HTP_INT8_CLASS_QKV || cls == HTP_INT8_CLASS_O) && (opt_int_mm_mask16 & cls) == 0;
+}
+
+// Weight tensors that carry a packed int8 copy behind the tiled Q4_0 data (populated in set_tensor, consumed by the int8 ops).
+static inline bool ggml_hexagon_int8_rot_tensor(const struct ggml_tensor * t) {
+    if (opt_int_mm < 2 || opt_int_mm > 6 || t->type != GGML_TYPE_Q4_0) {
+        return false;
+    }
+    if (t->ne[0] % 32 != 0 || t->ne[1] % 64 != 0 || t->ne[2] != 1 || t->ne[3] != 1 || t->ne[1] > 12288) {
+        return false;
+    }
+    const uint32_t cls = ggml_hexagon_int8_class(t);
+    if (cls == HTP_INT8_CLASS_LMHEAD) {
+        return false;  // measured: int8 weights on the tied head would double the 226 MB/token decode stream
+    }
+    if (!ggml_hexagon_int8_class_has_op(cls) || !ggml_hexagon_int8_class_enabled(t)) {
+        return false;
+    }
+    if (ggml_hexagon_int8_needs_smooth(t, cls) && !ggml_hexagon_int8_smooth_vec(t)) {
+        if (!g_int_smooth_optional) {
+            if (!g_int_smooth_warned) {
+                g_int_smooth_warned = true;
+                GGML_LOG_WARN("ggml-hex: INT_MM=%d needs GGML_HEXAGON_INT_SMOOTH vectors for A8 classes (%s missing/unreadable): "
+                              "those tensors stay on the fp16 path (set GGML_HEXAGON_INT_SMOOTH_OPTIONAL=1 to run unsmoothed A8)\n",
+                              opt_int_mm, t->name);
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
+// Rotation is only meaningful for classes that stay on A8: the A16 path (int_mm == 6) does not rotate the activations, so packing
+// rotated weights for such a class would mismatch them (rotated weights against unrotated activations -> garbage).
+static inline bool ggml_hexagon_int8_rot_enabled(const struct ggml_tensor * t) {
+    if ((opt_int_mm != 2 && opt_int_mm != 5) || opt_int_mm_scheme == 1) {
+        return false;   // scheme 1 stores the unrotated Q4.4 values, so the activation side must not rotate either
+    }
+    return (opt_int_mm_mask16 & ggml_hexagon_int8_class(t)) == 0;
+}
+
+// effective mode for the DSP: scheme 1 has no rotation available, so mode 2 degenerates to mode 3 there
+static inline int ggml_hexagon_int8_eff_mode(void) {
+    return (opt_int_mm_scheme == 1 && (opt_int_mm == 2 || opt_int_mm == 5)) ? 3 : opt_int_mm;
+}
+
+// smoothing vector s_k of the group a weight tensor belongs to (nullptr: none). Group head name: k,v -> q ; up -> gate.
+static inline const std::vector<float> * ggml_hexagon_int8_smooth_vec(const struct ggml_tensor * t) {
+    if (g_int_smooth.empty() || (opt_int_mm != 3 && opt_int_mm != 6)) { return nullptr; }
+    int il = -1; char tail[64] = { 0 };
+    if (sscanf(t->name, "blk.%d.%63s", &il, tail) != 2) { return nullptr; }
+    const char * head = nullptr;
+    if (!strcmp(tail, "attn_q.weight") || !strcmp(tail, "attn_k.weight") || !strcmp(tail, "attn_v.weight")) { head = "attn_q.weight"; }
+    else if (!strcmp(tail, "ffn_gate.weight") || !strcmp(tail, "ffn_up.weight")) { head = "ffn_gate.weight"; }
+    else if (!strcmp(tail, "attn_output.weight")) { head = "attn_output.weight"; }
+    if (!head) { return nullptr; }
+    char key[96]; snprintf(key, sizeof key, "blk.%d.%s", il, head);
+    auto it = g_int_smooth.find(key);
+    return (it != g_int_smooth.end() && it->second.size() == (size_t) t->ne[0]) ? &it->second : nullptr;
+}
+
+// extra bytes of the smoothing vector behind the records of a tensor (1/s_k, 128 B padded)
+static inline size_t ggml_hexagon_int8_smooth_bytes(const struct ggml_tensor * t) {
+    return ggml_hexagon_int8_smooth_vec(t) ? (((size_t) t->ne[0] * 4 + 127) & ~(size_t) 127) : 0;
+}
+
+static void ggml_hexagon_load_int_smooth(const char * path) {
+    FILE * f = fopen(path, "rb");
+    if (!f) { GGML_LOG_ERROR("ggml-hex: cannot open GGML_HEXAGON_INT_SMOOTH=%s\n", path); return; }
+    for (;;) {
+        uint32_t nl = 0;
+        if (fread(&nl, 4, 1, f) != 1) { break; }
+        std::string name(nl, '\0');
+        uint32_t k = 0;
+        if (fread(&name[0], 1, nl, f) != nl || fread(&k, 4, 1, f) != 1) { break; }
+        std::vector<float> v(k);
+        if (fread(v.data(), 4, k, f) != k) { break; }
+        g_int_smooth[name] = std::move(v);
+    }
+    fclose(f);
+    GGML_LOG_INFO("ggml-hex: loaded %zu smoothing vectors from %s\n", g_int_smooth.size(), path);
+}
+
+// byte offset of the int8 region from the start of a tensor (end of the tiled data, 128 B aligned)
+static inline size_t ggml_hexagon_int8_rot_offset(const struct ggml_tensor * t) {
+    return hex_round_up(ggml_hexagon_tiled_row_size(t->type, t->ne[0]) * hex_round_up(t->ne[1], 32), 128);
 }
 
 static inline bool ggml_hexagon_is_hmx_weight_type(enum ggml_type type) {
@@ -2506,6 +2695,22 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
 
     if (offset == 0 && size == ggml_nbytes(tensor) && extra->shadow_buf.empty()) {
         repack_tensor_tiled(tensor, data, size);
+        if (ggml_hexagon_int8_rot_tensor(tensor)) {
+            // the large-k class has a much bigger accumulator bound, so it gets the full window range (see M37)
+            const uint32_t red = (tensor->ne[0] > 8192) ? opt_int_mm_reduce_big : opt_int_mm_reduce;
+            uint8_t * dst8 = (uint8_t *) tensor->data + ggml_hexagon_int8_rot_offset(tensor);
+            if (opt_int_mm_scheme == 1) {
+                hex_int8_pack_q44(dst8, (const uint8_t *) data, (uint32_t) tensor->ne[1], (uint32_t) tensor->ne[0], red);
+            } else {
+                const std::vector<float> * sm = ggml_hexagon_int8_smooth_vec(tensor);
+                hex_int8_pack_rotated(dst8, (const uint8_t *) data, (uint32_t) tensor->ne[1], (uint32_t) tensor->ne[0], red,
+                                      ggml_hexagon_int8_rot_enabled(tensor), sm ? sm->data() : nullptr);
+                if (sm) {   // 1/s_k behind the records, read by the DSP quantizer
+                    float * inv = (float *) (dst8 + hex_int8_extra_bytes((uint32_t) tensor->ne[0], (uint32_t) tensor->ne[1]));
+                    for (size_t i = 0; i < sm->size(); ++i) { inv[i] = 1.0f / (*sm)[i]; }
+                }
+            }
+        }
         return;
     }
 
@@ -2517,6 +2722,21 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
 
     if (extra->shadow_size >= ggml_nbytes(tensor)) {
         repack_tensor_tiled(tensor, extra->shadow_buf.data(), extra->shadow_buf.size());
+        if (ggml_hexagon_int8_rot_tensor(tensor)) {
+            const uint32_t red = (tensor->ne[0] > 8192) ? opt_int_mm_reduce_big : opt_int_mm_reduce;
+            uint8_t * dst8 = (uint8_t *) tensor->data + ggml_hexagon_int8_rot_offset(tensor);
+            if (opt_int_mm_scheme == 1) {
+                hex_int8_pack_q44(dst8, extra->shadow_buf.data(), (uint32_t) tensor->ne[1], (uint32_t) tensor->ne[0], red);
+            } else {
+                const std::vector<float> * sm = ggml_hexagon_int8_smooth_vec(tensor);
+                hex_int8_pack_rotated(dst8, extra->shadow_buf.data(), (uint32_t) tensor->ne[1], (uint32_t) tensor->ne[0], red,
+                                      ggml_hexagon_int8_rot_enabled(tensor), sm ? sm->data() : nullptr);
+                if (sm) {   // 1/s_k behind the records, read by the DSP quantizer
+                    float * inv = (float *) (dst8 + hex_int8_extra_bytes((uint32_t) tensor->ne[0], (uint32_t) tensor->ne[1]));
+                    for (size_t i = 0; i < sm->size(); ++i) { inv[i] = 1.0f / (*sm)[i]; }
+                }
+            }
+        }
         extra->shadow_buf.clear();
         extra->shadow_buf.shrink_to_fit();
         extra->shadow_size = 0;
@@ -2872,7 +3092,11 @@ static size_t ggml_backend_hexagon_buffer_type_get_alloc_size(ggml_backend_buffe
         int64_t ne1 = hex_round_up(t->ne[1], 32);
         int64_t ne2 = t->ne[2];
         int64_t ne3 = t->ne[3];
-        return ggml_hexagon_tiled_row_size(t->type, ne0) * ne1 * ne2 * ne3;
+        size_t  sz  = ggml_hexagon_tiled_row_size(t->type, ne0) * ne1 * ne2 * ne3;
+        if (ggml_hexagon_int8_rot_tensor(t)) {
+            sz = ggml_hexagon_int8_rot_offset(t) + hex_int8_extra_bytes((uint32_t) t->ne[0], (uint32_t) t->ne[1]) + ggml_hexagon_int8_smooth_bytes(t);
+        }
+        return sz;
     }
     return ggml_nbytes(t);
 
@@ -4133,6 +4357,18 @@ struct ggml_hexagon_opbatch {
             kparams.m_chunk   = mc;
             kparams.n_chunk   = nc;
             kparams.vtcm_size = vsz;
+            kparams.int_mm    = (uint8_t) ggml_hexagon_int8_eff_mode();
+            kparams.bias2     = (HEX_INT8_BIAS_BITS < 32) ? 1 : 0;
+            kparams.smooth    = ggml_hexagon_int8_smooth_vec(last_node.inputs[0]) ? 1 : 0;
+            if (kparams.int_mm >= 2 && kparams.int_mm <= 5) {
+                // pre-packed int8 weights must exist for both gate and up
+                kparams.int_mm = (ggml_hexagon_int8_rot_tensor(last_node.inputs[0]) && ggml_hexagon_int8_rot_tensor(last_node.inputs[1])) ? kparams.int_mm : 0;
+            } else if (kparams.int_mm) {
+                int il = -1;
+                if (sscanf(last_node.inputs[0]->name, "blk.%d.", &il) == 1 && il >= 0 && il < 64) {
+                    kparams.int_mm = ((opt_int_mm_layers_gate >> il) & 1) ? kparams.int_mm : 0;
+                }
+            }
         }
 
         const ggml_tensor * w0 = last_node.inputs[0];
@@ -6134,6 +6370,17 @@ static bool ggml_hexagon_precompute_hmx_mm_params(
     } else {
         kparams->kernel_type = HTP_MM_KERNEL_HMX_2D;
     }
+
+    // int8 HMX path (packed int8 weights, GGML_HEXAGON_INT_MM >= 2): only for classes with an int8 op, never for the batched kernel.
+    // Classes listed in GGML_HEXAGON_INT_MM_MASK16 run A16 (mode 6) even when the global mode is A8 (2/3) - one env change per class.
+    kparams->int_mm = 0;
+    if (opt_int_mm >= 2 && !is_batched && !is_matmul_id && ggml_hexagon_int8_rot_tensor(src0)) {
+        const uint32_t cls = ggml_hexagon_int8_class(src0);
+        kparams->int_mm = (uint8_t) (((opt_int_mm_mask16 & cls) != 0) ? 6 : ggml_hexagon_int8_eff_mode());
+        kparams->bias2  = (HEX_INT8_BIAS_BITS < 32) ? 1 : 0;   // records carry the two-level zero-point remainder only then
+        kparams->int8_split = opt_int_split ? 1 : 0;
+        kparams->smooth     = ggml_hexagon_int8_smooth_vec(src0) ? 1 : 0;
+    }
     return true;
 
     GGML_UNUSED(src0);
@@ -6156,6 +6403,7 @@ static void ggml_hexagon_precompute_hvx_mm_params(
     size_t vtcm_budget,
     struct htp_mm_kernel_params * kparams
 ) {
+    kparams->int_mm = 0;
     if (opt_mm_select < 1) {
         kparams->kernel_type = HTP_MM_KERNEL_UNSUPPORTED;
         return;
@@ -10275,6 +10523,18 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_etm       = str_etm      ? atoi(str_etm)                          : 0;
     opt_nhvx      = str_nhvx     ? strtoul(str_nhvx, NULL, 0)             : opt_nhvx;
     opt_nhmx      = str_nhmx     ? atoi(str_nhmx)                         : opt_nhmx;
+    if (const char * s_int = getenv("GGML_HEXAGON_INT_MM")) { opt_int_mm = atoi(s_int); }
+    if (const char * s_ly = getenv("GGML_HEXAGON_INT_MM_LAYERS")) { opt_int_mm_layers = strtoull(s_ly, NULL, 16); }
+    opt_int_mm_layers_gate = opt_int_mm_layers;
+    if (const char * s_lg = getenv("GGML_HEXAGON_INT_MM_LAYERS_GATE")) { opt_int_mm_layers_gate = strtoull(s_lg, NULL, 16); }
+    if (const char * s_rd = getenv("GGML_HEXAGON_INT_MM_REDUCE")) { opt_int_mm_reduce = (uint32_t) atoi(s_rd); }
+    if (const char * s_rb = getenv("GGML_HEXAGON_INT_MM_REDUCE_BIG")) { opt_int_mm_reduce_big = (uint32_t) atoi(s_rb); }
+    if (const char * s_mk = getenv("GGML_HEXAGON_INT_MM_MASK")) { opt_int_mm_mask = (uint32_t) strtoul(s_mk, NULL, 16); }
+    if (const char * s_m16 = getenv("GGML_HEXAGON_INT_MM_MASK16")) { opt_int_mm_mask16 = (uint32_t) strtoul(s_m16, NULL, 16); }
+    if (const char * s_sp = getenv("GGML_HEXAGON_INT_SPLIT")) { opt_int_split = atoi(s_sp); }
+    if (const char * s_so = getenv("GGML_HEXAGON_INT_SMOOTH_OPTIONAL")) { g_int_smooth_optional = atoi(s_so) != 0; }
+    if (const char * s_sm = getenv("GGML_HEXAGON_INT_SMOOTH")) { ggml_hexagon_load_int_smooth(s_sm); }
+    if (const char * s_sch = getenv("GGML_HEXAGON_INT_MM_SCHEME")) { opt_int_mm_scheme = (uint32_t) atoi(s_sch); }
     opt_mm_select = str_mm_select ? atoi(str_mm_select)                   : opt_mm_select;
     opt_fa_select = str_fa_select ? atoi(str_fa_select)                   : opt_fa_select;
     opt_fa_head_split = str_fa_head_split ? atoi(str_fa_head_split)       : opt_fa_head_split;

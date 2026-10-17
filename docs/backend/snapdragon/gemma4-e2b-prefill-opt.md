@@ -139,6 +139,93 @@ analysis/verify-progress.md pieces C, D, E).
   tg128 62.5 -> 64.2/65.1 t/s (a variant with more range slots measured 65.9/65.9 t/s). PARITY_IDENTICAL, PPL
   134.3955. The rest of the per-op bookkeeping is not removable: see "Measured and rejected".
 
+## Merged round: int8 HMX matmuls with activation smoothing (DEVICE RUN 4)
+
+This round adds the int8 HMX work on top of the fusion round above. It is off by default: with `GGML_HEXAGON_INT_MM=0`
+the merged tree is bit-identical to the fusion round. Source of the numbers: analysis/merge-log.md "DEVICE RUN 4" and
+analysis/hmx-int-log.md M90-M98. Tree: the fuse fast state plus the frozen int8 tree, lab plumbing removed, v73/v75
+wrapper fix applied.
+
+Same model and device as above (`gemma-4-E2B-it-Q4_0-imatembd.gguf`, SC8480XP, HTP v81, Windows 11 ARM64, HTP0).
+`llama-bench -fa 1 -t 6 --poll 1000 -ub 512 --load-mode none`, prefill `-p 512 -n 0 -r 5`, decode `-p 512 -n 128 -r 5`.
+Warmup of every arm first, 3 rounds, arm order rotated per round, 30 s gaps, a health check before every run (nothing
+was flagged contaminated, no round excluded). Medians of the 3 rounds:
+
+| Arm | prefill pp512 (t/s) | decode tg128 (t/s) |
+|---|---|---|
+| `pkg-new` (baseline) | 7604.54 | 54.38 |
+| merged, `INT_MM=0` (fp16 path) | 7985.58 (+5.0%) | 66.47 (+22.2%) |
+| merged, `INT_MM=1` (W4A8 expand, 11 layers) | 8135.77 (+7.0%) | 65.55 (+20.5%) |
+| merged, config A (smoothed packed gate+up A8) | 8407.10 (+10.6%) | 66.16 (+21.7%) |
+
+- Combined result over `pkg-new`: prefill +10.6% (config A), decode +22.2% (66.47 t/s with `INT_MM=0`; config A is
+  within 0.2% of it, 66.16 t/s).
+- Contribution split: the fuse side gives +5.0% prefill and +22.2% decode (the `INT_MM=0` arm isolates it); config A
+  adds +3.5% prefill on top (paired mean 1.035, rounds 1.074 / 0.989 / 1.042) and leaves decode unchanged
+  (0.998 of `INT_MM=0`), because m=1 never reaches the int8 code. In ms per 512-token ubatch: `pkg-new` 67.3,
+  `INT_MM=0` 64.1, config A 60.9. Config A round 2 has a 16.6% own stddev and is kept; the median is robust to it.
+- Config A: `GGML_HEXAGON_INT_MM=3 GGML_HEXAGON_INT_MM_MASK=4 GGML_HEXAGON_INT_MM_LAYERS=7ffffffff
+  GGML_HEXAGON_INT_MM_REDUCE=2 GGML_HEXAGON_INT_MM_REDUCE_BIG=4 GGML_HEXAGON_INT_SMOOTH=<path>/smooth.bin
+  GGML_HEXAGON_VMEM=5G` (gate+up as packed W8A8 on all 35 layers, smoothed; everything else stays fp16).
+
+### Gates that passed
+
+- Bit-identity of the fp16 path (`INT_MM=0`): `llama-perplexity` PPL exactly 134.3955 +/- 6.77407, 48-token greedy
+  identical, 5-output gate SAME on all five (3 greedy + 2 high-temperature sampled).
+- Int gate, config A, against the fp16 logits (20 chunks, c512): KLD 0.007160 +/- 0.001159 (limit 0.008), same-top-p
+  96.941 +/- 0.241 % (limit 96.0), greedy identical. PPL is 132.4530 (-1.44% vs fp16, informational: int8 error lowers
+  PPL on wiki, the KLD gate governs). `INT_MM=1` expand: KLD 0.006950, top-p 96.765 %, PPL 133.8129.
+- Greedy parity is not a gate for the int path: a packed gate+up variant with reduce 4 gave PPL 404 / KLD 2.2 with
+  identical 48 greedy tokens (hmx-int-log.md M77). Every int configuration must pass the KLD / top-p gate.
+
+### KPI distance
+
+- Prefill target 10000 t/s: NOT MET. Config A 8407.10 is 84.1% of it, 1593 t/s short (about 9.7 ms per ubatch to go from
+  60.9 ms against the 51.2 ms target).
+- Decode target 70 t/s: NOT MET. Best 66.47 t/s, 3.53 t/s short (about 15.0 ms/token now, 14.3 ms needed).
+- The remaining int options cannot close the prefill gap: qkv / o-proj A8 pass the gate alone but save at most 0.7 ms
+  and exhaust the KLD budget together with gate+up (M93); down (k=6144 and k=12288) fails A8 (KLD 0.16 / 0.02) and A16 is
+  1.5-2x slower than fp16; the m-split overlap is slower and stays off (`GGML_HEXAGON_INT_SPLIT=0`).
+
+### Why decode stops at about 66 t/s
+
+The q4_0 decode dot spends about 79 nibble-unpack ops (26 vshuff + 21 valign + 8 vand + 8 vlsr + 16 vsub.b per two
+tiles) per 16 vrmpy. HVX has 2 permute/shift slots, so the permutes alone need at least about 40 packets against 61-64
+observed. That is about 11.8 MAC/cycle/thread, roughly 9% of the vrmpy peak (128 MAC per instruction). Pairing two output
+tiles per pass cannot remove the unpack ops and, made bit-identical, costs more than it saves (gate+up +55%, MUL_MAT
++23%, lm_head +23%), so it was dropped. The next step is a load-time q4_0 weight repack, so that a plain vand / vlsr
+yields the vrmpy operand order directly.
+
+### Int8 env scheme (all default off, fp16)
+
+- `GGML_HEXAGON_INT_MM`: 0 off | 1 W4A8 on-the-fly expand, gate+up only (no packing, no smoothing, reduce 4) | 2 packed +
+  Hadamard rotation (diagnostic) | 3 packed W8A8, unrotated (the shipped mode) | 4, 5 diagnostics | 6 A16 for the plain
+  classes. The int paths are packed W4A8 / W8A8 at load time, with a two-pass A16 form and a two-level bias for k=12288.
+- `GGML_HEXAGON_INT_MM_MASK`: class bits, 1 qkv, 2 o-proj, 4 gate+up, 8 down k=6144, 0x10 lm_head (never packed), 0x20
+  PLE model_proj, 0x40 PLE gate/proj (no op), 0x80 down k=12288; default 0xEF. `GGML_HEXAGON_INT_MM_MASK16`: classes
+  that run A16 (two passes) instead of A8; gate+up has no A16.
+- `GGML_HEXAGON_INT_MM_LAYERS` / `_LAYERS_GATE`: layer masks for the plain classes / the gate+up class (default all).
+- `GGML_HEXAGON_INT_MM_REDUCE` (window headroom bits for the packed classes, 2 packed, 4 expand) and `_REDUCE_BIG`
+  (k=12288 class, 4; 8 clips). `GGML_HEXAGON_INT_MM_SCHEME` (1 = load-time Q4.4 numerics), `GGML_HEXAGON_INT_SPLIT`
+  (m-split overlap, 0), `GGML_HEXAGON_VMEM` (HTP VM cap, 5G for the packed copies, about 1.4 GB extra host RAM).
+
+### SHIPPING REQUIREMENT: smooth.bin travels with the model
+
+- `smooth.bin` (777299 bytes, sha256 prefix 26a4948d5bea2dac, 105 vectors keyed `blk.L.{attn_q,ffn_gate,attn_output}.weight`,
+  layout `[u32 name_len][name][u32 k][f32 s[k]]`) MUST be shipped next to the model and pointed to with
+  `GGML_HEXAGON_INT_SMOOTH`. It is generated by `smooth_calib.py` with the host dumper `dump2b` from 6 `wiki.test.raw`
+  texts of about 9 KB (about 54 KB, about 3000 tokens), about 10 minutes on a host CPU.
+- Exact fp16 fallback when it is absent: if the file is missing, unreadable or a vector is short, the tensors that need
+  smoothing are NOT packed and run the exact fp16 path (one warning naming the tensor); the quality regression of a
+  silent unsmoothed A8 is never shipped. Verified on the device: KLD 0.000000 / top-p 100.0 without the file or with a
+  non-existent path (M92). `GGML_HEXAGON_INT_SMOOTH_OPTIONAL=1` forces unsmoothed A8 (diagnostic only, KLD 0.0229 on
+  wiki). A16 classes (for example qkv in `MASK16`) do not need smoothing.
+- Domain note: calibrated on wiki text only. Validated on code, docs and chat text (about 60 KB each, 20 chunks c512), where
+  smoothing lowers KLD 2.6-3.4x versus unsmoothed A8 and config A passes the gate (0.003-0.006) on all three (M96).
+  Those texts are low-perplexity, the high-entropy wiki regime is the pessimistic case. Not tested: other languages,
+  long context (> 512), math. For another language or a very different distribution, regenerate `smooth.bin` with
+  `smooth_calib.py` and re-validate the KLD gate on a sample of that text before enabling.
+
 ## Optimization steps
 
 Numbers per step are medians of 6-8 interleaved `llama-bench` pp512 rounds on 10.92.138.99. That device was later found throttled on battery, so only the relative change between adjacent builds is meaningful. The final table above is from 10.92.137.16.
