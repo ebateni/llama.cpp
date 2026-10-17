@@ -108,7 +108,7 @@ static size_t opt_vmem    = HTP_OP_MAX_VMEM_DEFAULT;  // max available va space 
 static int    opt_etm     = 0;
 static int    opt_verbose = 0;
 static int    opt_profile = 0; // profiling mode (0-disabled, 1-basic, 2-pmu)
-static bool   opt_hostbuf = false;
+static bool   opt_hostbuf = true;  // host-type buffer for CPU-side inputs: removes the input copies (GGML_HEXAGON_HOSTBUF=0 disables)
 static bool   opt_dma64   = false;
 
 static size_t opt_mbuf_dyn    = 512ul * 1024 * 1024;      // max dynamic (compute) buffer size

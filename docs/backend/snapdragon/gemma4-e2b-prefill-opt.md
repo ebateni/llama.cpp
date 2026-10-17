@@ -487,6 +487,60 @@ health rule, excluded and repeated, never averaged; session otherwise normal, pk
   remaining gap has no identified lever above 1 ms (the host headroom left is about 0.4 ms, now taken, and the matmul
   accounting is in the RUN 9 notes above).
 
+## RUN 11: host-buffer inputs become the default
+
+RUN 11 changes exactly one line on top of the RUN 10 state: `opt_hostbuf` in `ggml-hexagon.cpp` goes from `false` to
+`true`, so `GGML_HEXAGON_HOSTBUF=1` is the default (CPU-side inputs live in a host-type buffer and the per-run input
+copies disappear); `GGML_HEXAGON_HOSTBUF=0` restores the old behaviour. This supersedes the "left off by default" bullet
+of RUN 10. The int8 path, the fp16 path and the KQ-mask fast path are otherwise unchanged. Source of the numbers:
+analysis/merge-log.md "DEVICE RUN 11", analysis/fuse-log.md (HOSTBUF entries).
+
+- Host timeline (single-run timelines, median of 14 runs): host time before the DSP batch write 3.78 -> 2.66 ms, device
+  wait unchanged (57.2 -> 57.3 ms), run time 61.3 -> 60.1 ms.
+- Corrected story: with HOSTBUF=1 the allocator lays out the intermediates differently and three norm-chain fusions are
+  lost (`ggml_hexagon_tensors_overlap` fires on the new layout), leaving 16 un-fused ops (534 ops instead of the 518
+  target). The RUN 10 note said this "eats the win"; the per-op profile does not show that. The 16 un-fused ops cost only
+  about 0.4 ms, and the DSP op sum is LOWER with HOSTBUF=1 (57.05 ms vs 57.61 ms). The 3- to 5-round A/Bs (+0.3..0.9%)
+  could not resolve this because their spread is 2-6%. A backend-local allocator fix was not found (root cause is
+  best-fit reuse of freed 524288-byte PLE holes by 3 MB tensors in the shared `ggml_dyn_tallocr`, a policy change in
+  shared ggml code), so the 16 ops stay un-fused.
+- 80-sample alternating test (4 rounds x 3 arms x 2 settings, each cell one `llama-bench -p 512 -n 0 -r 20`, 10 s gaps,
+  20 samples per cell, 80 samples per arm and setting; one sample is one timed pp512 run):
+
+| Arm | HOSTBUF=0 median (t/s) | default (=1) median (t/s) | median delta | mean delta (z) | ms/run |
+|---|---|---|---|---|---|
+| null control: `pkg-new` (default already 0, so the same code) | 7589.0 | 7591.1 | +0.03% | +0.32% (z 0.6) | +0.02 |
+| fuse: merged `INT_MM=0` | 8411.3 | 8487.5 | +0.91% | +0.97% (z 2.1) | +0.55 |
+| int best-speed | 8979.8 | 9101.9 | +1.36% | +0.70% (z 1.8) | +0.76 |
+
+  The null control shows the floor of the test (identical code, +0.03% median, z 0.6). Both real arms are positive, but
+  each is only at the edge of significance (z about 2). The effect is real but small: 0.5-0.8 ms per run, 1-1.4%, below
+  what a 3-round A/B resolves. The fuse side's own 80-sample test measured +1.43% / 1.2 ms for the fp16 arm; that full size
+  is not confirmed here.
+
+RUN 11 arm table (3 clean rounds, medians; no contaminated round, session normal, pkg-new decode 54.16-54.40):
+
+| Arm | prefill pp512 (t/s) | ratio vs `pkg-new` | decode tg128 (t/s) | ratio vs `pkg-new` |
+|---|---|---|---|---|
+| `pkg-new` (baseline) | 7503.70 | 1.000 | 54.18 | 1.000 |
+| merged, `INT_MM=0` (fp16 path) | 8310.35 | 1.108 | 71.55 | 1.321 |
+| merged, int best-speed | 9024.11 | 1.203 | 71.33 | 1.317 |
+| merged, int full-coverage | 8295.78 | 1.106 | 71.26 | 1.315 |
+
+- The 3-round table does not resolve the hostbuf effect (ratios vs `pkg-new` are slightly lower than in RUN 10 because
+  `pkg-new` was 2.8% higher this session; arm stddev is up to 8.9%). The in-run pp512 sample of the best-speed arm in the
+  decode runs is 8615.28, so its level with hostbuf in this session is 8.6-9.1k t/s.
+- Gates with the new default: `INT_MM=0` bit-identity PASS (PARITY_IDENTICAL, PPL exactly 134.3955 +/- 6.77407, 5/5
+  SAME). Best-speed KLD 0.006124, top-p 96.941%, PPL 133.1222. Full-coverage KLD 0.006942, top-p 96.569%, PPL 132.1043.
+  `INT_MM=1` guard: one warning, as before. Stress (HOSTBUF 0 vs 1, 4 prompts x greedy / temperature 1.5): 8/8
+  byte-identical (fuse side, on its own tree). Static compile matrix 31 objects / 0 errors on 8 cells; host `clang++`
+  syntax check 0 errors.
+- KPI: decode > 70 MET in all merged arms (71.55 `INT_MM=0` with one round at 69.77, 71.33 best-speed with every round >=
+  71.02, 71.26 full-coverage). Prefill > 10000 NOT MET: best arm 9024.11 (median of the prefill phase; 80-sample median
+  9101.9) is 90.2% of the target, 976 t/s short; the arm is at about 56 ms per ubatch at 9.1k against the 51.2 ms needed.
+  The one named lever not in this state, the int side's fused quantizer (about 1 ms estimated), has not been built; nothing
+  else identified is above 1 ms.
+
 ## Optimization steps
 
 Numbers per step are medians of 6-8 interleaved `llama-bench` pp512 rounds on 10.92.138.99. That device was later found throttled on battery, so only the relative change between adjacent builds is meaningful. The final table above is from 10.92.137.16.
