@@ -1897,6 +1897,9 @@ static uint32_t fa_kv_blocks_live(const struct htp_tensor * mask, uint32_t q_sta
         if (c0 + Bc > nek1) {
             break;  // ragged tail block: keep it rather than read past the row
         }
+        // pull the block's mask segments into L2 with one strided prefetch: the row-by-row loads below would
+        // otherwise be serial DDR misses (rows are mask->nb[1] apart)
+        hex_l2fetch(base + (size_t) q_start * mask->nb[1] + (size_t) c0 * sizeof(__fp16), Bc * sizeof(__fp16), mask->nb[1], n_rows_q);
         // XOR with -inf is zero exactly for masked entries; OR-accumulate and test the whole vector once
         HVX_Vector acc = Q6_V_vzero();
         for (uint32_t r = 0; r < n_rows_q; ++r) {
@@ -2158,20 +2161,16 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
             const size_t   g_br_actual = hex_align_up(n_rows_g, HMX_FP16_TILE_N_ROWS);
             const size_t   n_row_tiles = g_br_actual / HMX_FP16_TILE_N_ROWS;
 
-            // trailing KV blocks that are fully masked for this q tile contribute nothing: skip them.
-            // block 0 is always kept (its DMA was issued ahead of the tile), so DMA push/pop pairing holds.
-            // the mask is head-independent here (ne[2] == 1), so one scan serves every kv head.
-            const uint32_t n_live = fa_kv_blocks_live(mask, q_start, n_rows_q, im3, Bc, nek1, factx.n_kv_blocks);
-
-            for (uint32_t kv_head = kv_head_min; kv_head < kv_head_max; ++kv_head) {
+            // 1. Push Q and KV DMAs for the very first iteration (before the live-block scan below, so the scan
+            // overlaps the DMA instead of delaying it). Block 0 is always kept, so these pushes do not depend on the scan.
+            // Subsequent iterations are enqueued early at the end of the previous iteration.
+            if (ib3 == 0 && q_start == q_start_min) {
+                const uint32_t kv_head = kv_head_min;
                 const uint32_t ik2 = kv_head;
                 const uint32_t ik3 = fastdiv(ib3, &kparams->broadcast_rk3);
                 const uint32_t iv2 = kv_head;
                 const uint32_t iv3 = fastdiv(ib3, &kparams->broadcast_rv3);
-
-                // 1. Push Q and KV DMAs for the very first iteration.
-                // Subsequent iterations are enqueued early at the end of the previous iteration.
-                if (ib3 == 0 && q_start == q_start_min && kv_head == kv_head_min) {
+                {
                     const dma_addr_t q_ptr = q->data + q_start * q->nb[1] +
                                             (kv_head * factx.G) * q->nb[2] + ib3 * q->nb[3];
                     const size_t q_row_bytes = q_transposed ? n_rows_q * q_row_bytes_trans_factor : q_row_bytes_untransposed;
@@ -2195,6 +2194,17 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         }
                     }
                 }
+            }
+
+            // trailing KV blocks that are fully masked for this q tile contribute nothing: skip them.
+            // the mask is head-independent here (ne[2] == 1), so one scan serves every kv head.
+            const uint32_t n_live = fa_kv_blocks_live(mask, q_start, n_rows_q, im3, Bc, nek1, factx.n_kv_blocks);
+
+            for (uint32_t kv_head = kv_head_min; kv_head < kv_head_max; ++kv_head) {
+                const uint32_t ik2 = kv_head;
+                const uint32_t ik3 = fastdiv(ib3, &kparams->broadcast_rk3);
+                const uint32_t iv2 = kv_head;
+                const uint32_t iv3 = fastdiv(ib3, &kparams->broadcast_rv3);
 
                 // 2. Pop Q DMA (blocks until Q is loaded)
                 dma_queue_pop(dma_q);

@@ -105,12 +105,21 @@ static inline void hex_int8_pack_q44(uint8_t * dst, const uint8_t * src_rows, ui
     }
 }
 
+// activation-side multiplier of the smoothed (and optionally rotated) scheme: x' = x * mult[k] with mult = sign_k * c / s_k (c = 1/sqrt(B)
+// for a rotation of block B, 1 otherwise). The packed weights carry W' = H(sign * c * s_k * W), so x' . W' == x . W.
+static inline float hex_int8_act_mult(uint32_t i, float s_k, uint32_t rot_block) {
+    return rot_block ? hex_int8_sign(i) / (sqrtf((float) rot_block) * s_k) : 1.0f / s_k;
+}
+
 // dst: n/64 records. src_rows: n rows of k/32 blocks (18 bytes each: fp16 d, 16 bytes of nibbles; low nibble = element i, high = i + 16)
 static inline void hex_int8_pack_rotated(uint8_t * dst, const uint8_t * src_rows, uint32_t n, uint32_t k, uint32_t reduce, bool rotate = true,
-                                          const float * smooth = nullptr) {
+                                          const float * smooth = nullptr, uint32_t rot_block = 0) {
+    // rot_block != 0: rotation by blocks of rot_block elements (32 = one HVX vector of lanes) instead of HEX_INT8_WHT_BLOCK
     const size_t   rec_bytes = hex_int8_record_bytes(k);
     const uint32_t nkc = k / 32;
-    const float    c_norm = 1.0f / sqrtf((float) HEX_INT8_WHT_BLOCK);
+    const uint32_t WB = rot_block ? rot_block : HEX_INT8_WHT_BLOCK;
+    if (rot_block) { rotate = true; }
+    const float    c_norm = 1.0f / sqrtf((float) WB);
 
     std::vector<float> sgn(k);
     for (uint32_t i = 0; i < k; ++i) { sgn[i] = rotate ? hex_int8_sign(i) * c_norm : 1.0f; }
@@ -137,10 +146,10 @@ static inline void hex_int8_pack_rotated(uint8_t * dst, const uint8_t * src_rows
             // smoothing: W' = W * s_k per input channel (the DSP divides the activation by s_k)
             if (smooth) { for (uint32_t i = 0; i < k; ++i) { row[i] *= smooth[i]; } }
             for (uint32_t i = 0; i < k; ++i) { row[i] *= sgn[i]; }
-            for (uint32_t blk = 0; rotate && blk + HEX_INT8_WHT_BLOCK <= k; blk += HEX_INT8_WHT_BLOCK) {
+            for (uint32_t blk = 0; rotate && blk + WB <= k; blk += WB) {
                 float * x = row.data() + blk;
-                for (uint32_t h = 1; h < HEX_INT8_WHT_BLOCK; h <<= 1) {
-                    for (uint32_t i = 0; i < HEX_INT8_WHT_BLOCK; i += 2 * h) {
+                for (uint32_t h = 1; h < WB; h <<= 1) {
+                    for (uint32_t i = 0; i < WB; i += 2 * h) {
                         for (uint32_t j = i; j < i + h; ++j) {
                             const float a = x[j], bb = x[j + h];
                             x[j] = a + bb; x[j + h] = a - bb;

@@ -804,6 +804,14 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
     actx.dst_spad_half_size  = L.dst_bytes_per_thread / 2;
 
     actx.block = actx.src0_spad_half_size / actx.src0_row_size_aligned;
+    // A thread's whole row range often fits one block (e.g. 64 rows of a 512-row prefill op), which leaves DMA-in,
+    // compute and DMA-out strictly serial. Cap the block so each thread runs at least 4 pipeline stages.
+    {
+        const uint32_t rows_per_thread = actx.src0_nrows_per_thread;
+        uint32_t cap = (rows_per_thread + 3) / 4;
+        if (cap < 8) { cap = 8; }
+        if (actx.block > cap) { actx.block = cap; }
+    }
     actx.src0_nrows = nrows;
     actx.row_start  = row_start;
 

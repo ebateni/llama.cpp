@@ -3915,6 +3915,9 @@ typedef struct {
     uint32_t                  pair_n;     // number of row pairs handled by this call
     uint32_t                  first_w;    // 1: worker 0 (the caller, owner of dma[0] = weight DMA queue) takes no work
     const float *             inv_s;      // non-NULL: x *= inv_s[k] (static activation smoothing, VTCM copy, 128 B aligned)
+    uint32_t                  abl;        // bit 0: timing ablation, skip the quantize compute
+    uint32_t                  old_quant;  // 1: use the original quantizer (A/B timing and correctness reference)
+    uint32_t                  rot32;      // 1: fused in-lane WHT over 32 elements (inv_s carries sign / (sqrt(32) * s_k))
 } int8_quant_state_t;
 
 static void int8_quant_worker_fn(unsigned int n, unsigned int i, void * data) {
@@ -3972,7 +3975,8 @@ static void int8_quant_worker_fn(unsigned int n, unsigned int i, void * data) {
             x0 = buf;
             x1 = row + 1 < st->m ? buf + k : NULL;
         }
-        if (st->inv_s) {
+        const bool fast = !st->signs && !st->abl && x0 && !st->old_quant;   // no rotation: smoothing is fused into the quantizer (A8 and A16)
+        if (st->inv_s && !fast) {
             const HVX_Vector * sv = (const HVX_Vector *) st->inv_s;
             if (x0) { HVX_Vector * xv = (HVX_Vector *) x0; for (uint32_t kc = 0; kc < nkc; ++kc) { xv[kc] = hvx_vec_mul_f32_f32(xv[kc], sv[kc]); } }
             if (x1) { HVX_Vector * xv = (HVX_Vector *) x1; for (uint32_t kc = 0; kc < nkc; ++kc) { xv[kc] = hvx_vec_mul_f32_f32(xv[kc], sv[kc]); } }
@@ -3983,11 +3987,26 @@ static void int8_quant_worker_fn(unsigned int n, unsigned int i, void * data) {
         }
         const size_t doff = (size_t) (gp >> 4) * nkc * HMX_INT8_CROUTON_A + (gp & 15) * 128;
         uint8_t * dp = st->dst + doff;
-        if (st->dst2) {
+        if (st->abl) {   // ablation: DMA + pop only, no quantize compute (wrong results, timing only)
+            if (x0) { st->a_scale[row] = 1.0f; }
+            if (x1) { st->a_scale[row + 1] = 1.0f; }
+            if (li + 2 < n_pairs) { Q8_PUSH(li + 2); }
+            continue;
+        }
+        if (st->dst2 && fast) {
+            float sc16[4];
+            hmx_int8_quant_pair_a16_fast(dp, st->dst2 + doff, sc16, (float *) x0, (float *) x1, k, st->inv_s);
+            st->a_scale[row] = sc16[0]; st->a_scale2[row] = sc16[2];
+            if (x1) { st->a_scale[row + 1] = sc16[1]; st->a_scale2[row + 1] = sc16[3]; }
+        } else if (st->dst2) {
             float sc16[4];
             hmx_int8_quant_pair_a16(dp, st->dst2 + doff, sc16, x0, x1, k);
             if (x0) { st->a_scale[row] = sc16[0]; st->a_scale2[row] = sc16[2]; }
             if (x1) { st->a_scale[row + 1] = sc16[1]; st->a_scale2[row + 1] = sc16[3]; }
+        } else if (fast) {
+            hmx_int8_quant_pair_fast(dp, sc, (float *) x0, (float *) x1, k, st->inv_s, st->rot32);
+            st->a_scale[row] = sc[0];
+            if (x1) { st->a_scale[row + 1] = sc[1]; }
         } else {
             hmx_int8_quant_pair(dp, sc, x0, x1, k);
             if (x0) { st->a_scale[row] = sc[0]; }
@@ -4279,7 +4298,7 @@ static int hmx_mm_nx_geglu_2d_int8(struct htp_ops_context * octx, const struct h
         memset(a_scale, 0, hex_align_up((size_t) n_rt * 32, 64) * sizeof(float));
         {
             int8_quant_state_t qs = { ctx, ctx->trace, a_u8, act->data + mr * act_stride * sizeof(float), a_scale,
-                                      (float *) (base + L.off_stage), (uint32_t) n_rows, (uint32_t) k, (uint32_t) act_stride, n_rt, NULL, NULL, NULL, false, 0, n_rt * 16, 0, NULL };
+                                      (float *) (base + L.off_stage), (uint32_t) n_rows, (uint32_t) k, (uint32_t) act_stride, n_rt, NULL, NULL, NULL, false, 0, n_rt * 16, 0, NULL, 0, 0, 0 };
             const int nth = (int) hex_smin((uint32_t) n_threads, n_rt);
             if (nth <= 1) { int8_quant_worker_fn(1, 0, &qs); } else { worker_pool_run_func(ctx->worker_pool, int8_quant_worker_fn, &qs, nth); }
         }
@@ -4474,7 +4493,7 @@ static int hmx_mm_nx_geglu_2d_int8_rot(struct htp_ops_context * octx, const stru
         memset(a_scale, 0, hex_align_up((size_t) n_rt * 32, 64) * sizeof(float));
         {
             int8_quant_state_t qs = { ctx, ctx->trace, a_u8, act->data + mr * act_stride * sizeof(float), a_scale,
-                                      (float *) (base + o_stage), (uint32_t) n_rows, (uint32_t) k, (uint32_t) act_stride, n_rt, (kparams->int_mm == 2 || kparams->int_mm == 4) ? signs : NULL, NULL, NULL, false, 0, n_rt * 16, 0, inv_s_vtcm };   // 2/4: rotate activations; 3/5: weights-only rotation, act unrotated
+                                      (float *) (base + o_stage), (uint32_t) n_rows, (uint32_t) k, (uint32_t) act_stride, n_rt, (kparams->int_mm == 2 || kparams->int_mm == 4) ? signs : NULL, NULL, NULL, false, 0, n_rt * 16, 0, inv_s_vtcm, 0, 0, (uint32_t) ((kparams->int8_split >> 4) & 1) | ((uint32_t) ((kparams->int8_split >> 5) & 7) << 1) };   // 2/4: rotate activations; 3/5: weights-only rotation, act unrotated
             const int nth = (int) hex_smin((uint32_t) n_threads, n_rt);
             if (nth <= 1) { int8_quant_worker_fn(1, 0, &qs); } else { worker_pool_run_func(ctx->worker_pool, int8_quant_worker_fn, &qs, nth); }
         }
@@ -4551,6 +4570,7 @@ typedef struct {
     const float *             cm_add;       // per-column additive zero-point remainder (two-level bias, see hex-int8-pack.h)
     uint32_t                  n_rt, n_ct, dst_stride, dst_cols, col0, c_first_base;
     uint32_t                  n_rows_stop;   // rows >= this are padding (m not a multiple of 32)
+    float *                   sink;          // timing ablation only (INT_ABL bit 1): stores go to this per-thread VTCM area instead of DDR
 } int8_f32_state_t;
 
 // Threads split the row pairs (not the column tiles) and walk the column tiles inside, so each thread writes whole
@@ -4598,6 +4618,11 @@ static void int8_f32_out_worker_fn(unsigned int n, unsigned int i, void * data) 
             }
             const uint32_t col = ct * 32;
             const uint32_t ncol = hex_smin(32u, st->dst_cols - (st->col0 + col));
+            if (st->sink) {   // ablation: same ALU work, stores to VTCM
+                float * sk = st->sink + (size_t) i * 1024 + (col & 511);
+                *(HVX_Vector *) sk = s0; *(HVX_Vector *) (sk + 512) = s1;
+                continue;
+            }
             if (ncol == 32) {
                 hvx_vmemu(o0 + col) = s0;
                 if (second) { hvx_vmemu(o1 + col) = s1; }
@@ -4748,7 +4773,7 @@ static int hmx_mm_nx_2d_int8_f32(struct htp_ops_context * octx, const struct htp
                                    act_tiled ? act->data + (size_t) ((mr_) / 32) * n_k_tiles * 2048 : act->data + (mr_) * act_stride * sizeof(float), a_scale, \
                                    (float *) (base + o_stage), (uint32_t) (n_rows_), (uint32_t) k, (uint32_t) act_stride, (n_rt_), \
                                    kparams->int_mm == 2 ? (const float *) get_int8_signs() : NULL,                  \
-                                   a16 ? a_u8_2 : NULL, a16 ? a_scale_2 : NULL, act_tiled, (pair0_), (pair_n_), (first_w_), inv_s_vtcm }; \
+                                   a16 ? a_u8_2 : NULL, a16 ? a_scale_2 : NULL, act_tiled, (pair0_), (pair_n_), (first_w_), inv_s_vtcm, (uint32_t) ((kparams->int8_split >> 2) & 1), (uint32_t) ((kparams->int8_split >> 3) & 1), (uint32_t) ((kparams->int8_split >> 4) & 1) | ((uint32_t) ((kparams->int8_split >> 5) & 7) << 1) }; \
         const int _nth = (int) hex_smin(hex_smin((uint32_t) n_threads, (uint32_t) (pair_n_) + (first_w_)),             \
                                         hex_smin(8u, (uint32_t) hmx_ceil_div(mc, 32)));                              \
         if (_nth <= 1) { int8_quant_worker_fn(1, 0, &_qs); } else { worker_pool_run_func(ctx->worker_pool, int8_quant_worker_fn, &_qs, _nth); } \
@@ -4763,7 +4788,7 @@ static int hmx_mm_nx_2d_int8_f32(struct htp_ops_context * octx, const struct htp
 
         // Two row sub-blocks: sub 0 is quantized up front, sub 1 is quantized by the HVX threads while the HMX works on sub 0
         // (the row tiles are independent in a_u8 / a_scale / the output buffers). The weights are streamed once per sub-block.
-        const bool     split    = (kparams->int8_split != 0) && n_rt >= 2 && n_threads >= 3;
+        const bool     split    = (kparams->int8_split & 1) && n_rt >= 2 && n_threads >= 3;
         const uint32_t rt_split = split ? (n_rt + 1) / 2 : n_rt;
         I8F_QUANT(mr, n_rows, n_rt, 0, rt_split * 16, 0);
 
@@ -4837,7 +4862,7 @@ static int hmx_mm_nx_2d_int8_f32(struct htp_ops_context * octx, const struct htp
                                         a16 ? obuf2[(c - 1) % 2] : NULL, colmul[(c - 1) % 2], a_scale + row_lo, a16 ? a_scale_2 + row_lo : NULL,
                                         kparams->bias2 ? coladd[(c - 1) % 2] : NULL,
                                         n_rt_s, ncols_p / 32, (uint32_t) dst_stride, (uint32_t) dst_cols, (uint32_t) ncc_p, 0,
-                                        (uint32_t) rows_s };
+                                        (uint32_t) rows_s, (kparams->int8_split & 2) ? (float *) (base + o_stage) : NULL };
                 const int nth = (int) hex_smin((uint32_t) n_threads, st.n_rt * 16);
                 if (nth <= 1) { int8_f32_out_worker_fn(1, 0, &st); } else { worker_pool_run_func(ctx->worker_pool, int8_f32_out_worker_fn, &st, nth); }
             }
@@ -4853,7 +4878,7 @@ static int hmx_mm_nx_2d_int8_f32(struct htp_ops_context * octx, const struct htp
                                     a16 ? obuf2[c_last % 2] : NULL, colmul[c_last % 2], a_scale + row_lo, a16 ? a_scale_2 + row_lo : NULL,
                                     kparams->bias2 ? coladd[c_last % 2] : NULL,
                                     n_rt_s, ncols_p / 32, (uint32_t) dst_stride, (uint32_t) dst_cols, (uint32_t) ncc_p, 0,
-                                    (uint32_t) rows_s };
+                                    (uint32_t) rows_s, (kparams->int8_split & 2) ? (float *) (base + o_stage) : NULL };
             const int nth = (int) hex_smin((uint32_t) n_threads, st.n_rt * 16);
             if (nth <= 1) { int8_f32_out_worker_fn(1, 0, &st); } else { worker_pool_run_func(ctx->worker_pool, int8_f32_out_worker_fn, &st, nth); }
         }

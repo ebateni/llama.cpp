@@ -141,6 +141,9 @@ static std::map<std::string, std::vector<float>> g_int_smooth;
 // that for diagnostics (runs unsmoothed A8 and logs a warning).
 static bool g_int_smooth_optional = false;
 static bool g_int_smooth_warned   = false;
+static uint32_t opt_int_rot_abl = 0;  // GGML_HEXAGON_INT_ROT_STAGES=1..5: timing ablation, run only that many butterfly stages (wrong results)
+static uint32_t opt_int_rot_mask = 0x5;   // GGML_HEXAGON_INT_ROT_MASK: classes that get R32 (bit0 qkv, bit1 o-proj, bit2 gate+up)
+static uint32_t opt_int_rot   = 0;     // GGML_HEXAGON_INT_ROT=32: R32 rotation (in-lane WHT over 32 elements) on top of smoothing for A8 gate+up/qkv/o
 static int      opt_int_split = 0;     // GGML_HEXAGON_INT_SPLIT=1 enables the m-split overlap of the plain int8 op (measured slower, see log M75)
 static int    opt_mm_select  = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
 static int    opt_fa_select  = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
@@ -155,6 +158,7 @@ static int    opt_ar_scatter = 1; // 1 = reduce-scatter the fused ALLREDUCE+ADD 
 static u32vec opt_pmu_evt { 0x3, 0x111, 0x100, 0x105, 0x240, 0x256, 0x7D, 0x8C };
 
 static int opt_opbatch  = 1280; // max number of ops in a batch
+static int opt_nodirty  = 1;   // skip dirty-range tracking of DMA-only outputs that are only read by DMA
 static int opt_opqueue  = 8;   // max number of pending batches
 static int opt_optrace  = 0;    // trace buffer size per thread (0 means default)
 static int opt_oppoll   = 1;    // polling for batch completions (blocking waits let DDR clocks drop and slow the DSP)
@@ -386,7 +390,7 @@ static inline uint32_t ggml_hexagon_int8_class(const struct ggml_tensor * t) {
         if (strcmp(tail, "ffn_down.weight") == 0) {
             return big_k ? HTP_INT8_CLASS_K12288 : HTP_INT8_CLASS_DOWN;
         }
-        if (strcmp(tail, "per_layer_inp_gate.weight") == 0 || strcmp(tail, "per_layer_proj.weight") == 0) {
+        if (strcmp(tail, "inp_gate.weight") == 0 || strcmp(tail, "proj.weight") == 0) {   // gguf names of the PLE gate / projection
             return HTP_INT8_CLASS_PLE_GP;
         }
         return 0;
@@ -415,7 +419,7 @@ static inline bool ggml_hexagon_int8_class_enabled(const struct ggml_tensor * t)
 // classes the DSP currently has an int8 op for
 static inline bool ggml_hexagon_int8_class_has_op(uint32_t cls) {
     return cls == HTP_INT8_CLASS_GATE || cls == HTP_INT8_CLASS_QKV || cls == HTP_INT8_CLASS_O ||
-           cls == HTP_INT8_CLASS_DOWN || cls == HTP_INT8_CLASS_PLE_MP || cls == HTP_INT8_CLASS_K12288;
+           cls == HTP_INT8_CLASS_DOWN || cls == HTP_INT8_CLASS_PLE_MP || cls == HTP_INT8_CLASS_K12288 || cls == HTP_INT8_CLASS_PLE_GP;
 }
 
 static inline const std::vector<float> * ggml_hexagon_int8_smooth_vec(const struct ggml_tensor * t);
@@ -487,6 +491,9 @@ static inline int ggml_hexagon_int8_eff_mode(void) {
 // smoothing vector s_k of the group a weight tensor belongs to (nullptr: none). Group head name: k,v -> q ; up -> gate.
 static inline const std::vector<float> * ggml_hexagon_int8_smooth_vec(const struct ggml_tensor * t) {
     if (g_int_smooth.empty() || (opt_int_mm != 3 && opt_int_mm != 6)) { return nullptr; }
+    // A16 classes need no smoothing and are HURT by it: the activation error is gone, and W * s_k only amplifies the weight error
+    // (qkv A16 KLD 0.0015 unsmoothed vs 0.0026 smoothed, M106)
+    if (opt_int_mm_mask16 & ggml_hexagon_int8_class(t)) { return nullptr; }
     int il = -1; char tail[64] = { 0 };
     if (sscanf(t->name, "blk.%d.%63s", &il, tail) != 2) { return nullptr; }
     const char * head = nullptr;
@@ -497,6 +504,15 @@ static inline const std::vector<float> * ggml_hexagon_int8_smooth_vec(const stru
     char key[96]; snprintf(key, sizeof key, "blk.%d.%s", il, head);
     auto it = g_int_smooth.find(key);
     return (it != g_int_smooth.end() && it->second.size() == (size_t) t->ne[0]) ? &it->second : nullptr;
+}
+
+// R32 rotation: only on A8 classes that carry smoothing vectors (gate+up, qkv, o-proj), same decision on the packer and the kparams side
+static inline uint32_t ggml_hexagon_int8_rot_block(const struct ggml_tensor * t) {
+    if (opt_int_rot != 32 || opt_int_mm != 3 || !ggml_hexagon_int8_smooth_vec(t)) { return 0; }
+    const uint32_t cls = ggml_hexagon_int8_class(t);
+    if (cls != HTP_INT8_CLASS_GATE && cls != HTP_INT8_CLASS_QKV && cls != HTP_INT8_CLASS_O) { return 0; }
+    if ((opt_int_rot_mask & cls) == 0) { return 0; }   // per-class rotation mask (default gate+up and qkv; o-proj gains least for the most cycles)
+    return (t->ne[0] % 64 == 0) ? 32 : 0;   // the DSP butterfly works on vector pairs
 }
 
 // extra bytes of the smoothing vector behind the records of a tensor (1/s_k, 128 B padded)
@@ -2741,11 +2757,12 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
                 hex_int8_pack_q44(dst8, (const uint8_t *) data, (uint32_t) tensor->ne[1], (uint32_t) tensor->ne[0], red);
             } else {
                 const std::vector<float> * sm = ggml_hexagon_int8_smooth_vec(tensor);
+                const uint32_t rb = ggml_hexagon_int8_rot_block(tensor);
                 hex_int8_pack_rotated(dst8, (const uint8_t *) data, (uint32_t) tensor->ne[1], (uint32_t) tensor->ne[0], red,
-                                      ggml_hexagon_int8_rot_enabled(tensor), sm ? sm->data() : nullptr);
-                if (sm) {   // 1/s_k behind the records, read by the DSP quantizer
+                                      ggml_hexagon_int8_rot_enabled(tensor), sm ? sm->data() : nullptr, rb);
+                if (sm) {   // activation multiplier (sign * c / s_k) behind the records, read by the DSP quantizer
                     float * inv = (float *) (dst8 + hex_int8_extra_bytes((uint32_t) tensor->ne[0], (uint32_t) tensor->ne[1]));
-                    for (size_t i = 0; i < sm->size(); ++i) { inv[i] = 1.0f / (*sm)[i]; }
+                    for (size_t i = 0; i < sm->size(); ++i) { inv[i] = hex_int8_act_mult((uint32_t) i, (*sm)[i], rb); }
                 }
             }
         }
@@ -2767,11 +2784,12 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
                 hex_int8_pack_q44(dst8, extra->shadow_buf.data(), (uint32_t) tensor->ne[1], (uint32_t) tensor->ne[0], red);
             } else {
                 const std::vector<float> * sm = ggml_hexagon_int8_smooth_vec(tensor);
+                const uint32_t rb = ggml_hexagon_int8_rot_block(tensor);
                 hex_int8_pack_rotated(dst8, extra->shadow_buf.data(), (uint32_t) tensor->ne[1], (uint32_t) tensor->ne[0], red,
-                                      ggml_hexagon_int8_rot_enabled(tensor), sm ? sm->data() : nullptr);
-                if (sm) {   // 1/s_k behind the records, read by the DSP quantizer
+                                      ggml_hexagon_int8_rot_enabled(tensor), sm ? sm->data() : nullptr, rb);
+                if (sm) {   // activation multiplier (sign * c / s_k) behind the records, read by the DSP quantizer
                     float * inv = (float *) (dst8 + hex_int8_extra_bytes((uint32_t) tensor->ne[0], (uint32_t) tensor->ne[1]));
-                    for (size_t i = 0; i < sm->size(); ++i) { inv[i] = 1.0f / (*sm)[i]; }
+                    for (size_t i = 0; i < sm->size(); ++i) { inv[i] = hex_int8_act_mult((uint32_t) i, (*sm)[i], rb); }
                 }
             }
         }
@@ -3691,6 +3709,107 @@ struct ggml_hexagon_opbatch {
         }
     }
 
+    // ---- DMA-only dirty-range elision --------------------------------------------------------------------------
+    // The DSP records every op output as a dirty range and cleans the data cache for it before any later op reads the
+    // tensor. That is only needed if the output was written through the cache or is read through the cache. Outputs
+    // of DMA-only writers whose consumers in this batch all read them by DMA never touch the cache; they are flagged so
+    // the DSP skips the bookkeeping and the clean. Cache-written outputs (matmul, flash attention) keep the clean for
+    // ALL their consumers. The batch start/end clean-all still covers everything across batches.
+
+    // Ops whose outputs (all of them) are written by DMA only, on every kernel path.
+    static bool op_writes_dst_by_dma(uint32_t opc) {
+        switch (opc) {
+            case HTP_OP_MUL: case HTP_OP_ADD: case HTP_OP_SUB: case HTP_OP_DIV:
+            case HTP_OP_RMS_NORM: case HTP_OP_RMS_NORM_MUL: case HTP_OP_ADD_RMS_NORM_MUL: case HTP_OP_RMS_NORM_MUL_ADD:
+            case HTP_OP_SCALE: case HTP_OP_UNARY_GELU: case HTP_OP_UNARY_SILU: case HTP_OP_UNARY_TANH:
+            case HTP_OP_GLU_SWIGLU: case HTP_OP_GLU_GEGLU: case HTP_OP_GELU_MUL:
+            case HTP_OP_ROPE: case HTP_OP_RMS_NORM_MUL_ROPE:
+            case HTP_OP_SET_ROWS: case HTP_OP_GET_ROWS:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // True if op `o` reads its source slot `slot` by DMA only on every kernel path (audited in the DSP kernels).
+    bool op_reads_src_by_dma(const htp_op_desc & o, uint32_t slot) const {
+        switch (o.opcode) {
+            case HTP_OP_MUL_MAT: case HTP_OP_MUL_MAT_ADD: case HTP_OP_MUL_MAT_CAP: case HTP_OP_MUL_MAT_GELU_MUL:
+            case HTP_OP_MUL_MAT_AT:
+                return slot <= 1;   // weights and activation; bias / extra operands are read through the cache
+            case HTP_OP_MUL_MAT_NX: case HTP_OP_MUL_MAT_NX_GEGLU: case HTP_OP_MUL_MAT_NX_GEGLU_T: {
+                const auto * kp = (const htp_mm_kernel_params *) o.kernel_params;
+                return slot <= kp->n_weights;
+            }
+            case HTP_OP_RMS_NORM: case HTP_OP_RMS_NORM_MUL: case HTP_OP_ADD_RMS_NORM_MUL: case HTP_OP_RMS_NORM_MUL_ADD:
+            case HTP_OP_SCALE: case HTP_OP_UNARY_GELU: case HTP_OP_UNARY_SILU: case HTP_OP_UNARY_TANH:
+            case HTP_OP_GLU_SWIGLU: case HTP_OP_GLU_GEGLU: case HTP_OP_GELU_MUL:
+                return true;
+            case HTP_OP_ROPE: case HTP_OP_RMS_NORM_MUL_ROPE:
+                return slot == 0;   // positions (src1) are read through the cache
+            case HTP_OP_FLASH_ATTN_EXT:
+                return slot <= 2;   // Q, K, V; the mask is scanned through the cache
+            case HTP_OP_SET_ROWS: case HTP_OP_GET_ROWS:
+                return slot == 0;   // the index tensor is read through the cache
+            case HTP_OP_MUL: case HTP_OP_ADD: case HTP_OP_SUB: case HTP_OP_DIV: {
+                if (slot == 0) return true;
+                if (slot != 1) return false;
+                const auto * kp = (const htp_binary_kernel_params *) o.kernel_params;
+                return kp->kernel_type == HTP_BINARY_KERNEL_SAME_SHAPE || kp->kernel_type == HTP_BINARY_KERNEL_ROW_BCAST ||
+                       kp->kernel_type == HTP_BINARY_KERNEL_SCALAR_DMA  || kp->kernel_type == HTP_BINARY_KERNEL_CHUNKED;
+            }
+            default:
+                return false;
+        }
+    }
+
+    void mark_nodirty() {
+        if (!opt_nodirty || n_ops == 0) return;
+
+        struct ent { uint64_t s, e; uint32_t op, slot; };
+        std::vector<ent> srcs;
+        srcs.reserve(n_ops * 3);
+        auto key = [&](const htp_tensor & t, uint64_t off) { return ((uint64_t) t.bi << 48) | off; };
+
+        for (uint32_t i = 0; i < n_ops; i++) {
+            const htp_op_desc & o = h_ops[i];
+            for (uint32_t j = 0; j < HTP_OP_MAX_INPUTS; j++) {
+                if (o.src[j] == 0xffff) continue;
+                const htp_tensor & t = h_tens[o.src[j]];
+                srcs.push_back({ key(t, t.data), key(t, t.data + t.size), i, j });
+            }
+        }
+        std::sort(srcs.begin(), srcs.end(), [](const ent & a, const ent & b) { return a.s < b.s; });
+        std::vector<uint64_t> pmax(srcs.size());
+        for (size_t k = 0; k < srcs.size(); k++) {
+            pmax[k] = std::max<uint64_t>(srcs[k].e, k ? pmax[k - 1] : (uint64_t) 0);
+        }
+
+        for (uint32_t i = 0; i < n_ops; i++) {
+            htp_op_desc & o = h_ops[i];
+            if (!op_writes_dst_by_dma(o.opcode)) continue;
+
+            for (uint32_t d = 0; d < HTP_OP_MAX_OUTPUTS; d++) {
+                if (o.dst[d] == 0xffff) continue;
+                const htp_tensor & y = h_tens[o.dst[d]];
+                if (y.flags & (HTP_TENSOR_WEIGHT | HTP_TENSOR_FENCE)) continue;
+                const uint64_t ys = key(y, y.data), ye = key(y, y.data + y.size);
+
+                bool ok = true;
+                // every source (of this or any later op) that overlaps the output must be read by DMA only
+                size_t hi = std::lower_bound(srcs.begin(), srcs.end(), ye, [](const ent & a, uint64_t v) { return a.s < v; }) - srcs.begin();
+                for (size_t k = hi; k-- > 0 && pmax[k] > ys; ) {
+                    const ent & e = srcs[k];
+                    if (e.e <= ys || e.op < i) continue;
+                    if (!op_reads_src_by_dma(h_ops[e.op], e.slot)) { ok = false; break; }
+                }
+                if (ok) {
+                    o.flags |= 1U << (HTP_OPFLAGS_NODIRTY_SHIFT + d);
+                }
+            }
+        }
+    }
+
     void update_mdev_group(uint32_t mdev_idx) {
         if (n_ops > 0 && h_ops[0].opcode == HTP_OP_MDEV_GROUP) {
             h_ops[0].params[0] = (int32_t) mdev_idx;
@@ -4398,6 +4517,7 @@ struct ggml_hexagon_opbatch {
             kparams.int_mm    = (uint8_t) ggml_hexagon_int8_eff_mode();
             kparams.bias2     = (HEX_INT8_BIAS_BITS < 32) ? 1 : 0;
             kparams.smooth    = ggml_hexagon_int8_smooth_vec(last_node.inputs[0]) ? 1 : 0;
+            kparams.int8_split = (uint8_t) (ggml_hexagon_int8_rot_block(last_node.inputs[0]) ? (16 | (opt_int_rot_abl << 5)) : 0);
             if (kparams.int_mm >= 2 && kparams.int_mm <= 5) {
                 // pre-packed int8 weights must exist for both gate and up
                 kparams.int_mm = (ggml_hexagon_int8_rot_tensor(last_node.inputs[0]) && ggml_hexagon_int8_rot_tensor(last_node.inputs[1])) ? kparams.int_mm : 0;
@@ -5254,6 +5374,9 @@ void ggml_hexagon_session::flush_batch(size_t min_ops) {
     if (op_batch->n_ops < min_ops) { return; }
 
     op_batch->sort_buffers();
+    if (this->mdev.count <= 1) {
+        op_batch->mark_nodirty();
+    }
 
     htp_opbatch_req req {};
     dspqueue_buffer dbuf{};
@@ -6484,7 +6607,7 @@ static bool ggml_hexagon_precompute_hmx_mm_params(
         const uint32_t cls = ggml_hexagon_int8_class(src0);
         kparams->int_mm = (uint8_t) (((opt_int_mm_mask16 & cls) != 0) ? 6 : ggml_hexagon_int8_eff_mode());
         kparams->bias2  = (HEX_INT8_BIAS_BITS < 32) ? 1 : 0;   // records carry the two-level zero-point remainder only then
-        kparams->int8_split = opt_int_split ? 1 : 0;
+        kparams->int8_split = (uint8_t) ((opt_int_split & 15) | (ggml_hexagon_int8_rot_block(src0) ? (16 | (opt_int_rot_abl << 5)) : 0));
         kparams->smooth     = ggml_hexagon_int8_smooth_vec(src0) ? 1 : 0;
     }
     return true;
@@ -10622,6 +10745,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_verbose   = str_verbose  ? atoi(str_verbose)                      : 0;
     opt_opbatch   = str_opbatch  ? strtoul(str_opbatch, NULL, 0)          : opt_opbatch;
     opt_opqueue   = str_opqueue  ? strtoul(str_opqueue, NULL, 0)          : opt_opqueue;
+    if (getenv("GGML_HEXAGON_NODIRTY")) { opt_nodirty = atoi(getenv("GGML_HEXAGON_NODIRTY")); }
     opt_optrace   = str_optrace  ? strtoul(str_optrace, NULL, 0)          : (opt_opbatch * 256);
     opt_oppoll    = str_oppoll   ? strtoul(str_oppoll,  NULL, 0)          : opt_oppoll;
     opt_opfusion  = str_opfusion ? atoi(str_opfusion)                     : opt_opfusion;
@@ -10637,6 +10761,9 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     if (const char * s_rb = getenv("GGML_HEXAGON_INT_MM_REDUCE_BIG")) { opt_int_mm_reduce_big = (uint32_t) atoi(s_rb); }
     if (const char * s_mk = getenv("GGML_HEXAGON_INT_MM_MASK")) { opt_int_mm_mask = (uint32_t) strtoul(s_mk, NULL, 16); }
     if (const char * s_m16 = getenv("GGML_HEXAGON_INT_MM_MASK16")) { opt_int_mm_mask16 = (uint32_t) strtoul(s_m16, NULL, 16); }
+    if (const char * s_rs = getenv("GGML_HEXAGON_INT_ROT_STAGES")) { opt_int_rot_abl = (uint32_t) atoi(s_rs) & 7; }
+    if (const char * s_rm = getenv("GGML_HEXAGON_INT_ROT_MASK")) { opt_int_rot_mask = (uint32_t) strtoul(s_rm, NULL, 16); }
+    if (const char * s_ro = getenv("GGML_HEXAGON_INT_ROT")) { opt_int_rot = (uint32_t) atoi(s_ro); }
     if (const char * s_sp = getenv("GGML_HEXAGON_INT_SPLIT")) { opt_int_split = atoi(s_sp); }
     if (const char * s_so = getenv("GGML_HEXAGON_INT_SMOOTH_OPTIONAL")) { g_int_smooth_optional = atoi(s_so) != 0; }
     if (const char * s_sm = getenv("GGML_HEXAGON_INT_SMOOTH")) { ggml_hexagon_load_int_smooth(s_sm); }

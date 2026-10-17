@@ -369,6 +369,86 @@ Both runs side by side (same int tree, same configs; the earlier table is DEVICE
 - Both targets with one configuration: NOT MET (config A: decode 71.07, prefill 8424.51).
 - The bit-identical prefill ceiling stays about 8500-8700 t/s, for the structural reasons given in the repack round.
 
+## Current state: R32 rotation int8, L2 nodirty subset, FA head scan (RUN 9)
+
+RUN 9 supersedes the DEVICE RUN 7 state above as the pushed state. It adds, on top of the SET_ROWS round: (1) the R32
+rotation for the int8 path (an in-lane Walsh-Hadamard transform over 32 elements, applied on top of smoothing, in the
+host packer and in the DSP activation quantize); with it A8 also fits qkv and o-proj under the KLD gate. (2) The L2
+flush "nodirty" safe subset in the host op builder (`ggml-hexagon.cpp`, `std::max<uint64_t>` spelling) and the FA
+head-scan fix in `htp/flash-attn-ops.c`, together about -1.0 ms per ubatch. (3) The GELU+MUL stage cap in
+`htp/act-ops.c` (a thread's block is capped so each thread runs at least 4 pipeline stages). Source of the numbers:
+analysis/merge-log.md "DEVICE RUN 9" and analysis/hmx-int-log.md M123 / M124. The fp16 path stays bit-identical.
+
+Merged tree: fuse patch `fuse-fa1nd2` (2045 lines, 17 files) on the frozen int tree (3338 lines) with the v2 guard,
+lab plumbing removed. Same model, device and command lines as the previous rounds. Medians of 3 clean interleaved rounds,
+arm order rotated per round, 30 s gaps, a health check before every run; nothing was contaminated, excluded or repeated
+(pkg-new decode 54.13-54.35):
+
+| Arm | prefill pp512 (t/s) | ratio vs `pkg-new` | decode tg128 (t/s) | ratio vs `pkg-new` |
+|---|---|---|---|---|
+| `pkg-new` (baseline) | 7491.30 | 1.000 | 54.18 | 1.000 |
+| merged, `INT_MM=0` (fp16 path) | 8081.90 | 1.079 | 71.45 | 1.319 |
+| merged, int best-speed (R32, qkv + o + gate+up A8) | 8800.21 | 1.175 | 71.35 | 1.317 |
+| merged, int full-coverage | 8144.31 | 1.087 | 70.80 | 1.307 |
+| fuse-only `final17` (reference) | 8156.35 | 1.089 | 70.95 | 1.310 |
+
+Per round prefill (best-speed arm): 8596.01 / 8891.33 / 8800.21, every round above every other arm's median.
+
+- Recommended int configuration (best-speed):
+  `GGML_HEXAGON_INT_MM=3 GGML_HEXAGON_INT_ROT=32 GGML_HEXAGON_INT_ROT_MASK=4 GGML_HEXAGON_INT_MM_MASK=7
+  GGML_HEXAGON_INT_MM_LAYERS=7ffffffff GGML_HEXAGON_INT_MM_REDUCE=2 GGML_HEXAGON_INT_MM_REDUCE_BIG=4
+  GGML_HEXAGON_INT_SMOOTH=<path>/smooth.bin GGML_HEXAGON_VMEM=5G`. Here MASK=7 is qkv + o-proj + gate+up as A8, and
+  `ROT_MASK=4` applies R32 to the gate+up class (bit0 qkv, bit1 o-proj, bit2 gate+up). `smooth.bin` must still travel with
+  the model and the exact fp16 fallback when it is absent still applies (see the shipping requirement above).
+- Full-coverage arm (an option, not the recommendation):
+  `GGML_HEXAGON_INT_MM=3 GGML_HEXAGON_INT_ROT=32 GGML_HEXAGON_INT_ROT_MASK=7 GGML_HEXAGON_INT_MM_MASK=cf
+  GGML_HEXAGON_INT_MM_MASK16=c8 GGML_HEXAGON_INT_MM_LAYERS=7ffffffff GGML_HEXAGON_INT_MM_REDUCE=2
+  GGML_HEXAGON_INT_MM_REDUCE_BIG=4 GGML_HEXAGON_INT_SMOOTH=<path>/smooth.bin GGML_HEXAGON_VMEM=5G` (adds down, k=12288 and
+  the PLE gate / proj as A16 two-pass).
+- R32 lifts pp512 to 8800.21 = +17.5% over `pkg-new` (+8.9% over the same-session `INT_MM=0` arm). The earlier config A
+  (gate+up smoothed, no rotation) was +14.0% in run 7 and +9.0% in run 8, so R32 on qkv + o + gate+up is the first merged
+  state with an end-to-end prefill gain well outside the run-to-run noise.
+- The fp16-path changes (nodirty subset, FA head scan, GELU+MUL stage cap) did not produce a resolvable end-to-end change
+  at 3 rounds: `INT_MM=0` 8081.90 against 8099.76 (run 7) and 8017.04 (run 8), and `final17` reads 8156.35 in this
+  session, inside the arms' spread (stddev up to 8%). The expected 1 ms per ubatch is 1.7% of a 59-60 ms ubatch, below the
+  A/B resolution. Nothing regressed.
+
+### Gates (RUN 9)
+
+- `INT_MM=0` bit-identity (hard stop): PARITY_IDENTICAL, `llama-perplexity` PPL exactly 134.3955 +/- 6.77407, 5-output
+  gate SAME on all five (g0 g1 g2 s2 s0) against the fuse package.
+- Int best-speed against the fp16 logits (20 chunks, c512): KLD 0.006124 +/- 0.000347, top-p 96.941%, PPL 133.1222
+  (-0.94% vs 134.3955, informational), greedy identical.
+- Int full-coverage: KLD 0.006942 +/- 0.001158, top-p 96.569%, PPL 132.1043 (-1.70%), greedy identical.
+- Int PPL falls rather than rises, so the one-sided PPL rule holds; the KLD / top-p gate (0.008 / 96.0) governs.
+- `INT_MM=1` guard arm: one guard warning (first tensor `blk.0.ffn_gate.weight`), as in the earlier runs.
+- Static compile matrix: 31 objects / 0 errors on all 8 cells (SDK 6.6.0.0 and 6.7.0.0 x v73 v75 v79 v81); host
+  `clang++ -fsyntax-only` on `ggml-hexagon.cpp` 0 errors. The measured package was built before the one-line
+  `std::max<uint64_t>` spelling fix in the nodirty block (`std::max(..., 0ULL)` -> `std::max<uint64_t>(..., (uint64_t) 0)`);
+  it is a type-only change (uint64_t is unsigned long long on the device compiler) and the results are unaffected. The
+  committed tree has the fix and host clang++ is now clean. v73 / v75 / v79 are compile-only.
+
+### KPI distance (RUN 9)
+
+- Decode target 70 t/s: MET in all four arms (71.45 `INT_MM=0`, 71.35 best-speed, 70.95 `final17`, 70.80 full-coverage).
+  The best-speed arm clears 70 by +1.35 t/s with all three rounds at 70.50 or above; the full-coverage arm has one round
+  at 69.80.
+- Prefill target 10000 t/s: NOT MET. Best arm (best-speed) 8800.21 is 88.0% of it, 1200 t/s short (about 58.2 ms per
+  ubatch against 51.2 ms needed); its best single round is 8891.33.
+- Both targets with one configuration: NOT MET (best-speed: decode 71.35, prefill 8800.21); decode is met by every arm.
+
+### Two honest notes
+
+- (a) The full-coverage arm buys down and PLE coverage (more int8 matmuls) at -7.5% prefill versus best-speed (8144.31
+  vs 8800.21), which is essentially fp16-level speed (`INT_MM=0` 8081.90, `final17` 8156.35). It is an option for a
+  broader int8 footprint, not a speed configuration.
+- (b) Corrected accounting (hmx-int-log.md M123). The traced `prompt512.txt` is 721 tokens, i.e. two ubatches (512 + 209
+  rows); the earlier 46.9 ms fp16 matmul total and its int8 saving summed both. The 512-row ubatch has 30.6 ms of fp16
+  matmul. A perfect int8 version of every remaining fp16 matmul tops out around 62 ms per 512-row ubatch (about 8200
+  t/s) on this HMX, so the 10000 t/s target cannot come from int8 matmuls alone: it needs the fuse side (non-matmul
+  time, batch and DSP overhead) and int8 together. With the best-speed arm at 8800 and the fp16 state at about 8100, the
+  remaining 1200 t/s (about 7 ms per ubatch) has to be found in the non-matmul time.
+
 ## Optimization steps
 
 Numbers per step are medians of 6-8 interleaved `llama-bench` pp512 rounds on 10.92.138.99. That device was later found throttled on battery, so only the relative change between adjacent builds is meaningful. The final table above is from 10.92.137.16.

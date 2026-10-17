@@ -180,6 +180,9 @@ struct htp_buf_desc {
 
 enum htp_op_flags {
     HTP_OPFLAGS_STUB  = (1U << 0),
+    // Bit (HTP_OPFLAGS_NODIRTY_SHIFT + i): output i is written by DMA only and every consumer in the batch reads it
+    // by DMA only, so no dirty range is recorded for it (nothing to clean from the data cache).
+    HTP_OPFLAGS_NODIRTY_SHIFT = 8,
 };
 
 // Op descriptor

@@ -246,6 +246,156 @@ static inline void hmx_int8_quant_pair(uint8_t * dst_pair, float * sc, const flo
     }
 }
 
+static inline __attribute__((always_inline)) void hmx_int8_wht_pair_bit(HVX_Vector * a, HVX_Vector * b, int j);
+// 4 independent vector pairs through the five lane stages, stage-major, so the permute/shuffle latency of one pair is hidden by the others
+static inline __attribute__((always_inline)) void hmx_int8_wht32_x4(HVX_Vector * v) {
+    #define S4(j) do { hmx_int8_wht_pair_bit(&v[0], &v[1], j); hmx_int8_wht_pair_bit(&v[2], &v[3], j); \
+                       hmx_int8_wht_pair_bit(&v[4], &v[5], j); hmx_int8_wht_pair_bit(&v[6], &v[7], j); } while (0)
+    S4(0); S4(1); S4(2); S4(3); S4(4);
+    #undef S4
+}
+
+
+// A8 row pair, fast form: (1) optional static smoothing x *= inv_s (written back, the staging row is private) fused into the max
+// pass; (2) round-to-nearest-even via the float magic number: bits(y + 12583040.0f) - bits(1.5 * 2^23) = round(y) + 128, which also
+// folds the +128 offset (y is within [-127, 127] by construction). Two independent chains per loop so the vector latencies overlap.
+// Differs from hmx_int8_quant_pair only on exact .5 ties (even vs away from zero).
+static inline void hmx_int8_quant_pair_fast(uint8_t * dst_pair, float * sc, float * x0, float * x1, uint32_t k, const float * inv_s, uint32_t rot32) {
+    const uint32_t nkc = k / 32;
+    const HVX_Vector abs_mask = Q6_V_vsplat_R(0x7fffffff);
+    const HVX_Vector c127 = hvx_vec_splat_f32(127.0f);
+    const HVX_Vector tiny = hvx_vec_splat_f32(1e-30f);
+    const HVX_Vector magic = hvx_vec_splat_f32(12583040.0f);   // 1.5 * 2^23 + 128
+    const HVX_Vector base = Q6_V_vsplat_R(0x4b400000);
+    const HVX_Vector off128 = Q6_V_vsplat_R(128);
+    const HVX_Vector * sv = (const HVX_Vector *) inv_s;
+    float tmp[32] __attribute__((aligned(128)));
+    HVX_Vector inv[2] = { Q6_V_vzero(), Q6_V_vzero() };
+    float * xs[2] = { x0, x1 };
+
+    for (int r = 0; r < 2; ++r) {
+        if (!xs[r]) { continue; }
+        HVX_Vector * v = (HVX_Vector *) xs[r];
+        HVX_Vector m0 = tiny, m1 = tiny;
+        uint32_t i = 0;
+        if (rot32 == 1 && sv) {   // full rotation: 8 vectors per iteration (nkc % 8 == 0 checked below), stage-major over 4 pairs
+            for (; i + 7 < nkc; i += 8) {
+                HVX_Vector t[8];
+                #pragma unroll
+                for (int q = 0; q < 8; ++q) { t[q] = hvx_vec_mul_f32_f32(v[i + q], sv[i + q]); }
+                hmx_int8_wht32_x4(t);
+                #pragma unroll
+                for (int q = 0; q < 8; ++q) {
+                    v[i + q] = t[q];
+                    if (q & 1) { m1 = Q6_Vsf_vmax_VsfVsf(m1, Q6_V_vand_VV(t[q], abs_mask)); } else { m0 = Q6_Vsf_vmax_VsfVsf(m0, Q6_V_vand_VV(t[q], abs_mask)); }
+                }
+            }
+        }
+        for (; i + 1 < nkc; i += 2) {
+            HVX_Vector a = v[i], b = v[i + 1];
+            if (sv) { a = hvx_vec_mul_f32_f32(a, sv[i]); b = hvx_vec_mul_f32_f32(b, sv[i + 1]); }
+            if (rot32) {   // WHT over the 32 lanes of each vector: five lane-bit butterflies on the pair (sign * 1/sqrt(32) is in sv)
+                const uint32_t ns = (rot32 >> 1) ? ((rot32 >> 1) & 7) : 5;   // rot32 bit 0 = on; bits 1-3 = ablation: number of stages (0 = skip, wrong results)
+                if (ns > 0 && ns <= 5) { hmx_int8_wht_pair_bit(&a, &b, 0); }
+                if (ns > 1 && ns <= 5) { hmx_int8_wht_pair_bit(&a, &b, 1); }
+                if (ns > 2 && ns <= 5) { hmx_int8_wht_pair_bit(&a, &b, 2); }
+                if (ns > 3 && ns <= 5) { hmx_int8_wht_pair_bit(&a, &b, 3); }
+                if (ns > 4 && ns <= 5) { hmx_int8_wht_pair_bit(&a, &b, 4); }
+            }
+            if (sv) { v[i] = a; v[i + 1] = b; }
+            m0 = Q6_Vsf_vmax_VsfVsf(m0, Q6_V_vand_VV(a, abs_mask));
+            m1 = Q6_Vsf_vmax_VsfVsf(m1, Q6_V_vand_VV(b, abs_mask));
+        }
+        for (; i < nkc; ++i) {
+            HVX_Vector a = v[i];
+            if (sv) { a = hvx_vec_mul_f32_f32(a, sv[i]); v[i] = a; }
+            m0 = Q6_Vsf_vmax_VsfVsf(m0, Q6_V_vand_VV(a, abs_mask));
+        }
+        HVX_Vector mx = hvx_vec_reduce_max_f32(Q6_Vsf_vmax_VsfVsf(m0, m1));
+        hvx_vmem(tmp) = mx;
+        sc[r] = tmp[0] * (1.0f / 127.0f);
+        inv[r] = hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(mx), c127);
+    }
+
+    const HVX_Vector * v0 = (const HVX_Vector *) x0;
+    const HVX_Vector * v1 = (const HVX_Vector *) x1;
+    uint8_t * dp = dst_pair;
+    if (x0 && x1) {
+        #pragma unroll(2)
+        for (uint32_t kc = 0; kc < nkc; ++kc) {
+            const HVX_Vector u0 = Q6_Vw_vsub_VwVw(hvx_vec_add_f32_f32(hvx_vec_mul_f32_f32(v0[kc], inv[0]), magic), base);
+            const HVX_Vector u1 = Q6_Vw_vsub_VwVw(hvx_vec_add_f32_f32(hvx_vec_mul_f32_f32(v1[kc], inv[1]), magic), base);
+            *(HVX_Vector *) (dp + (size_t) kc * HMX_INT8_CROUTON_A) = Q6_Vw_vaslacc_VwVwR(Q6_Vw_vasl_VwR(u0, 8), u1, 24);
+        }
+    } else if (x0) {
+        const HVX_Vector hi = Q6_Vw_vasl_VwR(off128, 24);
+        for (uint32_t kc = 0; kc < nkc; ++kc) {
+            const HVX_Vector u0 = Q6_Vw_vsub_VwVw(hvx_vec_add_f32_f32(hvx_vec_mul_f32_f32(v0[kc], inv[0]), magic), base);
+            *(HVX_Vector *) (dp + (size_t) kc * HMX_INT8_CROUTON_A) = Q6_V_vor_VV(Q6_Vw_vasl_VwR(u0, 8), hi);
+        }
+    }
+}
+
+// A16, fast form: ONE pass produces both int8 pages. t = y - round(y) is bounded by 0.5, so the low page needs no residual-max
+// pass: lo = round(t * 254) fits int8 with the fixed scale s_lo = s_hi / 254 (the max |t| of a long row is ~0.5 anyway, so the
+// resolution is the same as the data-dependent scale). Both pages share the window shift/bias table of the weights.
+// sc = { s_hi(row0), s_hi(row1), s_lo(row0), s_lo(row1) }; smoothing (inv_s) is fused into the max pass as in the A8 form.
+static inline void hmx_int8_quant_pair_a16_fast(uint8_t * dst_hi, uint8_t * dst_lo, float * sc, float * x0, float * x1, uint32_t k,
+                                                const float * inv_s) {
+    const uint32_t nkc = k / 32;
+    const HVX_Vector abs_mask = Q6_V_vsplat_R(0x7fffffff);
+    const HVX_Vector c127 = hvx_vec_splat_f32(127.0f);
+    const HVX_Vector c254 = hvx_vec_splat_f32(254.0f);
+    const HVX_Vector tiny = hvx_vec_splat_f32(1e-30f);
+    const HVX_Vector magic_h = hvx_vec_splat_f32(12583040.0f);   // 1.5 * 2^23 + 128 : bits - base = round + 128
+    const HVX_Vector magic_f = hvx_vec_splat_f32(12582912.0f);   // 1.5 * 2^23       : (y + magic) - magic = round(y) as float
+    const HVX_Vector base = Q6_V_vsplat_R(0x4b400000);
+    const HVX_Vector * sv = (const HVX_Vector *) inv_s;
+    float tmp[32] __attribute__((aligned(128)));
+    HVX_Vector inv[2] = { Q6_V_vzero(), Q6_V_vzero() };
+    float * xs[2] = { x0, x1 };
+
+    for (int r = 0; r < 2; ++r) {
+        if (!xs[r]) { continue; }
+        HVX_Vector * v = (HVX_Vector *) xs[r];
+        HVX_Vector m0 = tiny, m1 = tiny;
+        uint32_t i = 0;
+        for (; i + 1 < nkc; i += 2) {
+            HVX_Vector a = v[i], b = v[i + 1];
+            if (sv) { a = hvx_vec_mul_f32_f32(a, sv[i]); b = hvx_vec_mul_f32_f32(b, sv[i + 1]); v[i] = a; v[i + 1] = b; }
+            m0 = Q6_Vsf_vmax_VsfVsf(m0, Q6_V_vand_VV(a, abs_mask));
+            m1 = Q6_Vsf_vmax_VsfVsf(m1, Q6_V_vand_VV(b, abs_mask));
+        }
+        for (; i < nkc; ++i) {
+            HVX_Vector a = v[i];
+            if (sv) { a = hvx_vec_mul_f32_f32(a, sv[i]); v[i] = a; }
+            m0 = Q6_Vsf_vmax_VsfVsf(m0, Q6_V_vand_VV(a, abs_mask));
+        }
+        HVX_Vector mx = hvx_vec_reduce_max_f32(Q6_Vsf_vmax_VsfVsf(m0, m1));
+        hvx_vmem(tmp) = mx;
+        sc[r] = tmp[0] * (1.0f / 127.0f);
+        sc[2 + r] = sc[r] * (1.0f / 254.0f);
+        inv[r] = hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(mx), c127);
+    }
+    if (!x1) { inv[1] = inv[0]; sc[1] = 0.0f; sc[3] = 0.0f; }
+
+    const HVX_Vector * v0 = (const HVX_Vector *) x0;
+    const HVX_Vector * v1 = (const HVX_Vector *) (x1 ? x1 : x0);   // pad row: duplicate of row 0, output discarded
+    #pragma unroll(2)
+    for (uint32_t kc = 0; kc < nkc; ++kc) {
+        const HVX_Vector y0 = hvx_vec_mul_f32_f32(v0[kc], inv[0]);
+        const HVX_Vector y1 = hvx_vec_mul_f32_f32(v1[kc], inv[1]);
+        const HVX_Vector r0 = hvx_vec_add_f32_f32(y0, magic_h);
+        const HVX_Vector r1 = hvx_vec_add_f32_f32(y1, magic_h);
+        const HVX_Vector t0 = hvx_vec_mul_f32_f32(hvx_vec_sub_f32_f32(y0, hvx_vec_sub_f32_f32(hvx_vec_add_f32_f32(y0, magic_f), magic_f)), c254);
+        const HVX_Vector t1 = hvx_vec_mul_f32_f32(hvx_vec_sub_f32_f32(y1, hvx_vec_sub_f32_f32(hvx_vec_add_f32_f32(y1, magic_f), magic_f)), c254);
+        const HVX_Vector l0 = Q6_Vw_vsub_VwVw(hvx_vec_add_f32_f32(t0, magic_h), base);
+        const HVX_Vector l1 = Q6_Vw_vsub_VwVw(hvx_vec_add_f32_f32(t1, magic_h), base);
+        *(HVX_Vector *) (dst_hi + (size_t) kc * HMX_INT8_CROUTON_A) = Q6_Vw_vaslacc_VwVwR(Q6_Vw_vasl_VwR(Q6_Vw_vsub_VwVw(r0, base), 8), Q6_Vw_vsub_VwVw(r1, base), 24);
+        *(HVX_Vector *) (dst_lo + (size_t) kc * HMX_INT8_CROUTON_A) = Q6_Vw_vaslacc_VwVwR(Q6_Vw_vasl_VwR(l0, 8), l1, 24);
+    }
+}
+
 // forward declaration used below
 
 // A16: two int8 passes for a row pair. dst_hi/dst_lo point at the pair's 128-byte stride inside its 32-row tile

@@ -1154,7 +1154,14 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_buf_desc * bufs
             dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
     }
 
-    htp_tensor_dirty_all(octx->ctx, octx->dsts, HTP_OP_MAX_OUTPUTS);
+    {
+        const struct htp_tensor * dirty_dsts[HTP_OP_MAX_OUTPUTS];
+        for (uint32_t i = 0; i < HTP_OP_MAX_OUTPUTS; i++) {
+            const bool no_dirty = (op->flags >> (HTP_OPFLAGS_NODIRTY_SHIFT + i)) & 1U;
+            dirty_dsts[i] = no_dirty ? NULL : octx->dsts[i];
+        }
+        htp_tensor_dirty_all(octx->ctx, dirty_dsts, HTP_OP_MAX_OUTPUTS);
+    }
 
     htp_mdev_group_barrier(octx);
 
