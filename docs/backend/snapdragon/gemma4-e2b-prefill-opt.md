@@ -256,10 +256,12 @@ DEVICE RUN 6 (with the repack and the `INT_MM=1` guard):
 | merged, `INT_MM=1` (guard: falls back to fp16) | 7912.27 (+5.7%) | 71.29 (+31.7%) |
 | merged, config A (packed int8 + smoothing, gate+up all 35 layers) | 8569.12 (+14.5%) | 70.20 (+29.6%) |
 
-- Effect of the repack on the same int tree (run 5 -> run 6): decode `INT_MM=0` 66.52 -> 71.53 (+7.5%, +7.4% in the
-  summary figure) and config A 65.74 -> 70.20; prefill config A 8231.58 -> 8569.12 (+4.1%). The `pkg-new` references of
-  the two sessions moved only 54.33 -> 54.15, so the decode gain is the repack. Prefill of `INT_MM=0` is unchanged within
-  noise (8003 against 7913 and 7986 before).
+- Effect of the repack on the same int tree (run 5 -> run 6, same-session pkg-new references 54.33 -> 54.15): decode
+  `INT_MM=0` 66.52 -> 71.53 (+7.5%) and config A 65.74 -> 70.20, so the decode gain is the repack. Its prefill effect is
+  within run-to-run noise and is NOT claimed: `INT_MM=0` prefill is 7986 / 7913 / 8003 in runs 4 / 5 / 6 against
+  `pkg-new` references of 7605 / 7464 / 7483, i.e. ratios vs `pkg-new` of 1.050 / 1.060 / 1.070; config A moved
+  8407 -> 8232 -> 8569 with the same noise (own stddev up to 15% in single rounds). The run-5 and run-6 tables above are the
+  measurements; do not read the config A prefill difference between them as an effect of the repack.
 - Config A is 0.981 of `INT_MM=0` in decode (70.20 vs 71.53). m=1 decode never runs the int8 ops; the offset is probably
   the larger weight buffer (inference, not measured). One config A decode round (69.47) is below 70; the median clears
   70 by 0.20 t/s only.
@@ -300,9 +302,11 @@ DEVICE RUN 6 (with the repack and the `INT_MM=1` guard):
   51.2 ms, about 8.5 ms to go).
 - Both targets with one configuration: NOT MET (`INT_MM=0` has decode 71.5 and prefill 8003, config A has prefill 8569
   and decode on the 70 line).
-- Honest prefill ceiling, bit-identically: about 8500-8700 t/s. The matmuls are about 38 ms of the roughly 60 ms ubatch
-  and are already near the fp16 HMX peak; the rest is descriptor-bound or scheduler-level work. The host-overlap item
-  (overlapping the next ubatch input upload with the device) is worth 0 ms from the backend.
+- Honest prefill ceiling, bit-identically: about 8500-8700 t/s, for two structural reasons. (1) The HMX matmuls are
+  about 38 ms of the roughly 60 ms ubatch and are already near the fp16 HMX peak. (2) The rest is descriptor- and
+  bandwidth-bound op work, and its largest single item is the host serial upload / download around each ubatch
+  (about 3-4 ms), which sits outside the backend (a scheduler-level change); overlapping it from the backend is worth
+  0 ms.
 
 ## Optimization steps
 
