@@ -1598,6 +1598,8 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, T * data
         // bookkeeping of the KQ mask cells that could change for other tokens of the same sequence
         std::unordered_map<llama_seq_id, uint32_t>              seq_srct;
         std::unordered_map<llama_seq_id, std::vector<uint32_t>> seq_idxs;
+        // positions of the cells in seq_idxs (all of them are non-empty cells of that sequence)
+        std::unordered_map<llama_seq_id, std::vector<llama_pos>> seq_pos;
 
         for (uint32_t ii = 0; ii < n_tps; ++ii) {
             const uint32_t i = s*n_tps + ii;
@@ -1640,6 +1642,39 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, T * data
 
                     seq_srct[seq_id] = i;
                 }
+            }
+
+            // fast path for the cells that can still change: every cell in idxs was non-empty and in this sequence
+            // when it was recorded (cells do not change during this call), so only the position tests remain
+            if (!alibi && !is_2d && prev) {
+                auto & pk = seq_pos[seq_id];
+                if (pk.size() != idxs.size()) {
+                    pk.resize(idxs.size());
+                    for (size_t k = 0; k < idxs.size(); ++k) {
+                        pk[k] = cells.pos_get(idxs[k]);
+                    }
+                }
+
+                const size_t     nk = idxs.size();
+                const uint32_t * ix = idxs.data();
+                const llama_pos * pp = pk.data();
+                T * row = data + idst;
+
+                for (size_t k = 0; k < nk; ++k) {
+                    const llama_pos p0k = pp[k];
+
+                    bool masked = causal && p0k > p1;
+
+                    if (swa && !masked) {
+                        // see llama_non_causal_type
+                        const bool in_span = !causal && args.hparams.non_causal_type == LLAMA_NON_CAUSAL_TYPE_SWA_FULL && p0k >= seq_pos_min[seq_id];
+                        masked = !in_span && llama_hparams::is_masked_swa(n_swa, swa_type, p0k, p1);
+                    }
+
+                    row[ix[k]] = masked ? mask_drop : mask_keep;
+                }
+
+                continue;
             }
 
             for (uint32_t jj = 0; jj < n_kv; ++jj) {

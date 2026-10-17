@@ -449,6 +449,44 @@ Per round prefill (best-speed arm): 8596.01 / 8891.33 / 8800.21, every round abo
   time, batch and DSP overhead) and int8 together. With the best-speed arm at 8800 and the fp16 state at about 8100, the
   remaining 1200 t/s (about 7 ms per ubatch) has to be found in the non-matmul time.
 
+## RUN 10: KQ-mask fill fast path (host timeline)
+
+RUN 10 adds one source change on top of the RUN 9 state: a fast path in `src/llama-kv-cache.cpp` for the KQ-mask fill
+(for the cells that can still change, the cell positions are cached per sequence and only the position tests run, so
+the mask row is written in one tight loop; alibi and 2D positions keep the old path). The tree is the one the RUN 10
+package was built from, including the `std::max<uint64_t>` spelling of the nodirty block that the RUN 9 package predated.
+Source of the numbers: analysis/merge-log.md "DEVICE RUN 10", analysis/fuse-log.md (host-cost round). Same model, device
+and command lines as before; medians of 3 clean interleaved rounds (decode round 1 was flagged contaminated by the
+health rule, excluded and repeated, never averaged; session otherwise normal, pkg-new decode 54.16-54.24):
+
+| Arm | prefill pp512 (t/s) | ratio vs `pkg-new` | decode tg128 (t/s) | ratio vs `pkg-new` |
+|---|---|---|---|---|
+| `pkg-new` (baseline) | 7299.55 | 1.000 | 54.20 | 1.000 |
+| merged, `INT_MM=0` (fp16 path) | 8144.79 | 1.116 | 70.93 | 1.309 |
+| merged, int best-speed | 9004.30 | 1.234 | 71.56 | 1.320 |
+| merged, int full-coverage | 8210.40 | 1.125 | 71.47 | 1.319 |
+
+- The int best-speed arm has a second, same-session prefill sample from the decode runs: 8567.32 (vs 8212.78 for
+  `INT_MM=0` there). The two samples of the same arm differ by 5%, so its level in this session is 8.6-9.0k t/s; do not
+  read 9004 as a step over RUN 9's 8800.21 (inside the spread of the arm, round stddev 0.9-6.3%).
+- Gates unchanged from RUN 9: `INT_MM=0` bit-identity PASS (PARITY_IDENTICAL, PPL exactly 134.3955 +/- 6.77407, 5/5
+  SAME). Best-speed KLD 0.006124, top-p 96.941%, PPL 133.1222. Full-coverage KLD 0.006942, top-p 96.569%, PPL 132.1043.
+  Static compile matrix 31 objects / 0 errors on 8 cells; host `clang++` syntax check 0 errors on `ggml-hexagon.cpp` and
+  `src/llama-kv-cache.cpp`.
+- KQ-mask fast path, host timeline (two instrumented builds of the same tree, `INT_MM=0`, `-p 512 -n 0 -r 5`, 8 runs per
+  build): `set_inputs` of the KQ masks 645.5 -> 241.5 us per run, i.e. -0.40 ms of host timeline (all llama
+  `set_inputs` 0.657 -> 0.251 ms). Byte-identical masks: 58/58 in-process fill compares and 162 layout cases, 0
+  mismatches, plus unchanged end-to-end outputs on the real package. This is a host-timeline win, NOT a throughput claim:
+  the total host time before the batch write (6.9-7.0 ms with the instrumented stderr output, 2-3 ms spread between
+  runs) and the device wait (56.9 ms) do not resolve 0.4 ms, and the pp512 differences are inside the arms' spread.
+- `GGML_HEXAGON_HOSTBUF=1` was measured and left off by default: it removes about 1.1 ms of input copies on the host but
+  loses three norm-chain fusions through an allocator / overlap interaction (`ggml_hexagon_tensors_overlap` on the new
+  intermediate layout), netting only +0.3..0.9%. Making it a win would need a separate allocator task.
+- KPI: decode > 70 MET in all merged arms (70.93 `INT_MM=0`, 71.56 best-speed with all rounds >= 70.34, 71.47
+  full-coverage). Prefill > 10000 NOT MET: best arm 9004.30 = 90.0% of it, 996 t/s short (honest band 8.6-9.0k); the
+  remaining gap has no identified lever above 1 ms (the host headroom left is about 0.4 ms, now taken, and the matmul
+  accounting is in the RUN 9 notes above).
+
 ## Optimization steps
 
 Numbers per step are medians of 6-8 interleaved `llama-bench` pp512 rounds on 10.92.138.99. That device was later found throttled on battery, so only the relative change between adjacent builds is meaningful. The final table above is from 10.92.137.16.
