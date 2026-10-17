@@ -48,47 +48,26 @@ static void dequantize_tiled_weight_to_fp16_task_q4_0(
         HVX_Vector v_sc = hvx_vmem(tile_src + 512);
         HVX_Vector v_scale_duplicated = Q6_V_lo_W(Q6_W_vshuff_VVR(v_sc, v_sc, -2));
 
-        // Load all 4 groups in parallel
-        HVX_Vector vq0 = hvx_vmem(tile_src + 0 * 128);
-        HVX_Vector vq1 = hvx_vmem(tile_src + 1 * 128);
-        HVX_Vector vq2 = hvx_vmem(tile_src + 2 * 128);
-        HVX_Vector vq3 = hvx_vmem(tile_src + 3 * 128);
-
-        // Nibble extraction
-        HVX_Vector v_lo0 = Q6_V_vand_VV(vq0, mask_h4);
-        HVX_Vector v_hi0 = Q6_Vub_vlsr_VubR(vq0, 4);
-        HVX_Vector v_lo1 = Q6_V_vand_VV(vq1, mask_h4);
-        HVX_Vector v_hi1 = Q6_Vub_vlsr_VubR(vq1, 4);
-        HVX_Vector v_lo2 = Q6_V_vand_VV(vq2, mask_h4);
-        HVX_Vector v_hi2 = Q6_Vub_vlsr_VubR(vq2, 4);
-        HVX_Vector v_lo3 = Q6_V_vand_VV(vq3, mask_h4);
-        HVX_Vector v_hi3 = Q6_Vub_vlsr_VubR(vq3, 4);
-
-        // Offsetting (-8)
-        v_lo0 = Q6_Vb_vsub_VbVb(v_lo0, i8);
-        v_hi0 = Q6_Vb_vsub_VbVb(v_hi0, i8);
-        v_lo1 = Q6_Vb_vsub_VbVb(v_lo1, i8);
-        v_hi1 = Q6_Vb_vsub_VbVb(v_hi1, i8);
-        v_lo2 = Q6_Vb_vsub_VbVb(v_lo2, i8);
-        v_hi2 = Q6_Vb_vsub_VbVb(v_hi2, i8);
-        v_lo3 = Q6_Vb_vsub_VbVb(v_lo3, i8);
-        v_hi3 = Q6_Vb_vsub_VbVb(v_hi3, i8);
-
-        // Shuffling
-        HVX_VectorPair vp_shuf0 = Q6_W_vshuff_VVR(v_hi0, v_lo0, -1);
-        HVX_VectorPair vp_shuf1 = Q6_W_vshuff_VVR(v_hi1, v_lo1, -1);
-        HVX_VectorPair vp_shuf2 = Q6_W_vshuff_VVR(v_hi2, v_lo2, -1);
-        HVX_VectorPair vp_shuf3 = Q6_W_vshuff_VVR(v_hi3, v_lo3, -1);
-
-        // Unpack to 16-bit
-        HVX_VectorPair vp_int16_lo0 = Q6_Wh_vunpack_Vb(Q6_V_lo_W(vp_shuf0));
-        HVX_VectorPair vp_int16_hi0 = Q6_Wh_vunpack_Vb(Q6_V_hi_W(vp_shuf0));
-        HVX_VectorPair vp_int16_lo1 = Q6_Wh_vunpack_Vb(Q6_V_lo_W(vp_shuf1));
-        HVX_VectorPair vp_int16_hi1 = Q6_Wh_vunpack_Vb(Q6_V_hi_W(vp_shuf1));
-        HVX_VectorPair vp_int16_lo2 = Q6_Wh_vunpack_Vb(Q6_V_lo_W(vp_shuf2));
-        HVX_VectorPair vp_int16_hi2 = Q6_Wh_vunpack_Vb(Q6_V_hi_W(vp_shuf2));
-        HVX_VectorPair vp_int16_lo3 = Q6_Wh_vunpack_Vb(Q6_V_lo_W(vp_shuf3));
-        HVX_VectorPair vp_int16_hi3 = Q6_Wh_vunpack_Vb(Q6_V_hi_W(vp_shuf3));
+        // Layout v2: plane j holds low nibbles = k 8j+c and high nibbles = k 8j+4+c (4 bytes per row).
+        // vdeal on halfwords separates the low-nibble and high-nibble k pairs back into k order, then widen to 16 bit.
+        HVX_VectorPair vp_int16_lo0, vp_int16_hi0, vp_int16_lo1, vp_int16_hi1;
+        HVX_VectorPair vp_int16_lo2, vp_int16_hi2, vp_int16_lo3, vp_int16_hi3;
+#define Q4_0_V2_PLANE(J, VLO, VHI)                                                                      \
+        {                                                                                               \
+            HVX_Vector vq = hvx_vmem(tile_src + (J) * 128);                                             \
+            HVX_Vector v_l = Q6_Vb_vsub_VbVb(Q6_V_vand_VV(vq, mask_h4), i8);                            \
+            HVX_Vector v_h = Q6_Vb_vsub_VbVb(Q6_Vub_vlsr_VubR(vq, 4), i8);                              \
+            HVX_VectorPair vd = Q6_W_vdeal_VVR(v_h, v_l, -2);                                           \
+            HVX_VectorPair u0 = Q6_Wh_vunpack_Vb(Q6_V_lo_W(vd));                                        \
+            HVX_VectorPair u1 = Q6_Wh_vunpack_Vb(Q6_V_hi_W(vd));                                        \
+            VLO = Q6_W_vcombine_VV(Q6_V_lo_W(u1), Q6_V_lo_W(u0));                                       \
+            VHI = Q6_W_vcombine_VV(Q6_V_hi_W(u1), Q6_V_hi_W(u0));                                       \
+        }
+        Q4_0_V2_PLANE(0, vp_int16_lo0, vp_int16_hi0)
+        Q4_0_V2_PLANE(1, vp_int16_lo1, vp_int16_hi1)
+        Q4_0_V2_PLANE(2, vp_int16_lo2, vp_int16_hi2)
+        Q4_0_V2_PLANE(3, vp_int16_lo3, vp_int16_hi3)
+#undef Q4_0_V2_PLANE
 
         // Convert and scale multiplication
         HVX_Vector v_grp0_0 = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_lo_W(vp_int16_lo0)), v_scale_duplicated));

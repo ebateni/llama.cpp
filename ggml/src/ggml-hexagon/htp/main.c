@@ -822,6 +822,7 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_MUL_MAT:
         case HTP_OP_MUL_MAT_ADD:
         case HTP_OP_MUL_MAT_CAP:
+        case HTP_OP_MUL_MAT_GELU_MUL:
         case HTP_OP_MUL_MAT_AT:
             return op_matmul(octx);
 

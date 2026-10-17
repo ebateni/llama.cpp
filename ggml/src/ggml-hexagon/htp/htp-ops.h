@@ -43,6 +43,7 @@ enum htp_data_type {
 
 // Constats for internal types
 #define QK_Q4_0_TILED  256  // 32x32 Q4_0 tiled layout
+#define HTP_Q4_0_TILE_LAYOUT_V2 1  // Q4_0 tiles are stored in layout v2 (plane i: 4 bytes/row, lo nibble k 8i+c, hi nibble k 8i+4+c)
 #define QK_Q8_0_TILED  128  // 32x32 Q8_0 tiled layout
 #define QK_MXFP4_TILED 256  // 32x32 MXFP4 tiled layout
 
@@ -126,6 +127,7 @@ enum htp_op_code {
     HTP_OP_RMS_NORM_MUL_ADD,   // y = (rms_norm(x) * w1 + r) [* s]; [out = rms_norm(y) * w2]
     HTP_OP_GELU_MUL,           // dst = gelu(src0) * src1 (row-wise, src1 may be strided)
     HTP_OP_MUL_MAT_CAP,        // m=1 q4_0 mat-vec with the logit softcap epilogue: s2 * tanh(s1 * (W x)); params = [s1, s2]
+    HTP_OP_MUL_MAT_GELU_MUL,   // m=1 q4_0 mat-vec with epilogue dst = gelu(W x) * src[3] (src[2] unused)
 
     HTP_OP_INVALID
 };

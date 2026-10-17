@@ -821,7 +821,8 @@ static void hvx_mv_2d_repacked_pk_##SUFFIX(unsigned int nth, unsigned int ith, v
         return;                                                                                                          \
     }                                                                                                                    \
                                                                                                                          \
-    for (uint32_t ct = ct_start; ct < ct_end; ct++) {                                                                    \
+    uint32_t ct = ct_start;                                                                                              \
+    for (; ct < ct_end; ct++) {                                                                                          \
         const uint8_t * w_tile = (void *) dma_queue_pop(dma_q).dst;                                                      \
                                                                                                                          \
         float * dst_ptr = &tmp[ct * 32 - src0_start_row];                                                                \
@@ -833,8 +834,8 @@ static void hvx_mv_2d_repacked_pk_##SUFFIX(unsigned int nth, unsigned int ith, v
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);                                                            \
                                                                                                                          \
         if (push_ct < ct_end) {                                                                                          \
-            dma_queue_push(dma_q, dma_make_data(w_tile, src0_row + push_ct * tile_row_stride),                           \
-                           pk_bytes, pk_bytes, pk_bytes, 1);                                        \
+            dma_queue_push(dma_q, dma_make_data((void *) w_tile, src0_row + push_ct * tile_row_stride),                  \
+                           pk_bytes, pk_bytes, pk_bytes, 1);                                                             \
             push_ct++;                                                                                                   \
         }                                                                                                                \
     }                                                                                                                    \
@@ -850,7 +851,22 @@ static void hvx_mv_2d_repacked_pk_##SUFFIX(unsigned int nth, unsigned int ith, v
             hvx_tanh_f32_aa((uint8_t *) tmp, (const uint8_t *) tmp, copy_cnt);                                           \
             hvx_scale_offset_f32_aa((uint8_t *) tmp, (const uint8_t *) tmp, copy_cnt, cap_s2, 0.0f);                     \
         }                                                                                                                \
-        if (src2) {                                                                                                      \
+        if (octx->op == HTP_OP_MUL_MAT_GELU_MUL) {                                                                       \
+            /* dst = gelu(W x) * y for this thread's slice; y = src[3] (m=1, one row) */                                 \
+            const float * restrict y_row = (const float *) octx->src[3]->data;                                           \
+            float * restrict d_row = (float *) dst->data;                                                                \
+            const int nv = copy_cnt / 32;                                                                                \
+            const int nl = copy_cnt % 32;                                                                                \
+            const HVX_Vector * restrict vt = (const HVX_Vector *) tmp;                                                   \
+            for (int i = 0; i < nv; i++) {                                                                               \
+                HVX_Vector r = hvx_vec_mul_f32_f32(hvx_vec_gelu_f32(vt[i]), hvx_vmemu(&y_row[src0_start_row + i * 32]));  \
+                hvx_vec_store_u(&d_row[src0_start_row + i * 32], 32 * sizeof(float), r);                                 \
+            }                                                                                                            \
+            if (nl) {                                                                                                    \
+                HVX_Vector r = hvx_vec_mul_f32_f32(hvx_vec_gelu_f32(vt[nv]), hvx_vmemu(&y_row[src0_start_row + nv * 32]));\
+                hvx_vec_store_u(&d_row[src0_start_row + nv * 32], nl * sizeof(float), r);                                \
+            }                                                                                                            \
+        } else if (src2) {                                                                                               \
             hvx_add_f32_uuu((uint8_t *) &dst_col[src0_start_row],                                                        \
                             (const uint8_t *) tmp,                                                                       \
                             (const uint8_t *) ((const float *) mmctx->vtcm_bias + src0_start_row),                       \
@@ -928,7 +944,8 @@ static void hvx_mm_nx_2d_repacked_pk_##SUFFIX(unsigned int nth, unsigned int ith
                            src_w_row + push_ct * tile_row_stride), pk_bytes, pk_bytes, pk_bytes, 1);         \
         }                                                                                                                         \
                                                                                                                                   \
-        for (uint32_t ct = ct_start; ct < ct_end; ct++) {                                                                         \
+        uint32_t ct = ct_start;                                                                                                   \
+        for (; ct < ct_end; ct++) {                                                                                               \
             const uint8_t * w_tile = (void *) dma_queue_pop(dma_q).dst;                                                           \
             int valid_rows = (int)ne01 - (int)(ct * 32);                                                                          \
             valid_rows = MIN(32, MAX(0, valid_rows));                                                                             \
@@ -4177,6 +4194,11 @@ static int hmx_mm_nx_geglu_2d_int8(struct htp_ops_context * octx, const struct h
         (tiled_out && ((size_t) dst->ne[0] != n || (dst->data & (VLEN - 1)) != 0))) {
         return HTP_STATUS_NO_SUPPORT;
     }
+#ifdef HTP_Q4_0_TILE_LAYOUT_V2
+    // Merge guard: the expand below (hmx_int8_expand_q4_0) reads the legacy Q4_0 tile bytes; the tiles are v2 here.
+    // Refuse unconditionally; the caller falls through to the fp16 HMX geglu (the host also never selects this path).
+    return HTP_STATUS_NO_SUPPORT;
+#endif
 
     const uint32_t tile_size         = kparams->tile_size;
     const uint32_t aligned_tile_size = kparams->aligned_tile_size;

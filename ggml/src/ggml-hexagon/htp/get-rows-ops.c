@@ -224,17 +224,28 @@ static __attribute__((noinline)) void compute_get_rows_tiled(float * dst, const 
     if (q4) {
         const HVX_VectorPred first1 = Q6_Q_vsetq_R(1);
         const HVX_VectorPred first3 = Q6_Q_vsetq_R(3);
-        for (int group = 3; group >= 0; --group) {
-            const HVX_Vector v = Q6_V_vror_VR(hvx_vmem(tile + group * VLEN), row);
-            // Four planes contribute bytes at 0, 32, 64 and 96 after rotation.
-            HVX_Vector packed = Q6_V_vmux_QVV(first1, v, Q6_V_vror_VR(v, 31));
-            packed = Q6_V_vmux_QVV(first2, packed, Q6_V_vror_VR(v, 62));
-            packed = Q6_V_vmux_QVV(first3, packed, Q6_V_vror_VR(v, 93));
-            vq = Q6_V_vmux_QVV(first4, packed, Q6_V_vror_VR(vq, VLEN - 4));
+        if (!q4_k) {
+            // Q4_0 layout v2: plane j holds 4 bytes per row (low nibble k 8j+c, high nibble k 8j+4+c)
+            for (int group = 3; group >= 0; --group) {
+                const HVX_Vector v = Q6_V_vror_VR(hvx_vmem(tile + group * VLEN), 4 * row);
+                vq = Q6_V_vmux_QVV(first4, v, Q6_V_vror_VR(vq, VLEN - 4));
+            }
+            const HVX_Vector lo = Q6_V_vand_VV(vq, Q6_Vb_vsplat_R(0x0F));
+            const HVX_Vector hi = Q6_Vub_vlsr_VubR(vq, 4);
+            vq = Q6_V_lo_W(Q6_W_vshuff_VVR(hi, lo, -4));
+        } else {
+            for (int group = 3; group >= 0; --group) {
+                const HVX_Vector v = Q6_V_vror_VR(hvx_vmem(tile + group * VLEN), row);
+                // Four planes contribute bytes at 0, 32, 64 and 96 after rotation.
+                HVX_Vector packed = Q6_V_vmux_QVV(first1, v, Q6_V_vror_VR(v, 31));
+                packed = Q6_V_vmux_QVV(first2, packed, Q6_V_vror_VR(v, 62));
+                packed = Q6_V_vmux_QVV(first3, packed, Q6_V_vror_VR(v, 93));
+                vq = Q6_V_vmux_QVV(first4, packed, Q6_V_vror_VR(vq, VLEN - 4));
+            }
+            const HVX_Vector lo = Q6_V_vand_VV(vq, Q6_Vb_vsplat_R(0x0F));
+            const HVX_Vector hi = Q6_Vub_vlsr_VubR(vq, 4);
+            vq = Q6_V_lo_W(Q6_W_vshuff_VVR(hi, lo, -1));
         }
-        const HVX_Vector lo = Q6_V_vand_VV(vq, Q6_Vb_vsplat_R(0x0F));
-        const HVX_Vector hi = Q6_Vub_vlsr_VubR(vq, 4);
-        vq = Q6_V_lo_W(Q6_W_vshuff_VVR(hi, lo, -1));
         if (!q4_k) {
             vq = Q6_Vb_vsub_VbVb(vq, Q6_Vb_vsplat_R(8));
         }

@@ -226,6 +226,84 @@ yields the vrmpy operand order directly.
   long context (> 512), math. For another language or a very different distribution, regenerate `smooth.bin` with
   `smooth_calib.py` and re-validate the KLD gate on a sample of that text before enabling.
 
+## Repack round: q4_0 tile layout v2, decode above 70 t/s (DEVICE RUN 5 and 6)
+
+This round adds a load-time q4_0 weight repack (tile layout v2) to the merged tree of the previous round, plus a
+merge-local guard for `INT_MM=1`. Source of the numbers: analysis/merge-log.md "DEVICE RUN 5" and "DEVICE RUN 6",
+analysis/fuse-log.md (repack and DECODE-2 sections). The fp16 path stays bit-identical.
+
+Same model, device and command lines as the previous round (`gemma-4-E2B-it-Q4_0-imatembd.gguf`, SC8480XP, HTP v81,
+Windows 11 ARM64, HTP0; `llama-bench -fa 1 -t 6 --poll 1000 -ub 512 --load-mode none`, prefill `-p 512 -n 0 -r 5`,
+decode `-p 512 -n 128 -r 5`). Warmup of every arm first, 3 rounds, arm order rotated per round, 30 s gaps, health check
+before every run; both sessions were normal (pkg-new decode 53.7-54.4) and no round was contaminated or excluded.
+Medians of the 3 rounds.
+
+DEVICE RUN 5 (before the repack: final9 fuse state plus the frozen int tree):
+
+| Arm | prefill pp512 (t/s) | decode tg128 (t/s) |
+|---|---|---|
+| `pkg-new` (baseline) | 7463.79 | 54.33 |
+| merged, `INT_MM=0` | 7913.13 | 66.52 |
+| merged, `INT_MM=1` (expand) | 7975.23 | 66.84 |
+| merged, config A | 8231.58 | 65.74 |
+
+DEVICE RUN 6 (with the repack and the `INT_MM=1` guard):
+
+| Arm | prefill pp512 (t/s) | decode tg128 (t/s) |
+|---|---|---|
+| `pkg-new` (baseline) | 7482.80 | 54.15 |
+| merged, `INT_MM=0` (fp16 path) | 8003.40 (+7.0%) | 71.53 (+32.1%) |
+| merged, `INT_MM=1` (guard: falls back to fp16) | 7912.27 (+5.7%) | 71.29 (+31.7%) |
+| merged, config A (packed int8 + smoothing, gate+up all 35 layers) | 8569.12 (+14.5%) | 70.20 (+29.6%) |
+
+- Effect of the repack on the same int tree (run 5 -> run 6): decode `INT_MM=0` 66.52 -> 71.53 (+7.5%, +7.4% in the
+  summary figure) and config A 65.74 -> 70.20; prefill config A 8231.58 -> 8569.12 (+4.1%). The `pkg-new` references of
+  the two sessions moved only 54.33 -> 54.15, so the decode gain is the repack. Prefill of `INT_MM=0` is unchanged within
+  noise (8003 against 7913 and 7986 before).
+- Config A is 0.981 of `INT_MM=0` in decode (70.20 vs 71.53). m=1 decode never runs the int8 ops; the offset is probably
+  the larger weight buffer (inference, not measured). One config A decode round (69.47) is below 70; the median clears
+  70 by 0.20 t/s only.
+- How the repack works: q4_0 weights are repacked once at load so that the vrmpy operand order comes out of a plain
+  AND / shift. Unpack per plane drops from 9 ops (vand, vlsr, 3x vshuff, 2x valign, 2 vsub) to 4 (vand, vlsr, 2 vsub.b).
+  The geglu dot loop goes from 63-64 packets (26 vshuff, 21 valign) to 34-35 packets per 2 k-tiles (16 vrmpy, 2 vshuff,
+  5 valign per tile-dot), about 45% fewer. Op sum per token 14.23 -> 13.17 ms (NX+GEGLU 5.37 -> 4.95, MUL_MAT 4.95 ->
+  4.57, lm_head 1.94 -> 1.76 ms); the loop is now partly DMA-bound again, so the packet cut shows as -8% op time.
+  Files: host repack (`repack_q4_0_tiled`, v2 flag for Q4_0 only, IQ4_NL keeps the legacy layout) and the
+  `INT_MM=1` guard in `ggml-hexagon.cpp`, the packed kernels in `htp/hvx-mm-kernels-tiled.h` and `htp/matmul-ops.c`,
+  the HMX dequant consumers in `htp/hmx-mm-kernels-tiled.h` and `htp/get-rows-ops.c`; layout flag
+  `HTP_Q4_0_TILE_LAYOUT_V2` in `htp/htp-ops.h`.
+
+### Gates (DEVICE RUN 6)
+
+- `INT_MM=0` bit-identity on the v2 layout: PARITY_IDENTICAL, PPL exactly 134.3955 +/- 6.77407, 5-output gate SAME on
+  all five (g0 g1 g2 s2 s0).
+- Config A against the fp16 logits: KLD 0.007160, top-p 96.941%, PPL 132.4530 (-1.44%, informational), greedy identical.
+  Identical to runs 4 and 5: the int8 copy is packed from the GGUF bytes, independent of the tile layout.
+- Static compile matrix: 31 objects / 0 errors on all 8 cells (SDK 6.6.0.0 and 6.7.0.0 x v73 v75 v79 v81); host
+  `clang++ -std=c++17 -mavx512fp16 -fsyntax-only` on `ggml-hexagon.cpp` 0 errors. v73 / v75 / v79 are compile-only.
+
+### INT_MM=1 is deprecated under the v2 layout
+
+- `INT_MM=1` (on-the-fly int8 expand of Q4_0 tiles) reads the legacy tile layout, which no longer exists after the
+  repack. Guard on the host: `try_fuse_mul_mat_geglu` sets `int_mm=0` for `INT_MM=1` with Q4_0 tensors and logs one
+  warning (`INT_MM=1 (on-the-fly int8 expand of Q4_0 tiles) is disabled: the Q4_0 tile layout is v2 ...`). Guard on the
+  DSP: `hmx_mm_nx_geglu_2d_int8` returns NO_SUPPORT under `HTP_Q4_0_TILE_LAYOUT_V2`, so the op falls through to the fp16
+  HMX geglu.
+- Measured: the `INT_MM=1` arm is bit-equal to fp16 (KLD 0, top-p 100.000%, PPL 134.3955, one warning line) and runs at
+  fp16 speed (7912.27 / 71.29). Config A is unaffected.
+
+### KPI verdict
+
+- Decode target 70 t/s: MET. `INT_MM=0` 71.53 (+1.53), guard arm 71.29, config A 70.20 (+0.20 only, one round at
+  69.47). Single device session, 3 rounds.
+- Prefill target 10000 t/s: NOT MET. Best arm config A 8569.12 is 85.7% of it, 1431 t/s short (59.7 ms ubatch against
+  51.2 ms, about 8.5 ms to go).
+- Both targets with one configuration: NOT MET (`INT_MM=0` has decode 71.5 and prefill 8003, config A has prefill 8569
+  and decode on the 70 line).
+- Honest prefill ceiling, bit-identically: about 8500-8700 t/s. The matmuls are about 38 ms of the roughly 60 ms ubatch
+  and are already near the fp16 HMX peak; the rest is descriptor-bound or scheduler-level work. The host-overlap item
+  (overlapping the next ubatch input upload with the device) is worth 0 ms from the backend.
+
 ## Optimization steps
 
 Numbers per step are medians of 6-8 interleaved `llama-bench` pp512 rounds on 10.92.138.99. That device was later found throttled on battery, so only the relative change between adjacent builds is meaningful. The final table above is from 10.92.137.16.

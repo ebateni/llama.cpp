@@ -324,7 +324,7 @@ struct htp_opformat {
     void format_kernel_params(char * str, size_t max_size, const htp_opnode & node) {
         if (node.opcode == HTP_OP_MUL_MAT || node.opcode == HTP_OP_MUL_MAT_ID ||
             node.opcode == HTP_OP_MUL_MAT_NX || node.opcode == HTP_OP_MUL_MAT_ID_NX ||
-            node.opcode == HTP_OP_MUL_MAT_ADD || node.opcode == HTP_OP_MUL_MAT_CAP || node.opcode == HTP_OP_MUL_MAT_NX_GEGLU ||
+            node.opcode == HTP_OP_MUL_MAT_ADD || node.opcode == HTP_OP_MUL_MAT_CAP || node.opcode == HTP_OP_MUL_MAT_GELU_MUL || node.opcode == HTP_OP_MUL_MAT_NX_GEGLU ||
             node.opcode == HTP_OP_MUL_MAT_NX_GEGLU_T || node.opcode == HTP_OP_MUL_MAT_AT) {
             const auto * kparams = (const struct htp_mm_kernel_params *) node.kernel_params;
             const char * path = "unknown";

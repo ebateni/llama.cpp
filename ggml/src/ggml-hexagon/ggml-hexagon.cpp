@@ -174,6 +174,7 @@ enum ggml_hexagon_fusion_flags {
     GGML_HEXAGON_FUSE_RMS_NORM_MUL_ADD = (1 << 11), // 2048
     GGML_HEXAGON_FUSE_MUL_MAT_CAP   = (1 << 12), // 4096
     GGML_HEXAGON_FUSE_GELU_MUL      = (1 << 13), // 8192
+    GGML_HEXAGON_FUSE_MUL_MAT_GELU_MUL = (1 << 14), // 16384
 };
 
 #define GGML_HEXAGON_FUSE_DEFAULT (~0)
@@ -418,6 +419,19 @@ static inline bool ggml_hexagon_int8_class_has_op(uint32_t cls) {
 }
 
 static inline const std::vector<float> * ggml_hexagon_int8_smooth_vec(const struct ggml_tensor * t);
+
+// Merge guard: Q4_0 weights are stored in tile layout v2 (repack_q4_0_tiled(..., true)); IQ4_NL keeps the legacy layout.
+static inline bool ggml_hexagon_q4_0_tiles_v2(const struct ggml_tensor * t) {
+    return t->type == GGML_TYPE_Q4_0;
+}
+static void ggml_hexagon_warn_int1_v2(const char * name) {
+    static bool warned = false;
+    if (!warned) {
+        warned = true;
+        GGML_LOG_WARN("ggml-hex: INT_MM=1 (on-the-fly int8 expand of Q4_0 tiles) is disabled: the Q4_0 tile layout is v2 and the "
+                      "expand reads the legacy layout (first tensor %s); those ops stay on the fp16 path\n", name);
+    }
+}
 
 // A8 classes that need the smoothing vectors (mode 3): gate+up always A8; qkv and o-proj unless the class runs A16 (MASK16)
 static inline bool ggml_hexagon_int8_needs_smooth(const struct ggml_tensor * t, uint32_t cls) {
@@ -1145,7 +1159,9 @@ static void pack_mxfp4_quants(block_mxfp4 * x, const uint8_t * qs, unsigned int 
 }
 
 // repack q4_0 data into q4_0_tiled tensor
-static void repack_q4_0_tiled(ggml_tensor * t, const void * data, size_t offset, size_t size) {
+// v2 (Q4_0 only): plane i holds, per row, 4 bytes (q[8i+c] | q[8i+4+c] << 4); the HVX dot needs no nibble shuffles.
+// IQ4_NL keeps the original cp-major layout (v2 = false).
+static void repack_q4_0_tiled(ggml_tensor * t, const void * data, size_t offset, size_t size, bool v2 = false) {
     const block_q4_0 * src_matrix = (const block_q4_0 *) data;
     int64_t ne0 = t->ne[0];
     int64_t ne1 = t->ne[1];
@@ -1184,9 +1200,19 @@ static void repack_q4_0_tiled(ggml_tensor * t, const void * data, size_t offset,
                     }
                 }
 
-                for (int cp = 0; cp < 16; cp++) {
-                    for (int row = 0; row < 32; row++) {
-                        tile_dst[cp * 32 + row] = (tile_quants[row][2 * cp + 1] << 4) | tile_quants[row][2 * cp];
+                if (v2) {
+                    for (int i = 0; i < 4; i++) {
+                        for (int row = 0; row < 32; row++) {
+                            for (int c = 0; c < 4; c++) {
+                                tile_dst[i * 128 + 4 * row + c] = (tile_quants[row][8 * i + 4 + c] << 4) | tile_quants[row][8 * i + c];
+                            }
+                        }
+                    }
+                } else {
+                    for (int cp = 0; cp < 16; cp++) {
+                        for (int row = 0; row < 32; row++) {
+                            tile_dst[cp * 32 + row] = (tile_quants[row][2 * cp + 1] << 4) | tile_quants[row][2 * cp];
+                        }
                     }
                 }
 
@@ -1201,7 +1227,7 @@ static void repack_q4_0_tiled(ggml_tensor * t, const void * data, size_t offset,
 }
 
 // repack q4_0_tiled tensor into q4_0 data
-static void repack_tiled_q4_0(void * data, const ggml_tensor * t, size_t offset, size_t size) {
+static void repack_tiled_q4_0(void * data, const ggml_tensor * t, size_t offset, size_t size, bool v2 = false) {
     block_q4_0 * dst_matrix = (block_q4_0 *) data;
     int64_t ne0 = t->ne[0];
     int64_t ne1 = t->ne[1];
@@ -1245,11 +1271,23 @@ static void repack_tiled_q4_0(void * data, const ggml_tensor * t, size_t offset,
                 const uint8_t * tile_src = matrix_src + (ct * n_k_tiles + kt) * tile_size;
 
                 uint8_t tile_quants[32][32];
-                for (int cp = 0; cp < 16; cp++) {
-                    for (int row = 0; row < 32; row++) {
-                        uint8_t val = tile_src[cp * 32 + row];
-                        tile_quants[row][2 * cp + 0] = val & 0x0F;
-                        tile_quants[row][2 * cp + 1] = val >> 4;
+                if (v2) {
+                    for (int i = 0; i < 4; i++) {
+                        for (int row = 0; row < 32; row++) {
+                            for (int c = 0; c < 4; c++) {
+                                const uint8_t val = tile_src[i * 128 + 4 * row + c];
+                                tile_quants[row][8 * i + c]     = val & 0x0F;
+                                tile_quants[row][8 * i + 4 + c] = val >> 4;
+                            }
+                        }
+                    }
+                } else {
+                    for (int cp = 0; cp < 16; cp++) {
+                        for (int row = 0; row < 32; row++) {
+                            uint8_t val = tile_src[cp * 32 + row];
+                            tile_quants[row][2 * cp + 0] = val & 0x0F;
+                            tile_quants[row][2 * cp + 1] = val >> 4;
+                        }
                     }
                 }
 
@@ -2616,7 +2654,7 @@ static void repack_tiled_q5_K(void * data, const ggml_tensor * t, size_t offset,
 static void repack_tensor_tiled(ggml_tensor * tensor, const void * data, size_t size) {
     switch (tensor->type) {
         case GGML_TYPE_Q4_0:
-            repack_q4_0_tiled(tensor, data, 0, size);
+            repack_q4_0_tiled(tensor, data, 0, size, true);
             break;
 
         case GGML_TYPE_Q4_1:
@@ -2773,7 +2811,7 @@ static void ggml_backend_hexagon_buffer_get_tensor(ggml_backend_buffer_t buffer,
         case GGML_TYPE_Q4_0:
             GGML_ASSERT(offset == 0);
             GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-            repack_tiled_q4_0(data, tensor, offset, size);
+            repack_tiled_q4_0(data, tensor, offset, size, true);
             break;
 
         case GGML_TYPE_Q4_1:
@@ -2935,7 +2973,7 @@ static void ggml_backend_hexagon_buffer_get_tensor_2d(ggml_backend_buffer_t buff
 
     switch (tensor->type) {
         case GGML_TYPE_Q4_0:
-            repack_tiled_q4_0(temp_buf.data(), tensor, offset, temp_size);
+            repack_tiled_q4_0(temp_buf.data(), tensor, offset, temp_size, true);
             break;
 
         case GGML_TYPE_Q4_1:
@@ -4364,6 +4402,11 @@ struct ggml_hexagon_opbatch {
                 // pre-packed int8 weights must exist for both gate and up
                 kparams.int_mm = (ggml_hexagon_int8_rot_tensor(last_node.inputs[0]) && ggml_hexagon_int8_rot_tensor(last_node.inputs[1])) ? kparams.int_mm : 0;
             } else if (kparams.int_mm) {
+                // Merge guard (Q4_0 tile layout v2): INT_MM=1 expands the legacy tile bytes on the DSP; refuse, stay on fp16.
+                if (kparams.int_mm == 1 && (ggml_hexagon_q4_0_tiles_v2(last_node.inputs[0]) || ggml_hexagon_q4_0_tiles_v2(last_node.inputs[1]))) {
+                    ggml_hexagon_warn_int1_v2(last_node.inputs[0]->name);
+                    kparams.int_mm = 0;
+                }
                 int il = -1;
                 if (sscanf(last_node.inputs[0]->name, "blk.%d.", &il) == 1 && il >= 0 && il < 64) {
                     kparams.int_mm = ((opt_int_mm_layers_gate >> il) & 1) ? kparams.int_mm : 0;
@@ -4815,6 +4858,68 @@ struct ggml_hexagon_opbatch {
                     sess->c_name(), n_ops - 1, kp->m_chunk, kp->n_chunk);
     }
 
+    // MUL_MAT (m=1, q4_0, HVX) feeding the freshly formed GELU+MUL: gate the matmul epilogue with gelu(.) * y
+    // so the intermediate never leaves VTCM and one op dispatch disappears. Runs after try_fuse_gelu_mul().
+    bool try_merge_mul_mat_gelu_mul() {
+        if (n_ops < 2 || !ggml_hexagon_is_fusion_enabled(GGML_HEXAGON_FUSE_MUL_MAT_GELU_MUL)) return false;
+
+        htp_opnode & gm = ops[n_ops - 1];
+        htp_opnode & mm = ops[n_ops - 2];
+        if (gm.opcode != HTP_OP_GELU_MUL || gm.outputs.size() != 1 || gm.inputs.size() != 2) return false;
+        if (mm.opcode != HTP_OP_MUL_MAT || mm.outputs.size() != 1 || mm.inputs.size() != 2) return false;
+
+        const ggml_tensor * x_out = mm.outputs[0];
+        if (gm.inputs[0] != x_out || !ggml_hexagon_tensor_is_fuseable(x_out)) return false;
+
+        const ggml_tensor * w   = mm.inputs[0];
+        const ggml_tensor * act = mm.inputs[1];
+        const ggml_tensor * y   = gm.inputs[1];
+        const ggml_tensor * dst = gm.outputs[0];
+        if (w->type != GGML_TYPE_Q4_0 || act->type != GGML_TYPE_F32) return false;
+        if (act->ne[1] * act->ne[2] * act->ne[3] != 1 || (act->ne[0] % 64) != 0) return false;
+        if (x_out->ne[1] != 1 || x_out->ne[2] != 1 || x_out->ne[3] != 1) return false;
+        if (dst->ne[1] != 1 || y->ne[1] != 1 || y->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) return false;
+        if (sess->mdev.count > 1) return false;
+
+        const auto * kp = (const struct htp_mm_kernel_params *) mm.kernel_params;
+        if (kp->n_hmx || kp->collapse || kp->kernel_type == HTP_MM_KERNEL_UNSUPPORTED) return false;
+        if (kp->kernel_type != HTP_MM_KERNEL_HVX_QUANT_ROW && kp->kernel_type != HTP_MM_KERNEL_HVX_QUANT_BLOCK) return false;
+
+        // each thread reads its own slice of y and writes the same slice of dst after the dot: exact aliasing only
+        if (ggml_hexagon_tensors_overlap(dst, y) && !(dst->data == y->data && ggml_nbytes(dst) == ggml_nbytes(y))) return false;
+        if (ggml_hexagon_tensors_overlap(dst, act) || ggml_hexagon_tensors_overlap(y, x_out)) return false;
+
+        mm.opcode = HTP_OP_MUL_MAT_GELU_MUL;
+        mm.name   = "MUL_MAT+GELU+MUL";
+        mm.inputs.clear();
+        mm.inputs.push_back(w);
+        mm.inputs.push_back(act);
+        mm.inputs.push_back(nullptr);
+        mm.inputs.push_back(y);
+        mm.outputs.clear();
+        mm.outputs.push_back(dst);
+        for (auto * f : gm.fused) { mm.fused.push_back(f); }
+        mm.fused.push_back(gm.node);
+
+        htp_op_desc & o = h_ops[n_ops - 2];
+        o.opcode = HTP_OP_MUL_MAT_GELU_MUL;
+        o.src[0] = add_tensor(w);
+        o.src[1] = add_tensor(act);
+        o.src[2] = 0xffff;
+        o.src[3] = add_tensor(y);
+        for (uint32_t s = 4; s < HTP_OP_MAX_INPUTS; s++) {
+            o.src[s] = 0xffff;
+        }
+        o.dst[0] = add_tensor(dst);
+        for (uint32_t d = 1; d < HTP_OP_MAX_OUTPUTS; d++) {
+            o.dst[d] = 0xffff;
+        }
+
+        n_ops--;
+        HEX_VERBOSE("ggml-hex: %s fused MUL_MAT+GELU+MUL (#%u)\n", sess->c_name(), n_ops - 1);
+        return true;
+    }
+
     // UNARY GELU -> MUL by a second f32 tensor (per-layer embedding gate): gelu(x) * y in one pass
     bool try_fuse_gelu_mul(const htp_opnode & node) {
         if (n_ops == 0 || node.opcode != HTP_OP_MUL) return false;
@@ -4865,6 +4970,7 @@ struct ggml_hexagon_opbatch {
         }
 
         HEX_VERBOSE("ggml-hex: %s fused GELU+MUL (#%u)\n", sess->c_name(), n_ops - 1);
+        try_merge_mul_mat_gelu_mul();
         return true;
     }
 
