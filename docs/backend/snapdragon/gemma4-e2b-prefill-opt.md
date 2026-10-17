@@ -308,6 +308,67 @@ DEVICE RUN 6 (with the repack and the `INT_MM=1` guard):
   (about 3-4 ms), which sits outside the backend (a scheduler-level change); overlapping it from the backend is worth
   0 ms.
 
+## Final state: multi-row SET_ROWS block DMA (DEVICE RUN 7)
+
+The final tree adds one source change on top of the repack round: `htp/set-rows-ops.c` groups SET_ROWS into block DMAs
+(new kernels `set_rows_thread_block_{f32,f16}_{int32,int64}`, consecutive-index detection, block size `SET_ROWS_BLOCK`
+= 16, dispatched before the old kernel). Per op (PROFILE=1, last prefill ubatch, same session, repack vs repack plus
+B=16): SET_ROWS 0.930 -> 0.533 ms per ubatch (-0.40 ms); with the B=8 first version it was 0.919 -> 0.553 ms. The
+fp16 path stays bit-identical. Source of the numbers: analysis/merge-log.md "DEVICE RUN 7" and analysis/fuse-log.md
+("PREFILL item 1 RESULT", "final13 RESULT"). Same model, device and command lines as the previous rounds.
+
+DEVICE RUN 7 (final tree, v2 guard, frozen int tree), medians of the 3 clean interleaved rounds. Warmup of every arm
+first, 30 s gaps, a health check before every run. Two rounds were flagged contaminated by the health rule (prefill
+round 2, decode round 3), excluded and repeated, never averaged; the session was otherwise normal (pkg-new decode
+53.8-54.3):
+
+| Arm | prefill pp512 (t/s) | ratio vs `pkg-new` | decode tg128 (t/s) | ratio vs `pkg-new` |
+|---|---|---|---|---|
+| `pkg-new` (baseline) | 7391.58 | 1.000 | 54.13 | 1.000 |
+| merged, `INT_MM=0` (fp16 path) | 8099.76 | 1.096 | 71.42 | 1.319 |
+| merged, `INT_MM=1` (guard: falls back to fp16) | 8130.88 | 1.100 | 71.03 | 1.312 |
+| merged, config A (packed int8 + smoothing) | 8424.51 | 1.140 | 71.07 | 1.313 |
+
+Both runs side by side (same int tree, same configs; the earlier table is DEVICE RUN 6 above, this one is DEVICE RUN 7):
+
+| Metric | run 6 | run 7 | run 7 / run 6 |
+|---|---|---|---|
+| pp512 `INT_MM=0` | 8003.40 | 8099.76 | 1.012 |
+| pp512 config A | 8569.12 | 8424.51 | 0.983 |
+| pp512 guard arm | 7912.27 | 8130.88 | 1.028 |
+| tg128 `INT_MM=0` | 71.53 | 71.42 | 0.998 |
+| tg128 config A | 70.20 | 71.07 | 1.012 |
+| tg128 guard arm | 71.29 | 71.03 | 0.996 |
+| pp512 `pkg-new` | 7482.80 | 7391.58 | 0.988 |
+
+- SET_ROWS B=16 is NEUTRAL within noise; no gain is claimed. Decode (which never takes the multi-row SET_ROWS) differs
+  by -0.2% / +1.2% / -0.4% with per-run stddev 0.3-1.7%. Prefill changes of +1.2%, -1.7% and +2.8% have mixed signs
+  across the arms and sit inside the run-to-run spread (arm stddev up to 5.8%, `pkg-new` round stddev up to 14.8%).
+  The expected effect, about -0.4 ms per ubatch (about +0.7% prefill), is below the resolution of a 3-round A/B.
+- The run-6 vs run-7 spread on the same config (config A prefill 8569.12 vs 8424.51, decode 70.20 vs 71.07) is
+  run-to-run noise, not an effect of the change. Read both tables as two samples of the same state.
+
+### Gates (DEVICE RUN 7)
+
+- `INT_MM=0` bit-identity (hard stop): PARITY_IDENTICAL, `llama-perplexity` PPL exactly 134.3955 +/- 6.77407, 5-output
+  gate SAME on all five (g0 g1 g2 s2 s0).
+- Config A against the fp16 logits: KLD 0.007160, top-p 96.941%, PPL 132.4530 (-1.44%, informational), greedy
+  identical; identical to runs 4-6.
+- `INT_MM=1` with the v2 guard: KLD 0, top-p 100.000%, PPL 134.3955 (equal to fp16), greedy identical, one guard
+  warning (first tensor `blk.0.ffn_gate.weight`).
+- Static compile matrix: 31 objects / 0 errors on all 8 cells (SDK 6.6.0.0 and 6.7.0.0 x v73 v75 v79 v81); host
+  `clang++` syntax check 0 errors. v73 / v75 / v79 are compile-only.
+
+### KPI distance (DEVICE RUN 7)
+
+- Decode target 70 t/s: MET in all three merged arms (71.42 `INT_MM=0`, 71.03 guard arm, 71.07 config A). Config A
+  margin is +1.07 t/s with one of three rounds below 70 (69.68).
+- Prefill target 10000 t/s: NOT MET. Best arm config A 8424.51 (median) is 84.2% of it, 1575 t/s short; its best single
+  round is 8463.50. `INT_MM=0` is 8099.76. Run 6 gave 8569.12 (85.7%) for the same configuration, see the noise note
+  above.
+- Both targets with one configuration: NOT MET (config A: decode 71.07, prefill 8424.51).
+- The bit-identical prefill ceiling stays about 8500-8700 t/s, for the structural reasons given in the repack round.
+
 ## Optimization steps
 
 Numbers per step are medians of 6-8 interleaved `llama-bench` pp512 rounds on 10.92.138.99. That device was later found throttled on battery, so only the relative change between adjacent builds is meaningful. The final table above is from 10.92.137.16.
