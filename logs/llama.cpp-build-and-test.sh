@@ -2420,7 +2420,8 @@ push_results() {
     split -b 90m -d -a 2 "$f" "$f.part" && rm -f "$f"
   done
 
-  git -C "$repo" add -- "$rel"
+  # -f: the repo .gitignore has *.log, and the run's logs/*.log are the evidence
+  git -C "$repo" add -f -- "$rel"
   (cd "$OUTDIR" && find . -type f -size +95M) | while IFS= read -r f; do
     say "${Y}skipping (>95 MB): $OUTDIR/${f#./}${N}"
     git -C "$OUTDIR" reset -q -- "${f#./}"

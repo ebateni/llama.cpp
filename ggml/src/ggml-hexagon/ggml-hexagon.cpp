@@ -151,7 +151,8 @@ static size_t opt_mbuf_total  = 0;                        // total buffer space 
 static int    opt_mm_select  = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
 static int    opt_fa_select  = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
 static int    opt_fa_head_split = 1; // 1 = partition flash_attn by KV heads in multicore (default on), 0 = token-based (original)
-static int    opt_fa_split      = 0; // 1 = HMX FA team split (KV heads -> gcd(n_kv, N) teams, Q-blocks within a team) + per-NSP Br cost, 0 = upstream
+static int    opt_fa_split      = 0; // HMX FA mdev partition: 0 = upstream, 1 = team split (KV heads -> gcd(n_kv, N) teams, Q-blocks within a team, per-NSP Br cost),
+                                     // 2 = auto (team split only when the cost model says it is >= 5% cheaper per NSP than upstream)
 static int    opt_gdn_select = 2; // 2 = HMX -> HVX, 1 = HVX, 0 = CPU (unsupported)
 static int    opt_ar_select  = 2; // 2 = fused ALLREDUCE+ADD (default), 1 = unfused ALLREDUCE, 0 = fallback to CPY+FENCE
 static int    opt_ar_scatter = 1; // 1 = reduce-scatter the fused ALLREDUCE+ADD (default), 0 = full reduction
@@ -5225,7 +5226,6 @@ static bool ggml_hexagon_precompute_flash_attn_params(
     // still yields >= team_size blocks (otherwise the op runs SOLO on NSP0).
     uint32_t fa_teams = 1, fa_team_size = 1;
     if (opt_fa_split && sess->mdev.count > 1) {
-        kparams->flags |= HTP_FA_FLAG_TEAM_SPLIT;
         htp_fa_mdev_teams(n_kv_heads, sess->mdev.count, kparams->head_split != 0, &fa_teams, &fa_team_size);
     }
 
@@ -5242,8 +5242,38 @@ static bool ggml_hexagon_precompute_flash_attn_params(
         // are sized for the padded tiles.
         const uint32_t DK_pad = hex_round_up(DK, 64);
         const uint32_t DV_pad = hex_round_up(DV, 64);
+        const bool is_q_f32 = (q->type == GGML_TYPE_F32);
         size_t Br = 0, Bc = 0;
-        int ret = hmx_fa_find_chunk_size(&Br, &Bc, G, DK_pad, DV_pad, neq1, nek1, sess->vtcm_size, sess->n_threads, (q->type == GGML_TYPE_F32), sinks != nullptr, n_head, fa_team_size);
+        int ret = -1;
+        bool team_split = false;
+        if (opt_fa_split == 1 && sess->mdev.count > 1) {
+            ret        = hmx_fa_find_chunk_size(&Br, &Bc, G, DK_pad, DV_pad, neq1, nek1, sess->vtcm_size, sess->n_threads, is_q_f32, sinks != nullptr, n_head, fa_team_size, nullptr);
+            team_split = true;
+        } else if (opt_fa_split == 2 && sess->mdev.count > 1 && fa_teams < sess->mdev.count) {
+            // Upstream partition (n_kv % N != 0): every NSP takes all KV heads for 1/N of the
+            // Q-blocks, Br sized for a single core. Team split: kv/teams heads for 1/team_size of
+            // the Q-blocks. Compare the modelled per-NSP critical path; keep upstream on a near-tie.
+            size_t Br_t = 0, Bc_t = 0, cost_t = 0, cost_u = 0;
+            ret = hmx_fa_find_chunk_size(&Br, &Bc, G, DK_pad, DV_pad, neq1, nek1, sess->vtcm_size, sess->n_threads, is_q_f32, sinks != nullptr, n_head, 1, &cost_u);
+            if (ret == 0 && hmx_fa_find_chunk_size(&Br_t, &Bc_t, G, DK_pad, DV_pad, neq1, nek1, sess->vtcm_size, sess->n_threads, is_q_f32, sinks != nullptr, n_head, fa_team_size, &cost_t) == 0) {
+                // cost_u covers all Q-blocks on one core: per-NSP share is ceil(q_blocks / N) of
+                // them, times all KV heads; the team share is already per NSP, times kv/teams heads.
+                const size_t q_blocks = (neq1 + Br - 1) / Br;
+                const size_t n_mdev   = sess->mdev.count;
+                cost_u = (cost_u / q_blocks) * ((q_blocks + n_mdev - 1) / n_mdev) * n_kv_heads;
+                cost_t = cost_t * (n_kv_heads / fa_teams);
+                if (cost_t * 100 < cost_u * 95) {
+                    Br = Br_t;
+                    Bc = Bc_t;
+                    team_split = true;
+                }
+            }
+        } else {
+            ret = hmx_fa_find_chunk_size(&Br, &Bc, G, DK_pad, DV_pad, neq1, nek1, sess->vtcm_size, sess->n_threads, is_q_f32, sinks != nullptr, n_head, 1, nullptr);
+        }
+        if (team_split) {
+            kparams->flags |= HTP_FA_FLAG_TEAM_SPLIT;
+        }
         if (ret == 0) {
             kparams->kernel_type = HTP_FA_KERNEL_HMX;
             if (logit_softcap == 0.0f) {

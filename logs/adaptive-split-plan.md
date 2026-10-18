@@ -6,7 +6,7 @@ upstream `620d2225c`. Device `1b531bdd`, 4 NSPs, row split (`GGML_HEXAGON_DEVICE
 This file is the living plan and history. It is updated and pushed after every step.
 Detailed measurements live in [`adaptive-split-baseline.md`](adaptive-split-baseline.md).
 
-_Last updated: 2026-10-15 — **all device runs so far were built from the wrong branch** (see §6); M1 awaiting a build from this branch._
+_Last updated: 2026-10-18 — M1 measured on this branch: Gemma ub1024 **+14%**, but ub2048 −1–3%. `FA_SPLIT=2` (auto) is pushed to keep the gain without the loss; awaiting its A/B._
 
 ---
 
@@ -64,7 +64,7 @@ Details are in `adaptive-split-baseline.md`.
 
 | # | Item | Axis change? | Knob | Estimated 4c gain (upper bound from profiles) | Status |
 |---|---|---|---|---|---|
-| M1 | FA team split: KV heads -> gcd(n_kv, N) teams, Q-blocks split within each team, per-NSP Br cost | **yes** (Q-block -> KV-head team x Q-block) | `GGML_HEXAGON_FA_SPLIT=0/1` | Gemma ub1024 +15–18%; llama 0% | **pushed `02f7ad0f5`, awaiting test** |
+| M1 | FA team split: KV heads -> gcd(n_kv, N) teams, Q-blocks split within each team, per-NSP Br cost | **yes** (Q-block -> KV-head team x Q-block) | `GGML_HEXAGON_FA_SPLIT=0/1` | Gemma ub1024 +15–18%; llama 0% | **measured**: Gemma ub1024 +14.0% / +13.4% (d0 / d16k), ub2048 −1.3% / −2.6%; Qwen3.5 +2–3% at d0; Gemma TG +7–16%. Auto mode `=2` pushed, awaiting A/B |
 | M2 | GLU epilogue fusion: MUL_MAT_NX(gate, up) + SWIGLU/GEGLU -> one op | no | `GGML_HEXAGON_OPFUSION` new bit 128 | llama ~8%, Qwen ~7%, Gemma ~10% | next |
 | M3 | Qwen3.5 conv block fusion: CONCAT + SSM_CONV + SILU + state CPY | **yes** (channels -> TOKEN + 3-token halo) | OPFUSION bit 256 | Qwen3.5 ~13% | planned |
 | M4 | Residual ADD + RMS_NORM(+MUL) fusion; Gemma post-norm + ADD + layer-scale MUL | no | OPFUSION bit 512 | 3–8% | planned |
@@ -84,7 +84,7 @@ separate PR. The axis-related items are M1, M3 and M5 (+ M7); M2 and M4 are fusi
 | Dense matmuls (QKV, o, FFN, PLE) | hardcode TOKEN |
 | Elementwise (norm, act, GLU, ADD, ROPE) | hardcode TOKEN/rows; fuse |
 | FA, `n_kv % N == 0` | hardcode KV-head split (upstream) |
-| FA, `n_kv % N != 0` | `FA_SPLIT` knob -> default on once validated |
+| FA, `n_kv % N != 0` | `FA_SPLIT` knob: 1 = always team, 2 = auto (cost model, keeps upstream on a near-tie). Default -> 2 once validated |
 | SSM_CONV / conv block | TOKEN + halo once validated (M3) |
 | GATED_DELTA_NET | hardcode V-heads (upstream) |
 | MUL_MAT_ID | knob (M5) |
@@ -93,21 +93,20 @@ separate PR. The axis-related items are M1, M3 and M5 (+ M7); M2 and M4 are fusi
 
 ## 4. Test runs (owner runs; commands are for the current HEAD)
 
-```bash
-# M1-1  build + correctness (knob only matters at 4 cores)
-REPO="$PWD" ADB_SERIAL=<serial> CORES=4 AB_VAR=GGML_HEXAGON_FA_SPLIT AB=0,1 \
-  ./logs/llama.cpp-build-and-test.sh --test-ops FLASH_ATTN_EXT --push-results
+Run from the `ebateni/adaptive-split` checkout without `REPO=` (it defaults to the script's checkout).
 
-# M1-2  perf A/B with quality checks
-REPO="$PWD" ADB_SERIAL=<serial> CORES=1,4 UBATCH=1024,2048 PP_TOKENS=2048 DEPTHS=0,16384 \
-  AB_VAR=GGML_HEXAGON_FA_SPLIT AB=0,1 \
-  MODELS="gemma-4-E4B_q4_0-it:4 Qwen3.5-4B-Q4:4 llama-3.2-3b-instruct-q4_0:4" \
-  ./logs/llama.cpp-build-and-test.sh --no-build --split row --push-results
+```bash
+# M1-3  auto mode A/B (builds). Gemma is the case that matters; Qwen3.5 for robustness.
+ADB_SERIAL=<serial> CORES=4 UBATCH=1024,2048 PP_TOKENS=2048 DEPTHS=0,16384   AB_VAR=GGML_HEXAGON_FA_SPLIT AB=0,1,2   MODELS="gemma-4-E4B_q4_0-it:4 Qwen3.5-4B-Q4:4"   ./logs/llama.cpp-build-and-test.sh --split row --push-results
+
+# M1-4  FA correctness for auto (logs/*.log are now pushed too)
+ADB_SERIAL=<serial> CORES=4 AB_VAR=GGML_HEXAGON_FA_SPLIT AB=0,2   ./logs/llama.cpp-build-and-test.sh --no-build --test-ops FLASH_ATTN_EXT --push-results
+
+# R-1  llama d16k regression vs the old branch: FA head split on/off
+ADB_SERIAL=<serial> CORES=4 UBATCH=1024,2048 PP_TOKENS=2048 DEPTHS=16384   AB_VAR=GGML_HEXAGON_FA_HEAD_SPLIT AB=1,0 MODELS="llama-3.2-3b-instruct-q4_0:4"   ./logs/llama.cpp-build-and-test.sh --no-build --only-perf --split row --push-results
 
 # M5-0  MoE per-op profile
-REPO="$PWD" ADB_SERIAL=<serial> REPS=1 CORES=1,4 UBATCH=1024 PP_TOKENS=2048 DEPTHS=0 \
-  MODELS="Qwen3.5-35B-A3B-UD-Q4_K_M:4" \
-  ./logs/llama.cpp-build-and-test.sh --no-build --only-perf --split row --hex-profile 1 --push-results
+ADB_SERIAL=<serial> REPS=1 CORES=1,4 UBATCH=1024 PP_TOKENS=2048 DEPTHS=0   MODELS="Qwen3.5-35B-A3B-UD-Q4_K_M:4"   ./logs/llama.cpp-build-and-test.sh --no-build --only-perf --split row --hex-profile 1 --push-results
 ```
 
 **Pass criteria for any item:** test-ops pass count unchanged with zero FAIL lines; needle,
@@ -119,7 +118,24 @@ cookie and IQ unchanged; 4c PP ≥ the knob-off result at every depth and ubatch
 
 | Item | Model | ub | depth | knob off | knob on | gain | quality |
 |---|---|---|---|---|---|---|---|
-| M1 | — | — | — | — | — | — | pending |
+Run `20261015-223555`, binaries `d3f87a011` (this branch), pp2048, row, 3 reps. "knob off" is upstream,
+so this is also the **re-measured baseline**. Quality (IQ / needle / cookie) is identical with the knob off and on, in every row.
+
+| Item | Model | ub | depth | knob off | knob on (`=1`) | gain | 4c x1c off -> on |
+|---|---|---|---|---|---|---|---|
+| M1 | Gemma-4-E4B | 1024 | 0 | 2857 | 3258 | **+14.0%** | 2.32 -> 2.66 |
+| M1 | Gemma-4-E4B | 1024 | 16k | 2476 | 2808 | **+13.4%** | 2.48 -> 2.80 |
+| M1 | Gemma-4-E4B | 2048 | 0 | 3358 | 3316 | −1.3% | 2.75 -> 2.71 |
+| M1 | Gemma-4-E4B | 2048 | 16k | 2897 | 2822 | −2.6% | 2.95 -> 2.87 |
+| M1 | Qwen3.5-4B | 1024 | 0 | 3094 | 3155 | +2.0% | 2.80 -> 2.86 |
+| M1 | Qwen3.5-4B | 2048 | 0 | 3114 | 3213 | +3.2% | 2.86 -> 2.96 |
+| M1 | Qwen3.5-4B | 1024/2048 | 16k | 2573 / 2603 | 2563 / 2605 | ±0.4% | 3.07 / 3.14 |
+| M1 | llama-3.2-3b | all | all | — | — | ±0.6% (n_kv % 4 == 0, no change expected) | 3.01 / 3.15 / 3.29 / 3.28 |
+
+- 1c is unchanged (±0.4%), as expected: the knob only acts at mdev > 1.
+- **Decode bonus:** Gemma 4c TG goes from 32.9 / 31.6 / 24.5 / 23.8 to 35.3 / 32.9 / 29.6 / 27.5 (+4% to +21%). Decode FA has one Q-block, so upstream runs it SOLO; the team split puts it on 2 NSPs (one per KV head). That is a Phase 2 win for free.
+- **The ub2048 loss** is small but in the same direction at both depths, so it is treated as real. The team split does the same number of block-head units per NSP as upstream when the block count divides evenly, so the cost model sees a tie, yet it loses. Hypothesis: the larger Br per NSP or the shared-KV DDR pattern. **Fix (`=2`, auto):** run the solver for both partitions and use the team split only when it is ≥ 5% cheaper per NSP. Otherwise use upstream's exact Br/Bc and partition, so a tie reproduces upstream bit for bit. ub1024 (upstream has < 4 blocks) and decode (1 block) still pick the team.
+- **test-ops FLASH_ATTN_EXT** (run `20261015-200226`): 2577–2594 of 2640 pass in **every** configuration, including 1c where the knob does nothing (52 vs 56 FAIL lines between two identical 1c runs). So the failures are pre-existing and nondeterministic, not caused by M1. Their logs were never pushed (`*.log` is gitignored), so the harness now force-adds them; M1-4 re-runs it.
 
 ---
 
@@ -137,6 +153,8 @@ cookie and IQ unchanged; 4c PP ≥ the knob-off result at every depth and ubatch
   1/10 at **1c and 4c, with fusion on and off**. So it is not the multi-core split and not the
   fusions; it is a single-core kernel or the model. Gemma-2-2B is fine. Re-check on this branch.
 - **MoE 4c host OOM** at ub1024 / d16k while 1c passes; 4c uses extra host memory (M5).
+- **Pre-existing FA test-ops failures** (52–65 FAIL lines, nondeterministic, also at 1c). Need the logs (M1-4) to see which cases; possibly tolerance or an uninitialised-read issue.
+- **llama 4c at d16k is ~10% slower than the old branch.** Old binaries (`75360014b`, 520 upstream commits older): 1724 / 1817 t/s at ub1024 / 2048. This branch: 1567 / 1624. 1c is identical (476 / 495), so this is a multi-core regression in newer upstream, likely the FA KV-head split (#29974) at long KV (llama `n_kv=8`). Gemma and Qwen3.5 are not affected. Test R-1 checks it with `FA_HEAD_SPLIT=0`. If the regression is real, the head split vs Q-block split choice becomes a depth-dependent knob (principle 3) for the cost model.
 - **Causal block skipping** in HMX FA: every Q-block streams the full KV, including fully
   masked blocks. Skipping them would roughly halve FA at depth 0, for 1c too. This is a
   candidate item outside the axis work.
@@ -166,3 +184,11 @@ cookie and IQ unchanged; 4c PP ≥ the knob-off result at every depth and ubatch
 | `2b0ce0c1e` | This plan + work log |
 | owner run | `20261015-191941`: Gemma-4-12B / Gemma-2-2B, OPFUSION 1 vs 0 (fusion = +8% PP); Gemma-4-12B garbage at 1c and 4c |
 | `686052437` | Harness: REPO defaults to the script's checkout; refuses a foreign REPO (the root cause of the wrong-branch binaries) |
+| `d3f87a011` | Plan: wrong-branch finding, Gemma-4-12B triage |
+| owner runs | `20261015-200226` (test-ops FA, 1/2/4c x FA_SPLIT 0/1: failures pre-existing), `20261015-223555` (**M1 A/B on this branch**: Gemma ub1024 +14%, ub2048 −1–3%, Gemma TG +4–21%) |
+
+### 2026-10-18
+
+| Commit | What |
+|---|---|
+| (this commit) | **M1 auto** `GGML_HEXAGON_FA_SPLIT=2`: cost-model choice between the team split and upstream, per FA op; `hmx_fa_find_chunk_size` returns its cost. Harness: `git add -f` so the run's `*.log` files are pushed. Plan: M1 results, re-measured baseline, llama d16k regression vs the old branch |
