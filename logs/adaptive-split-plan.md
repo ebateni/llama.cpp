@@ -64,7 +64,7 @@ Details are in `adaptive-split-baseline.md`.
 
 | # | Item | Axis change? | Knob | Estimated 4c gain (upper bound from profiles) | Status |
 |---|---|---|---|---|---|
-| M1 | FA team split: KV heads -> gcd(n_kv, N) teams, Q-blocks split within each team, per-NSP Br cost | **yes** (Q-block -> KV-head team x Q-block) | `GGML_HEXAGON_FA_SPLIT=0/1` | Gemma ub1024 +15–18%; llama 0% | **measured**: Gemma ub1024 +14.0% / +13.4% (d0 / d16k), ub2048 −1.3% / −2.6%; Qwen3.5 +2–3% at d0; Gemma TG +7–16%. Auto mode `=2` pushed, awaiting A/B |
+| M1 | **FA adaptive team split** ("hexagon: adaptive KV-head team split for flash attention on multi-NSP"): KV heads -> gcd(n_kv, N) teams, Q-blocks split within each team, per-NSP Br cost | **yes** (Q-block -> KV-head team x Q-block) | `GGML_HEXAGON_FA_SPLIT=0/1` | Gemma ub1024 +15–18%; llama 0% | **measured**: Gemma ub1024 +14.0% / +13.4% (d0 / d16k), ub2048 −1.3% / −2.6%; Qwen3.5 +2–3% at d0; Gemma TG +7–16%. Auto mode `=2` pushed, awaiting A/B |
 | M2 | GLU epilogue fusion: MUL_MAT_NX(gate, up) + SWIGLU/GEGLU -> one op | no | `GGML_HEXAGON_OPFUSION` new bit 128 | llama ~8%, Qwen ~7%, Gemma ~10% | next |
 | M3 | Qwen3.5 conv block fusion: CONCAT + SSM_CONV + SILU + state CPY | **yes** (channels -> TOKEN + 3-token halo) | OPFUSION bit 256 | Qwen3.5 ~13% | planned |
 | M4 | Residual ADD + RMS_NORM(+MUL) fusion; Gemma post-norm + ADD + layer-scale MUL | no | OPFUSION bit 512 | 3–8% | planned |
@@ -95,13 +95,27 @@ separate PR. The axis-related items are M1, M3 and M5 (+ M7); M2 and M4 are fusi
 
 Run from the `ebateni/adaptive-split` checkout without `REPO=` (it defaults to the script's checkout).
 
+**M1 closing set** (HEAD >= `f4a9b2801`; T1 builds, the rest use `--no-build`):
+
 ```bash
-# M1-3  auto mode A/B (builds). Gemma is the case that matters; Qwen3.5 for robustness.
-ADB_SERIAL=<serial> CORES=4 UBATCH=1024,2048 PP_TOKENS=2048 DEPTHS=0,16384   AB_VAR=GGML_HEXAGON_FA_SPLIT AB=0,1,2   MODELS="gemma-4-E4B_q4_0-it:4 Qwen3.5-4B-Q4:4"   ./logs/llama.cpp-build-and-test.sh --split row --push-results
+# T1  correctness: FA ops, 1/2/4 cores, all three modes
+ADB_SERIAL=<serial> CORES=1,2,4 AB_VAR=GGML_HEXAGON_FA_SPLIT AB=0,1,2   ./logs/llama.cpp-build-and-test.sh --test-ops FLASH_ATTN_EXT --push-results
 
-# M1-4  FA correctness for auto (logs/*.log are now pushed too)
-ADB_SERIAL=<serial> CORES=4 AB_VAR=GGML_HEXAGON_FA_SPLIT AB=0,2   ./logs/llama.cpp-build-and-test.sh --no-build --test-ops FLASH_ATTN_EXT --push-results
+# T2  perf + quality A/B, affected and control models
+ADB_SERIAL=<serial> CORES=1,4 UBATCH=1024,2048 PP_TOKENS=2048 DEPTHS=0,16384   AB_VAR=GGML_HEXAGON_FA_SPLIT AB=0,2   MODELS="gemma-4-E4B_q4_0-it:4 Qwen3.5-4B-Q4:4 llama-3.2-3b-instruct-q4_0:4"   ./logs/llama.cpp-build-and-test.sh --no-build --split row --push-results
 
+# T3  =1 vs =2 on Gemma
+ADB_SERIAL=<serial> CORES=4 UBATCH=1024,2048 PP_TOKENS=2048 DEPTHS=0,16384   AB_VAR=GGML_HEXAGON_FA_SPLIT AB=1,2 MODELS="gemma-4-E4B_q4_0-it:4"   ./logs/llama.cpp-build-and-test.sh --no-build --split row --push-results
+
+# T4  MoE (2 KV heads)
+ADB_SERIAL=<serial> CORES=4 UBATCH=1024 PP_TOKENS=2048 DEPTHS=0   AB_VAR=GGML_HEXAGON_FA_SPLIT AB=0,2 MODELS="Qwen3.5-35B-A3B-UD-Q4_K_M:4"   ./logs/llama.cpp-build-and-test.sh --no-build --split row --push-results
+```
+
+**M1 close criteria:** T1 shows no per-case failure with `=1`/`=2` that passes with `=0`. In T2/T4, `=2` 4c PP is ≥ `=0` in every row, TG is no worse, and IQ / needle / cookie are unchanged. In T3, `=2` is ≥ `=1` at ub1024 and in TG, and ≥ `=0` at ub2048. Then flip the default to 2, write the PR, and close.
+
+**Tracked separately:**
+
+```bash
 # R-1  llama d16k regression vs the old branch: FA head split on/off
 ADB_SERIAL=<serial> CORES=4 UBATCH=1024,2048 PP_TOKENS=2048 DEPTHS=16384   AB_VAR=GGML_HEXAGON_FA_HEAD_SPLIT AB=1,0 MODELS="llama-3.2-3b-instruct-q4_0:4"   ./logs/llama.cpp-build-and-test.sh --no-build --only-perf --split row --push-results
 
@@ -191,4 +205,5 @@ so this is also the **re-measured baseline**. Quality (IQ / needle / cookie) is 
 
 | Commit | What |
 |---|---|
-| (this commit) | **M1 auto** `GGML_HEXAGON_FA_SPLIT=2`: cost-model choice between the team split and upstream, per FA op; `hmx_fa_find_chunk_size` returns its cost. Harness: `git add -f` so the run's `*.log` files are pushed. Plan: M1 results, re-measured baseline, llama d16k regression vs the old branch |
+| `f4a9b2801` | **M1 auto** `GGML_HEXAGON_FA_SPLIT=2`: cost-model choice between the team split and upstream, per FA op; `hmx_fa_find_chunk_size` returns its cost. Harness: `git add -f` so the run's `*.log` files are pushed. Plan: M1 results, re-measured baseline, llama d16k regression vs the old branch |
+| (this commit) | M1 named "FA adaptive team split"; M1 closing test set T1–T4 and criteria |
