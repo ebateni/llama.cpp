@@ -4073,6 +4073,7 @@ typedef struct {
     uint32_t                  n_ct;
     uint32_t                  dst_tile_col;
     uint32_t                  dst_k_tiles;
+    uint32_t                  rt_lo, rt_hi;   // row-tile sub-range [rt_lo, rt_hi) of this call; rt_hi == 0: all n_rt row tiles
 } int8_geglu_state_t;
 
 // Mirrors transfer_output_geglu_tiled_col_chunk, with int16 accumulator inputs scaled by row/column f16 factors.
@@ -4080,7 +4081,8 @@ static void int8_geglu_tiled_col_chunk(__fp16 *restrict dst, const int16_t *rest
                                        const uint32_t *restrict as16, const float *restrict cm_gate,
                                        const float *restrict cm_up, const float *restrict ca_gate,
                                        const float *restrict ca_up, uint32_t n_rows, uint32_t c_len,
-                                       uint32_t total_n_cols, uint32_t dst_tile_col, uint32_t dst_k_tiles) {
+                                       uint32_t total_n_cols, uint32_t dst_tile_col, uint32_t dst_k_tiles,
+                                       uint32_t rt_lo, uint32_t rt_hi) {
     const size_t src_row_stride = (total_n_cols / HTP_MM_HMX_TILE_N_COLS) * HTP_MM_HMX_TILE_N_ELMS;
     const size_t dst_row_stride = (size_t) dst_k_tiles * HTP_MM_HMX_TILE_N_ELMS;
 
@@ -4088,7 +4090,7 @@ static void int8_geglu_tiled_col_chunk(__fp16 *restrict dst, const int16_t *rest
     const HVX_Vector c_s    = hvx_vec_splat_f16(2.0f * EXP_LOG2E_F * HTP_SQRT_2_OVER_PI);
     const HVX_Vector x2_max = hvx_vec_splat_f16(256.0f);
 
-    const uint32_t n_row_tiles = hmx_ceil_div(n_rows, HTP_MM_HMX_TILE_N_ROWS);
+    const uint32_t n_row_tiles = rt_hi ? rt_hi : hmx_ceil_div(n_rows, HTP_MM_HMX_TILE_N_ROWS);
 
     for (uint32_t ct = 0; ct * HTP_MM_HMX_TILE_N_COLS < c_len; ++ct) {
         const size_t so = (size_t) ct * HTP_MM_HMX_TILE_N_ELMS;
@@ -4100,7 +4102,7 @@ static void int8_geglu_tiled_col_chunk(__fp16 *restrict dst, const int16_t *rest
         HVX_Vector cag = Q6_V_vzero(), cau = Q6_V_vzero();
         if (ca_gate) { const HVX_Vector x = ((const HVX_Vector *) ca_gate)[ct]; cag = hvx_vec_f32_to_f16_shuff(x, x); }
         if (ca_up)   { const HVX_Vector x = ((const HVX_Vector *) ca_up)[ct];   cau = hvx_vec_f32_to_f16_shuff(x, x); }
-        for (uint32_t rt = 0; rt < n_row_tiles; ++rt) {
+        for (uint32_t rt = rt_lo; rt < n_row_tiles; ++rt) {
             const HVX_Vector * g = (const HVX_Vector *) (gate + rt * src_row_stride + so);
             const HVX_Vector * u = (const HVX_Vector *) (up + rt * src_row_stride + so);
             HVX_Vector *       o = (HVX_Vector *) (dst + rt * dst_row_stride + doff);
@@ -4129,7 +4131,7 @@ static void int8_geglu_tiled_worker_fn(unsigned int n, unsigned int i, void * da
                                st->cm_gate + c0 * 32, st->cm_up + c0 * 32,
                                st->ca_gate ? st->ca_gate + c0 * 32 : NULL, st->ca_up ? st->ca_up + c0 * 32 : NULL,
                                st->n_rt * 32, (c1 - c0) * 32,
-                               st->n_ct * 32, st->dst_tile_col + c0, st->dst_k_tiles);
+                               st->n_ct * 32, st->dst_tile_col + c0, st->dst_k_tiles, st->rt_lo, st->rt_hi);
     htp_trace_event_stop(&st->traces[i], HTP_TRACE_EVT_HVX_O_PROC, c0);
 }
 
@@ -4461,19 +4463,24 @@ static int hmx_mm_nx_geglu_2d_int8_rot(struct htp_ops_context * octx, const stru
     } while (0)
 
     hmx_int8_job_t job_slots[4];
-    #define ROT_EPILOGUE(c_, mr_, n_rows_) do {                                                                 \
+    // part p_ of np_ (row tiles): the tiled GEGLU epilogue of a chunk (~85k cycles) is longer than one HMX job (~63k), so it is issued in
+    // two halves between the job pushes; the non-tiled (f32) epilogue always runs whole (p_ == 0, np_ == 1)
+    #define ROT_EPILOGUE(c_, mr_, n_rows_, p_, np_) do {                                                        \
         const size_t _ncc  = (size_t) (c_) * nc;                                                                \
         const size_t _cols = hex_smin(n - _ncc, nc);                                                            \
         const int    _pb   = ((c_) % 2) * 2;                                                                    \
         const int    _dcols = dst_cols - (int) _ncc;                                                            \
         if (tiled_out) {                                                                                        \
+            const uint32_t _nrt = (uint32_t) hmx_ceil_div((n_rows_), 32);                                       \
+            const uint32_t _lo  = (np_) > 1 ? _nrt * (p_) / (np_) : 0;                                          \
+            const uint32_t _hi  = (np_) > 1 ? _nrt * ((p_) + 1) / (np_) : _nrt;                                 \
             int8_geglu_state_t gs = { ctx->trace, dst_tiled + ((mr_) / 32) * (size_t) dst_k_tiles * 1024,       \
                                       obuf[_pb], obuf[_pb + 1], colmul[_pb], colmul[_pb + 1],                   \
                                       kparams->bias2 ? coladd[_pb] : NULL, kparams->bias2 ? coladd[_pb + 1] : NULL, as16_ddr, \
-                                      (uint32_t) hmx_ceil_div((n_rows_), 32), (uint32_t) (_cols / 32),\
-                                      (uint32_t) (_ncc / 32), (uint32_t) dst_k_tiles };                         \
+                                      _nrt, (uint32_t) (_cols / 32),                                            \
+                                      (uint32_t) (_ncc / 32), (uint32_t) dst_k_tiles, _lo, _hi };               \
             const int nth = (int) hex_smin((uint32_t) n_threads, gs.n_ct);                                      \
-            if (nth <= 1) { int8_geglu_tiled_worker_fn(1, 0, &gs); } else { worker_pool_run_func(ctx->worker_pool, int8_geglu_tiled_worker_fn, &gs, nth); } \
+            if (_hi <= _lo) { } else if (nth <= 1) { int8_geglu_tiled_worker_fn(1, 0, &gs); } else { worker_pool_run_func(ctx->worker_pool, int8_geglu_tiled_worker_fn, &gs, nth); } \
         } else if (_dcols > 0) {                                                                                \
             for (int _w = 0; _w < 2; ++_w) {                                                                    \
                 int8_convert_state_t cs = { ctx->trace, obuf[_pb + _w], colmul[_pb + _w], as16_ddr,             \
@@ -4536,11 +4543,17 @@ static int hmx_mm_nx_geglu_2d_int8_rot(struct htp_ops_context * octx, const stru
                     ROT_PUSH_W(s + 1, raw[(s - 1) % 2]);             // its raw buffer takes step s + 1 (same parity as s - 1)
                 }
             }
-            if (w == 1 && c > 0) { ROT_EPILOGUE(c - 1, mr, n_rows); }
+            // chunk c - 1 is complete once job s - 1 has retired (s = 2c, w = 0). The tiled GEGLU epilogue (~85k cycles) is longer than one job
+            // (~63k), so it runs in two row-tile halves, one after each of the two pushes of chunk c: the next job is queued before the
+            // epilogue ends and the HMX never waits for it. obuf pair (c - 1) % 2 is first rewritten by the job of step 2c + 2, after part 1.
+            if (c > 0) {
+                if (tiled_out) { ROT_EPILOGUE(c - 1, mr, n_rows, w, 2); }
+                else if (w == 1) { ROT_EPILOGUE(c - 1, mr, n_rows, 0, 1); }
+            }
         }
 
         hmx_queue_pop(ctx->hmx_queue);
-        ROT_EPILOGUE(n_chunk_cnt - 1, mr, n_rows);
+        ROT_EPILOGUE(n_chunk_cnt - 1, mr, n_rows, 0, 1);
     }
     #undef ROT_PUSH_W
     #undef ROT_EPILOGUE

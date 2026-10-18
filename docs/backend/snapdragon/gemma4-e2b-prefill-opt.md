@@ -890,6 +890,90 @@ round, health at every round start (lowest pp128 3270 = 78.9% of the best seen, 
   0.37 ms per ubatch) short; 3-round median 9787.68; best single 5-rep cell 10042.68.
 - Decode target 70 t/s: MET in every merged arm (71.12-71.83).
 
+## RUN 16: overlap the gate+up epilogue with the next HMX job
+
+RUN 16 changes one function in one file on top of the RUN 15 state: `hmx_mm_nx_geglu_2d_int8_rot` in
+`htp/matmul-ops.c` (+23/-10), the int8 gate+up op with the GEGLU epilogue. Source of the numbers: analysis/merge-log.md
+"DEVICE RUN 16" and analysis/hmx-int-log.md (M146). Same model, device and command lines as before. There is no env gate:
+the change is schedule-only and the math per element is untouched. The f32 GEGLU path (layers 15 and up) is unchanged.
+
+- The gap: the op runs 14 HMX jobs (2 weights x 7 chunks, 61-65k cycles each). The epilogue of chunk c-1
+  (`HVX_O_PROC` on all 8 threads, 82-94k cycles) was issued only after the second job of chunk c retired, so a gap of
+  21-35k cycles opened before every other job pair and the HMX sat idle (mean 127.9k cycles of gaps per op). The epilogue
+  is compute-bound (the sigmoid / GELU body, about 156 cycles per 64-lane vector), not bandwidth-bound.
+- The fix: the epilogue of chunk c-1 runs in two row-tile halves, one after each of chunk c's two job pushes, so the
+  HVX work overlaps the HMX jobs and the HMX no longer idles between job pairs.
+
+Per op (`PROFILE=3`, 512-row ubatch, same session, A B A B, int best-speed with `NORM_Q8=1`):
+
+| Quantity | RUN 15 build | RUN 16 build |
+|---|---|---|
+| gate+up op (cycles, ms) | 1233.0k = 8.752 ms | 1095.7k = 7.778 ms (-11.2%) |
+| HMX busy (busiest thread) | 67.2% | 76.2% |
+| HMX inter-job gaps | 127.9k | 10.0k |
+| tail (last job to op end) | 78.7k | 51.5k |
+| `HVX_O_PROC`, busiest thread | 548k | 627k (hidden: it now runs next to the HMX and shares the DDR / VTCM ports) |
+| `HVX_A_QUANT`, busiest thread | 137k | 137k (unchanged) |
+
+- Op sum (`PROFILE=3`, int best-speed, `NORM_Q8=1`, 8 rotating pairs, 534 ops): RUN 16 build 49.090 ms median (mean
+  49.178, min 48.722) vs RUN 15 build 50.255 ms (mean 50.219, min 49.707), a median of -1.10 ms and lower in 7 of 8 pairs.
+  By class the gate+up op goes 9.014 -> 7.978 ms (-1.04 ms); no other class moves by more than 0.04 ms.
+- Correction: a first op-sum attempt (6 pairs) is discarded and not reported as a result. A sed escape error in the
+  generated profiling script mangled the `smooth.bin` path in both arms, so the smoothing vector was missing and the int
+  path ran in a different, slower state; its +0.6 ms delta is meaningless. The op sum above is the repeat with the path
+  fixed. The logit byte-compare used the correct script and stands.
+
+### Gates (RUN 16)
+
+- `INT_MM=0` bit-identity (hard stop): PARITY_IDENTICAL, `llama-perplexity` PPL exactly 134.3955 +/- 6.77407, 5-output
+  gate SAME on all five.
+- 20-chunk logits, `fc /b`: no differences against the RUN 15 build and against the RUN 14 build, on the fp16 path (md5
+  0e36db18db77650597d4c4088025835f) and on the int best-speed path (md5 b76ef14e158447c224903a9807a704e2), with `NORM_Q8`
+  on and off.
+- Int best-speed: KLD 0.006692, top-p 96.647%, PPL 132.5813, greedy identical (`NORM_Q8` 1 and 0 identical). Int
+  full-coverage: KLD 0.006942, top-p 96.569%, PPL 132.1043. `INT_MM=1` guard: one warning.
+- Static compile matrix 31 objects / 0 errors on all 8 cells (SDK 6.6.0.0 and 6.7.0.0 x v73 v75 v79 v81); host `clang++
+  -fsyntax-only` 0 errors; package md5 verified. v73 / v75 / v79 are compile-only.
+
+### Arm table (RUN 16)
+
+3 clean rounds, medians, `llama-bench -p 512 -r 5` per cell, `NORM_Q8=1` on the int best-speed arm, no round
+contaminated or excluded:
+
+| Arm | prefill pp512 (t/s), rounds | median | decode tg128 (t/s), rounds | median |
+|---|---|---|---|---|
+| `pkg-new` (baseline) | 7584.33 / 7497.36 / 7514.15 | 7514.15 | 54.14 / 54.32 / 54.58 | 54.32 |
+| merged16, `INT_MM=0` (fp16 path) | 9209.69 / 8899.98 / 8620.61 | 8899.98 | 71.05 / 72.05 / 72.70 | 72.05 |
+| merged16, int best-speed | 9955.40 / 9879.46 / 10176.03 | 9955.40 | 72.77 / 72.46 / 70.91 | 72.46 |
+| merged16, int full-coverage | 8881.79 / 8764.54 / 9216.53 | 8881.79 | 70.66 / 71.13 / 70.71 | 70.71 |
+
+- The 3-round median of the best-speed arm is 9955.40 t/s, 1.325x `pkg-new`. Each cell is a median of 5 repetitions with
+  1-3% noise, so this 3-round statistic is the weaker one; the 120-sample test below is the better estimate.
+
+### 120-sample alternation (RUN 16)
+
+Int best-speed (`MASK=0x27`) with `NORM_Q8=1` on both arms, RUN 16 build vs RUN 15 build, 12 rounds x 10 samples, order
+swapped every round, health check at every round start (lowest pp128 3005 = 72.5% of the best, none flagged, nothing
+excluded); fp16 `INT_MM=0` 4 x 10:
+
+| Pair | RUN 16 build | RUN 15 build | median delta | mean delta (z) | ms/run | round pairs |
+|---|---|---|---|---|---|---|
+| int best-speed, 120 / 120 | median 10108.2, mean 9898.9, trimmed mean 9979.5, stddev 478 | median 9907.6, mean 9629.7, stddev 591 | +2.03% | +2.80% (+269 t/s, z 3.9) | +1.03 | 10 of 12 positive |
+| fp16, 40 / 40 | 8868.3 | 8874.1 | -0.06% | +1.33% (z 1.2) | -0.04 | 3 of 4 |
+
+- fp16 shows no effect, as expected: the change touches only the int8 gate+up epilogue.
+- Distribution of the 120 RUN 16 int samples: 73 of 120 (60.8%) at or above 10000, maximum 10396; per-round medians above
+  10000 in 9 of 12 rounds. Bootstrap 95% CI of the median: 10010-10161 (the lower end is above 10000). Bootstrap 95% CI of
+  the median gain over the RUN 15 build: +104..+337 t/s. Robustness: without the two weakest rounds (2 and 4) the medians
+  are 10138 vs 9924; without the two lowest-health rounds (3 and 11) they are 10108 vs 9868.
+
+### KPI line (RUN 16)
+
+- Prefill target 10000 t/s: ABOVE 10000 on the 120-sample estimate (median 10108.2 t/s, 95% CI 10010-10161), and NOT
+  met by the 3-round A/B median (9955.40 t/s, 45 t/s short). The two disagree because the A/B is three medians of five
+  repetitions with 1-3% noise; the 120-sample estimate is the better statistic, and the 3-round figure reads 9955.
+- Decode target 70 t/s: MET in every merged arm (70.71-72.46).
+
 ## Optimization steps
 
 Numbers per step are medians of 6-8 interleaved `llama-bench` pp512 rounds on 10.92.138.99. That device was later found throttled on battery, so only the relative change between adjacent builds is meaningful. The final table above is from 10.92.137.16.
