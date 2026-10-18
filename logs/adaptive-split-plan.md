@@ -95,7 +95,7 @@ separate PR. The axis-related items are M1, M3 and M5 (+ M7); M2 and M4 are fusi
 
 Run from the `ebateni/adaptive-split` checkout without `REPO=` (it defaults to the script's checkout).
 
-**M1 closing set** (HEAD >= `f4a9b2801`; T1 builds, the rest use `--no-build`):
+**M1 closing set** (HEAD >= the solver-memo commit, see §7; T1 builds, the rest use `--no-build`):
 
 ```bash
 # T1  correctness: FA ops, 1/2/4 cores, all three modes
@@ -207,3 +207,4 @@ so this is also the **re-measured baseline**. Quality (IQ / needle / cookie) is 
 |---|---|
 | `f4a9b2801` | **M1 auto** `GGML_HEXAGON_FA_SPLIT=2`: cost-model choice between the team split and upstream, per FA op; `hmx_fa_find_chunk_size` returns its cost. Harness: `git add -f` so the run's `*.log` files are pushed. Plan: M1 results, re-measured baseline, llama d16k regression vs the old branch |
 | (this commit) | M1 named "FA adaptive team split"; M1 closing test set T1–T4 and criteria |
+| (this commit) | Host: memoize `hmx_fa_find_chunk_size` (32-entry cache on the full input tuple). FA precompute runs every prefill ubatch (KV length changes), and auto doubles the search; all layers share ~2 shapes, so this makes it ~free. Results are identical |
