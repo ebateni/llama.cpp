@@ -4674,7 +4674,7 @@ static int hmx_mm_nx_2d_int8_f32(struct htp_ops_context * octx, const struct htp
     for (uint32_t wi = 0; wi < n_weights; ++wi) {
         const struct htp_tensor * w   = octx->src[wi];
         const struct htp_tensor * dst = octx->dsts[wi];
-        if (!w || !dst || w->type != HTP_TYPE_Q4_0 || w->ne[1] % 64 != 0 || dst->ne[0] > w->ne[1] ||
+        if (!w || !dst || (w->type != HTP_TYPE_Q4_0 && w->type != HTP_TYPE_F16) || w->ne[1] % 64 != 0 || dst->ne[0] > w->ne[1] ||
             (dst->data & (VLEN - 1)) != 0) {
             return HTP_STATUS_NO_SUPPORT;
         }
@@ -4743,7 +4743,7 @@ static int hmx_mm_nx_2d_int8_f32(struct htp_ops_context * octx, const struct htp
     const float * inv_s_vtcm = NULL;
     if (kparams->smooth) {
         const struct htp_tensor * w0 = octx->src[0];
-        const size_t sm_off = hex_align_up((size_t) (k / 32) * 18 * hex_align_up((size_t) w0->ne[1], 32), 128) +
+        const size_t sm_off = (w0->type == HTP_TYPE_F16 ? hex_align_up((size_t) k * w0->ne[1] * 2, 128) : hex_align_up((size_t) (k / 32) * 18 * hex_align_up((size_t) w0->ne[1], 32), 128)) +
                               (size_t) (w0->ne[1] / 64) * rec_bytes;
         float * dstv = (float *) (base + o_smooth);
         dma_queue_push(ctx->dma[0], dma_make_data(dstv, w0->data + sm_off), (size_t) k * 4, (size_t) k * 4, (size_t) k * 4, 1);
@@ -4807,7 +4807,7 @@ static int hmx_mm_nx_2d_int8_f32(struct htp_ops_context * octx, const struct htp
         const size_t   n        = w->ne[1];
         const int      dst_stride = (int) (dst->nb[1] / sizeof(float));
         const int      dst_cols   = (int) dst->ne[0];
-        const size_t   int8_off = hex_align_up((size_t) (k / 32) * 18 * hex_align_up(n, 32), 128);
+        const size_t   int8_off = w->type == HTP_TYPE_F16 ? hex_align_up((size_t) k * n * 2, 128) : hex_align_up((size_t) (k / 32) * 18 * hex_align_up(n, 32), 128);
         const int      n_chunk_cnt = hmx_ceil_div(n, nc);
         float * const  dst_ptr  = (float *) dst->data + (mr + row_lo) * dst_stride;
 

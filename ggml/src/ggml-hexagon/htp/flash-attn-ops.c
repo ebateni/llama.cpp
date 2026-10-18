@@ -160,6 +160,8 @@ struct hmx_fa_context {
     size_t       col_vec_bytes;
     size_t       d_tile_bytes;
     bool         mask_broadcast;       // true when mask->ne[2] == 1 (head-independent, single 2D DMA)
+    uint32_t     ostore_mode;          // O store variant (kparams->flags): 0 cached stores, 2 DMA-out from VTCM staging
+    uint8_t *    vtcm_ostage;          // O store staging (mode 2): n_threads x OSTAGE_BYTES_PER_THREAD
     dma_cache_fa m_cache;
 };
 
@@ -906,7 +908,79 @@ typedef struct {
     uint32_t                  ib3;
     size_t                    n_rows_g;
     size_t                    rows_per_t;
+    size_t                    rows_t0;      // mode 2: rows done by thread 0 with cached stores (its DMA queue carries the main flow)
+    size_t                    rows_per_o;   // mode 2: rows per other thread (DMA-out)
 } fa_o_store_args_t;
+
+// O store through DMA (mode 2): a worker widens groups of rows into its own VTCM staging slots (two) and lets its DMA
+// queue write them to DDR, so the stores bypass the data cache and the conversion of the next group overlaps the write
+// of the previous one. Only workers 1..n-1 use it: queue 0 carries the main flow's Q/K/V descriptors.
+#define FA_OSTAGE_ROWS          8
+#define FA_OSTAGE_ROW_BYTES     2048   // DV <= 512 floats
+#define FA_OSTAGE_BYTES_PER_T   (2 * FA_OSTAGE_ROWS * FA_OSTAGE_ROW_BYTES)
+
+static void fa_o_store_dma_rows(fa_o_store_args_t * args, unsigned int i, size_t start, size_t end) {
+    struct hmx_fa_context * factx = args->factx;
+    const size_t G         = factx->G;
+    const size_t DV        = factx->DV;
+    const size_t DV_pad    = factx->DV_pad;
+    const size_t row_bytes = DV * sizeof(float);
+
+    struct htp_thread_trace * tr = &factx->octx->ctx->trace[i];
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) (args->q_start * G + start));
+
+    const struct htp_tensor * dst        = args->dst;
+    const __fp16 *            o_tile_src = args->o_tile_src;
+    dma_queue *               dma_q      = factx->octx->ctx->dma[i];
+    uint8_t * const           base       = factx->vtcm_ostage + (size_t) i * FA_OSTAGE_BYTES_PER_T;
+
+    size_t q_idx = fastdiv(start, &factx->div_G);
+    size_t h_idx = fastmodulo(start, G, &factx->div_G);
+
+    uint32_t pending[2] = { 0, 0 };   // descriptors in flight per slot (the queue retires them oldest first)
+    uint32_t slot = 0;
+    for (size_t g0 = start; g0 < end; g0 += FA_OSTAGE_ROWS) {
+        const size_t g1 = hex_smin(g0 + FA_OSTAGE_ROWS, end);
+
+        // The slot about to be refilled still has the group of two rounds ago in flight. Descriptors retire in push
+        // order, and that group's descriptors are the OLDEST in the queue (the other slot's were pushed after), so
+        // popping pending[slot] entries waits for exactly them.
+        while (pending[slot] > 0) { dma_queue_pop(dma_q); pending[slot]--; }
+
+        uint8_t * stg = base + (size_t) slot * (FA_OSTAGE_ROWS * FA_OSTAGE_ROW_BYTES);
+        for (size_t r = g0; r < g1; ++r) {
+            float * out = (float *) (stg + (r - g0) * FA_OSTAGE_ROW_BYTES);
+            const size_t   r0            = r / HMX_FP16_TILE_N_ROWS;
+            const size_t   r1            = r % HMX_FP16_TILE_N_ROWS;
+            const __fp16 * tile_row_base = o_tile_src + r0 * HMX_FP16_TILE_N_ROWS * DV_pad;
+            for (uint32_t d = 0; d < DV / 32; ++d) {
+                const HVX_Vector * in_tile = (const HVX_Vector *) (tile_row_base + d * HMX_FP16_TILE_N_ELMS);
+                HVX_VectorPair     vp      = hvx_vec_f16_to_f32_shuff(in_tile[r1 / 2]);
+                *(HVX_Vector *) (out + d * 32) = (r1 % 2 == 0) ? Q6_V_lo_W(vp) : Q6_V_hi_W(vp);
+            }
+        }
+
+        // rows of one token are consecutive heads (destination stride dst->nb[1]): one 2D descriptor per token run
+        size_t rr = g0;
+        while (rr < g1) {
+            const size_t run = hex_smin(g1 - rr, G - h_idx);
+            uint8_t * d0 = (uint8_t *) dst->data + (args->kv_head * G + h_idx) * dst->nb[1] +
+                           (args->q_start + q_idx) * dst->nb[2] + args->ib3 * dst->nb[3];
+            dma_queue_push(dma_q, dma_make_data(d0, stg + (rr - g0) * FA_OSTAGE_ROW_BYTES),
+                           dst->nb[1], FA_OSTAGE_ROW_BYTES, row_bytes, run);
+            pending[slot]++;
+            rr += run;
+            h_idx += run;
+            if (h_idx == G) { h_idx = 0; q_idx++; }
+        }
+        slot ^= 1;
+    }
+    // drain: `slot` is the next slot to reuse, i.e. the one written longest ago -> its descriptors are the oldest
+    while (pending[slot] > 0)     { dma_queue_pop(dma_q); pending[slot]--; }
+    while (pending[slot ^ 1] > 0) { dma_queue_pop(dma_q); pending[slot ^ 1]--; }
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) (args->q_start * G + start));
+}
 
 static void fa_o_store_thread_f32(unsigned int n, unsigned int i, void * data) {
     fa_o_store_args_t *     args  = (fa_o_store_args_t *) data;
@@ -916,11 +990,21 @@ static void fa_o_store_thread_f32(unsigned int n, unsigned int i, void * data) {
     const size_t G        = factx->G;
     const size_t DV       = factx->DV;
 
-    const size_t rows_per_t = args->rows_per_t;
-    const size_t start      = (size_t) i * rows_per_t;
-    const size_t end        = hex_smin(start + rows_per_t, n_rows_g);
+    size_t start, end;
+    if (factx->ostore_mode == 2) {
+        start = (i == 0) ? 0 : args->rows_t0 + (size_t) (i - 1) * args->rows_per_o;
+        end   = (i == 0) ? hex_smin(args->rows_t0, n_rows_g) : hex_smin(start + args->rows_per_o, n_rows_g);
+    } else {
+        start = (size_t) i * args->rows_per_t;
+        end   = hex_smin(start + args->rows_per_t, n_rows_g);
+    }
 
-    if (start >= n_rows_g) {
+    if (start >= end) {
+        return;
+    }
+
+    if (factx->ostore_mode == 2 && i != 0) {
+        fa_o_store_dma_rows(args, i, start, end);
         return;
     }
 
@@ -1058,7 +1142,14 @@ static void fa_phase_o_store(struct hmx_fa_context *   factx,
         n = factx->n_threads;
     }
     size_t rows_per_t = hmx_ceil_div(n_rows_g, n);
-    fa_o_store_args_t args = { factx, dst, o_tile_src, q_start, kv_head, ib3, n_rows_g, rows_per_t };
+    size_t rows_t0 = rows_per_t, rows_per_o = rows_per_t;
+    if (factx->ostore_mode == 2 && factx->is_dst_fp32 && n > 1 && factx->DV * sizeof(float) <= FA_OSTAGE_ROW_BYTES &&
+        (factx->DV % 32) == 0) {
+        // worker 0 does not use its DMA queue for the store (it carries the Q/K/V descriptors): give it a smaller share
+        rows_per_o = hmx_ceil_div(n_rows_g * 10, (size_t) (n - 1) * 10 + 4);        // thread 0 gets ~0.4 of a share
+        rows_t0    = n_rows_g > rows_per_o * (n - 1) ? n_rows_g - rows_per_o * (n - 1) : 0;
+    }
+    fa_o_store_args_t args = { factx, dst, o_tile_src, q_start, kv_head, ib3, n_rows_g, rows_per_t, rows_t0, rows_per_o };
     worker_callback_t store_fn = factx->is_dst_fp32 ? fa_o_store_thread_f32 : fa_o_store_thread_f16;
     if (n > 1) {
         work_queue_run(wp, store_fn, &args, n);
@@ -1988,6 +2079,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     factx.is_q_fp32      = (q->type == HTP_TYPE_F32);
     factx.is_dst_fp32    = (dst->type == HTP_TYPE_F32);
     factx.pipeline       = (kparams->u.hmx.pipeline != 0);
+    factx.ostore_mode    = kparams->flags;
     factx.mask_broadcast = (kparams->u.hmx.mask_broadcast != 0);
     if (mask) {
         factx.src3_div2  = kparams->src3_div2;
@@ -2062,6 +2154,20 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
     if (L.total_bytes > ctx->vtcm_size) {
         return HTP_STATUS_VTCM_TOO_SMALL;
+    }
+
+    // O store staging (mode 2) lives behind the layout; fall back to the cached-store path if it does not fit
+    factx.vtcm_ostage = NULL;
+    if (factx.ostore_mode == 2) {
+        const size_t off_ostage = hex_align_up(L.total_bytes, 128);
+        // rows must start on cache-line boundaries so the cached share (worker 0) and the DMA shares never share a line
+        if (factx.is_dst_fp32 && factx.n_threads > 1 && DV_pad == DV && DV * sizeof(float) <= FA_OSTAGE_ROW_BYTES &&
+            (dst->data & (VLEN - 1)) == 0 && (dst->nb[1] & (VLEN - 1)) == 0 && (dst->nb[2] & (VLEN - 1)) == 0 &&
+            off_ostage + (size_t) factx.n_threads * FA_OSTAGE_BYTES_PER_T <= ctx->vtcm_size) {
+            factx.vtcm_ostage = (uint8_t *) ctx->vtcm_base + off_ostage;
+        } else {
+            factx.ostore_mode = 0;
+        }
     }
 
     uint8_t * const base = ctx->vtcm_base;

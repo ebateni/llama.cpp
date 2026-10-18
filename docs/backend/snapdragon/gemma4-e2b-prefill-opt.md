@@ -541,6 +541,81 @@ RUN 11 arm table (3 clean rounds, medians; no contaminated round, session normal
   The one named lever not in this state, the int side's fused quantizer (about 1 ms estimated), has not been built; nothing
   else identified is above 1 ms.
 
+## RUN 12: FA O-store via DMA, PLE int8 model_proj and PLE chunk caps
+
+RUN 12 adds two gated deltas on top of the RUN 11 state. Source of the numbers: analysis/merge-log.md "DEVICE RUN 12",
+analysis/hmx-int-log.md (M129 / M130), analysis/fuse-log.md. Same model, device and command lines as before.
+
+- (A) Flash attention writes its output O through DMA from VTCM instead of cached stores (`htp/flash-attn-ops.c`, kernel
+  flag 2). Default on; `GGML_HEXAGON_FA_OSTORE=0` disables it. Bit-identical on the fp16 path (stress 8/8 on the fuse
+  side).
+- (B) PLE delta: a BF16 -> int8 packer for the per-layer `model_proj` (`hex-int8-pack.h`, opt-in through the class bit
+  0x20 of `GGML_HEXAGON_INT_MM_MASK`, so `0x27` = qkv + o-proj + gate+up + model_proj), and n-chunk caps for the PLE
+  matmuls in `htp/matmul-ops.c`: `GGML_HEXAGON_PLE_NC=512` (proj, n = 1536) and `GGML_HEXAGON_PLE_NCG=64` (inp_gate,
+  n = 256). The caps are on by default; 0 disables them. Per-op (int owner): `model_proj` 962 -> 412 us per 512 rows, PLE
+  class 2.12 -> 1.72 ms.
+
+Merged tree: RUN 11 state plus both deltas (`INT_MM=0` stays the default and stays bit-identical). Medians of 3 clean
+interleaved rounds, arm order rotated per round, 30 s gaps, a health check before every run, nothing contaminated or
+excluded (pkg-new decode 54.13-54.50):
+
+| Arm | prefill pp512 (t/s) | ratio vs `pkg-new` | decode tg128 (t/s) | ratio vs `pkg-new` |
+|---|---|---|---|---|
+| `pkg-new` (baseline) | 7624.97 | 1.000 | 54.26 | 1.000 |
+| merged12, `INT_MM=0` (fp16 path) | 8599.71 | 1.128 | 71.72 | 1.322 |
+| merged12, int best-speed (`MASK=0x27`) | 9078.18 | 1.191 | 70.19 | 1.294 |
+| merged12, int full-coverage | 8555.14 | 1.122 | 70.68 | 1.303 |
+
+- Best-speed env line: `GGML_HEXAGON_INT_MM=3 GGML_HEXAGON_INT_ROT=32 GGML_HEXAGON_INT_ROT_MASK=4
+  GGML_HEXAGON_INT_MM_MASK=0x27 GGML_HEXAGON_INT_MM_LAYERS=7ffffffff GGML_HEXAGON_INT_MM_REDUCE=2
+  GGML_HEXAGON_INT_MM_REDUCE_BIG=4 GGML_HEXAGON_INT_SMOOTH=<path>/smooth.bin GGML_HEXAGON_VMEM=5G`, with the PLE caps at
+  their defaults (`PLE_NC=512`, `PLE_NCG=64`). The RUN 9 line with `MASK=7` is the same configuration without the
+  `model_proj` class. The full-coverage line is unchanged (`MASK=cf`, `MASK16=c8`, `ROT_MASK=7`; it does not include the
+  `model_proj` bit).
+- 80-sample attribution (4 rounds x 7 cells, each cell one `llama-bench -p 512 -n 0 -r 20`, 10 s gaps, 80 samples per
+  cell; one sample is one timed pp512 run):
+
+| Comparison | median delta | mean delta (z) | ms/run (median) |
+|---|---|---|---|
+| FA O-store, fp16 (`INT_MM=0`, on vs `FA_OSTORE=0`) | +1.08% | +1.30% (z 2.8), 4/4 rounds positive | +0.64 |
+| FA O-store, int best-speed (on vs `FA_OSTORE=0`) | +2.10% | +1.35% (z 2.1) | +1.15 |
+| PLE delta (caps + `model_proj` int8), int best-speed | +1.90% | +1.45% (z 2.4), 4/4 rounds positive | +1.04 |
+| FA + PLE caps, fp16 (merged12 `INT_MM=0` vs the RUN 11 build) | +2.05% | +2.17% (z 4.7), 4/4 rounds positive | +1.21 |
+| null control (same function, two builds) | -0.65% | -0.37% (z -0.6) | -0.36 |
+
+  The build-to-build floor is about 0.4% (the null control reads one build higher than the other for identical
+  function), so the cross-build FA comparison (+0.97% mean, z 1.4) is the weakest and the same-build toggles are the
+  evidence. Each delta is about +1% (0.6-1.2 ms per run), significant at z of about 2-3 on its own; the fp16 sum is the
+  only comparison above z 4. The best arm (int best-speed, `MASK=0x27`, FA on) has an 80-sample median of 9380.6 t/s
+  (trimmed mean 9321.6, stddev 408.9); its in-run decode-phase sample is 9279.55 and the 3-round prefill median 9078.18,
+  so the honest band is 9.1-9.4k t/s.
+- Decode check (the main table has the best-speed arm at 70.19 with round 1 at 69.82). Extra check, 4 clean rounds,
+  health before every run: tg128 medians `INT_MM=0` 71.73, best-speed `MASK=7` 71.04, best-speed `MASK=0x27` 71.15
+  (rounds 71.20 / 71.09 / 71.51 / 70.20), PLE tree without the FA change 70.82. The `model_proj` int8 does not cost decode
+  (`0x27` vs `7`: +0.11, inside noise); the 69.8-70.7 values of the main table are the lower tail of a 70.2-71.5 band
+  that the int arms occupy in this session.
+
+### Gates (RUN 12)
+
+- `INT_MM=0` bit-identity (hard stop): PARITY_IDENTICAL, `llama-perplexity` PPL exactly 134.3955 +/- 6.77407, 5-output
+  gate SAME on all five (g0 g1 g2 s2 s0). The FA O-store, the PLE caps (default on) and the packer do not change fp16
+  behaviour.
+- Int best-speed (`MASK=0x27`) against the fp16 logits (20 chunks, c512): KLD 0.006692 +/- 0.000328, top-p 96.647%, PPL
+  132.5813 (-1.34%), greedy identical. The step from the RUN 11 best-speed numbers (KLD 0.006124, top-p 96.941%) is the
+  price of the `model_proj` class; the gate (0.008 / 96.0) holds. Matches the int owner's M130 numbers exactly.
+- Int full-coverage: KLD 0.006942, top-p 96.569%, PPL 132.1043 (-1.70%), greedy identical; unchanged from RUNs 9-11.
+- `INT_MM=1` guard: one warning, as before.
+- Static compile matrix 31 objects / 0 errors on all 8 cells (SDK 6.6.0.0 and 6.7.0.0 x v73 v75 v79 v81); host `clang++`
+  syntax check on `ggml-hexagon.cpp` 0 errors. v73 / v75 / v79 are compile-only.
+
+### KPI distance (RUN 12)
+
+- Decode target 70 t/s: MET in all three merged arms of the main table (71.72 / 70.19 / 70.68). The best-speed margin is
+  thin (+0.19 in the main table, rounds 69.82 and 70.19 at or below the line); the 4-round extra check gives 71.15 median.
+- Prefill target 10000 t/s: NOT MET. Best arm: 9078.18 (3-round median), 9256.02 (best round); 80-sample median 9380.6 =
+  93.8% of the target, about 3.4 ms per ubatch short of the 51.2 ms needed (the arm is at about 54.6 ms at 9.38k).
+- Both targets with one configuration: NOT MET (best-speed: decode 70.2-71.2, prefill 9.1-9.4k).
+
 ## Optimization steps
 
 Numbers per step are medians of 6-8 interleaved `llama-bench` pp512 rounds on 10.92.138.99. That device was later found throttled on battery, so only the relative change between adjacent builds is meaningful. The final table above is from 10.92.137.16.

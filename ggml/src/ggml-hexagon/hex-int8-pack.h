@@ -111,9 +111,10 @@ static inline float hex_int8_act_mult(uint32_t i, float s_k, uint32_t rot_block)
     return rot_block ? hex_int8_sign(i) / (sqrtf((float) rot_block) * s_k) : 1.0f / s_k;
 }
 
-// dst: n/64 records. src_rows: n rows of k/32 blocks (18 bytes each: fp16 d, 16 bytes of nibbles; low nibble = element i, high = i + 16)
-static inline void hex_int8_pack_rotated(uint8_t * dst, const uint8_t * src_rows, uint32_t n, uint32_t k, uint32_t reduce, bool rotate = true,
-                                          const float * smooth = nullptr, uint32_t rot_block = 0) {
+// Core packer: fetch(c, row) fills row[0..k) with the f32 weights of output channel c. dst: n/64 records.
+template <typename Fetch>
+static inline void hex_int8_pack_impl(uint8_t * dst, uint32_t n, uint32_t k, uint32_t reduce, bool rotate, const float * smooth,
+                                      uint32_t rot_block, Fetch fetch) {
     // rot_block != 0: rotation by blocks of rot_block elements (32 = one HVX vector of lanes) instead of HEX_INT8_WHT_BLOCK
     const size_t   rec_bytes = hex_int8_record_bytes(k);
     const uint32_t nkc = k / 32;
@@ -127,22 +128,7 @@ static inline void hex_int8_pack_rotated(uint8_t * dst, const uint8_t * src_rows
     auto work = [&](uint32_t r0, uint32_t r1) {
         std::vector<float> row(k);
         for (uint32_t c = r0; c < r1; ++c) {
-            const uint8_t * rp = src_rows + (size_t) c * nkc * 18;
-            for (uint32_t b = 0; b < nkc; ++b) {
-                uint16_t dh; memcpy(&dh, rp + b * 18, 2);
-                // fp16 -> f32
-                const uint32_t sg = (dh >> 15) & 1, ex = (dh >> 10) & 31, ma = dh & 1023;
-                float d;
-                if (ex == 0)       { d = ldexpf((float) ma, -24); }
-                else if (ex == 31) { d = 0.0f; }
-                else               { d = ldexpf((float) (ma | 1024), (int) ex - 25); }
-                if (sg) { d = -d; }
-                const uint8_t * qs = rp + b * 18 + 2;
-                for (uint32_t i = 0; i < 16; ++i) {
-                    row[b * 32 + i]      = (float) ((int) (qs[i] & 0xF) - 8) * d;
-                    row[b * 32 + i + 16] = (float) ((int) (qs[i] >> 4) - 8) * d;
-                }
-            }
+            fetch(c, row.data());
             // smoothing: W' = W * s_k per input channel (the DSP divides the activation by s_k)
             if (smooth) { for (uint32_t i = 0; i < k; ++i) { row[i] *= smooth[i]; } }
             for (uint32_t i = 0; i < k; ++i) { row[i] *= sgn[i]; }
@@ -201,4 +187,44 @@ static inline void hex_int8_pack_rotated(uint8_t * dst, const uint8_t * src_rows
         th.emplace_back(work, r0, r1);
     }
     for (auto & t : th) { t.join(); }
+}
+
+// Q4_0 source rows (18-byte blocks)
+static inline void hex_int8_pack_rotated(uint8_t * dst, const uint8_t * src_rows, uint32_t n, uint32_t k, uint32_t reduce, bool rotate = true,
+                                          const float * smooth = nullptr, uint32_t rot_block = 0) {
+    const uint32_t nkc = k / 32;
+    hex_int8_pack_impl(dst, n, k, reduce, rotate, smooth, rot_block, [&](uint32_t c, float * row) {
+        const uint8_t * rp = src_rows + (size_t) c * nkc * 18;
+        for (uint32_t b = 0; b < nkc; ++b) {
+            uint16_t dh; memcpy(&dh, rp + b * 18, 2);
+            const uint32_t sg = (dh >> 15) & 1, ex = (dh >> 10) & 31, ma = dh & 1023;
+            float d;
+            if (ex == 0)       { d = ldexpf((float) ma, -24); }
+            else if (ex == 31) { d = 0.0f; }
+            else               { d = ldexpf((float) (ma | 1024), (int) ex - 25); }
+            if (sg) { d = -d; }
+            const uint8_t * qs = rp + b * 18 + 2;
+            for (uint32_t i = 0; i < 16; ++i) {
+                row[b * 32 + i]      = (float) ((int) (qs[i] & 0xF) - 8) * d;
+                row[b * 32 + i + 16] = (float) ((int) (qs[i] >> 4) - 8) * d;
+            }
+        }
+    });
+}
+
+// Dense f16 source rows (row-major [n][k]: the device copy of a BF16 weight such as PLE model_proj)
+static inline void hex_int8_pack_f16(uint8_t * dst, const uint16_t * src_rows, uint32_t n, uint32_t k, uint32_t reduce,
+                                     const float * smooth = nullptr) {
+    hex_int8_pack_impl(dst, n, k, reduce, false, smooth, 0, [&](uint32_t c, float * row) {
+        const uint16_t * rp = src_rows + (size_t) c * k;
+        for (uint32_t i = 0; i < k; ++i) {
+            const uint16_t dh = rp[i];
+            const uint32_t sg = (dh >> 15) & 1, ex = (dh >> 10) & 31, ma = dh & 1023;
+            float d;
+            if (ex == 0)       { d = ldexpf((float) ma, -24); }
+            else if (ex == 31) { d = 0.0f; }
+            else               { d = ldexpf((float) (ma | 1024), (int) ex - 25); }
+            row[i] = sg ? -d : d;
+        }
+    });
 }

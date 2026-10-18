@@ -144,9 +144,12 @@ static bool g_int_smooth_warned   = false;
 static uint32_t opt_int_rot_abl = 0;  // GGML_HEXAGON_INT_ROT_STAGES=1..5: timing ablation, run only that many butterfly stages (wrong results)
 static uint32_t opt_int_rot_mask = 0x5;   // GGML_HEXAGON_INT_ROT_MASK: classes that get R32 (bit0 qkv, bit1 o-proj, bit2 gate+up)
 static uint32_t opt_int_rot   = 0;     // GGML_HEXAGON_INT_ROT=32: R32 rotation (in-lane WHT over 32 elements) on top of smoothing for A8 gate+up/qkv/o
+static uint32_t opt_ple_nc = 512;      // GGML_HEXAGON_PLE_NC=<cols, multiple of 32, 0 = off>: n_chunk cap of the PLE proj matmul (n = 1536)
+static uint32_t opt_ple_ncg = 64;      // GGML_HEXAGON_PLE_NCG=<cols, 0 = off>: n_chunk cap of the PLE inp_gate matmul (n = 256)
 static int      opt_int_split = 0;     // GGML_HEXAGON_INT_SPLIT=1 enables the m-split overlap of the plain int8 op (measured slower, see log M75)
 static int    opt_mm_select  = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
 static int    opt_fa_select  = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
+static int    opt_fa_ostore = 1; // 1 = flash_attn writes its output through DMA from VTCM (default on), 0 = cached stores
 static int    opt_fa_head_split = 1; // 1 = partition flash_attn by KV heads in multicore (default on), 0 = token-based (original)
 static int    opt_gdn_select = 2; // 2 = HMX -> HVX, 1 = HVX, 0 = CPU (unsupported)
 static int    opt_ar_select  = 2; // 2 = fused ALLREDUCE+ADD (default), 1 = unfused ALLREDUCE, 0 = fallback to CPY+FENCE
@@ -445,9 +448,11 @@ static inline bool ggml_hexagon_int8_needs_smooth(const struct ggml_tensor * t, 
     return (cls == HTP_INT8_CLASS_QKV || cls == HTP_INT8_CLASS_O) && (opt_int_mm_mask16 & cls) == 0;
 }
 
-// Weight tensors that carry a packed int8 copy behind the tiled Q4_0 data (populated in set_tensor, consumed by the int8 ops).
+// Weight tensors that carry a packed int8 copy behind the weight data (populated in set_tensor, consumed by the int8 ops).
+// Q4_0 tensors are packed from the repack source; the BF16 PLE model_proj (stored on the device as dense f16) from its f16 copy.
 static inline bool ggml_hexagon_int8_rot_tensor(const struct ggml_tensor * t) {
-    if (opt_int_mm < 2 || opt_int_mm > 6 || t->type != GGML_TYPE_Q4_0) {
+    const bool bf16_mp = t->type == GGML_TYPE_BF16 && strcmp(t->name, "per_layer_model_proj.weight") == 0;
+    if (opt_int_mm < 2 || opt_int_mm > 6 || (t->type != GGML_TYPE_Q4_0 && !bf16_mp)) {
         return false;
     }
     if (t->ne[0] % 32 != 0 || t->ne[1] % 64 != 0 || t->ne[2] != 1 || t->ne[3] != 1 || t->ne[1] > 12288) {
@@ -537,8 +542,9 @@ static void ggml_hexagon_load_int_smooth(const char * path) {
     GGML_LOG_INFO("ggml-hex: loaded %zu smoothing vectors from %s\n", g_int_smooth.size(), path);
 }
 
-// byte offset of the int8 region from the start of a tensor (end of the tiled data, 128 B aligned)
+// byte offset of the int8 region from the start of a tensor (end of the tiled data, 128 B aligned; BF16 weights are stored as dense f16)
 static inline size_t ggml_hexagon_int8_rot_offset(const struct ggml_tensor * t) {
+    if (t->type == GGML_TYPE_BF16) { return hex_round_up(ggml_nbytes(t), 128); }
     return hex_round_up(ggml_hexagon_tiled_row_size(t->type, t->ne[0]) * hex_round_up(t->ne[1], 32), 128);
 }
 
@@ -2736,6 +2742,22 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
         for (size_t i = 0; i < size / sizeof(ggml_bf16_t); i++) {
             dst[i] = GGML_FP32_TO_FP16(GGML_BF16_TO_FP32(src[i]));
         }
+        if (ggml_hexagon_int8_rot_tensor(tensor)) {
+            // dense f16 copy complete -> pack the int8 records behind it (the f16 copy stays for the fp16 fallback)
+            extra->shadow_size += size;
+            if (extra->shadow_size >= ggml_nbytes(tensor)) {
+                const uint32_t red = opt_int_mm_reduce;
+                uint8_t * dst8 = (uint8_t *) tensor->data + ggml_hexagon_int8_rot_offset(tensor);
+                const std::vector<float> * sm = ggml_hexagon_int8_smooth_vec(tensor);
+                hex_int8_pack_f16(dst8, (const uint16_t *) tensor->data, (uint32_t) tensor->ne[1], (uint32_t) tensor->ne[0], red,
+                                  sm ? sm->data() : nullptr);
+                if (sm) {
+                    float * inv = (float *) (dst8 + hex_int8_extra_bytes((uint32_t) tensor->ne[0], (uint32_t) tensor->ne[1]));
+                    for (size_t i = 0; i < sm->size(); ++i) { inv[i] = hex_int8_act_mult((uint32_t) i, (*sm)[i], 0); }
+                }
+                extra->shadow_size = 0;
+            }
+        }
         return;
     }
 
@@ -3153,6 +3175,9 @@ static size_t ggml_backend_hexagon_buffer_type_get_alloc_size(ggml_backend_buffe
             sz = ggml_hexagon_int8_rot_offset(t) + hex_int8_extra_bytes((uint32_t) t->ne[0], (uint32_t) t->ne[1]) + ggml_hexagon_int8_smooth_bytes(t);
         }
         return sz;
+    }
+    if (t->type == GGML_TYPE_BF16 && ggml_hexagon_int8_rot_tensor(t)) {
+        return ggml_hexagon_int8_rot_offset(t) + hex_int8_extra_bytes((uint32_t) t->ne[0], (uint32_t) t->ne[1]) + ggml_hexagon_int8_smooth_bytes(t);
     }
     return ggml_nbytes(t);
 
@@ -6241,7 +6266,7 @@ static bool ggml_hexagon_precompute_flash_attn_params(
     kparams->logit_softcap = logit_softcap;
 
     kparams->head_split = (opt_fa_head_split != 0) ? 1 : 0;
-    kparams->flags      = 0;
+    kparams->flags      = opt_fa_ostore ? 2 : 0;  // 2: flash-attn O store goes through DMA (GGML_HEXAGON_FA_OSTORE=0 disables)
     kparams->G = G;
 
     const uint32_t n_head = q->ne[2];
@@ -6575,6 +6600,12 @@ static bool ggml_hexagon_precompute_hmx_mm_params(
         if (!htp_mm_hmx_solve_2d_params(wtype, ne00_padded, m_id_rows, ne01_padded, m_for_solver_padded, cost_m, n_threads, pipeline, is_matmul_id, aligned_tile_size, src2_size, vtcm_budget, &m_chunk, &n_chunk, &act_threads_selected, &vtcm_size)) {
             return false;
         }
+    }
+    if (pipeline && src0 && ggml_hexagon_int8_class(src0) == HTP_INT8_CLASS_PLE_GP && !is_matmul_id && !is_batched) {
+        // PLE inp_gate (n 256) / proj (n 1536) are single-chunk by default, so DMA, HMX and the f32 store run strictly in series.
+        // Smaller n-chunks let the pipeline overlap them (measured: proj 81 -> 61 us, inp_gate 60 -> 53 us per 512-row op). Same math per element.
+        const size_t cap = (n_chunk >= 1024) ? opt_ple_nc : opt_ple_ncg;
+        if (cap && n_chunk > cap) { n_chunk = cap; }
     }
 
     kparams->n_hmx = 1;
@@ -10764,6 +10795,8 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     if (const char * s_rs = getenv("GGML_HEXAGON_INT_ROT_STAGES")) { opt_int_rot_abl = (uint32_t) atoi(s_rs) & 7; }
     if (const char * s_rm = getenv("GGML_HEXAGON_INT_ROT_MASK")) { opt_int_rot_mask = (uint32_t) strtoul(s_rm, NULL, 16); }
     if (const char * s_ro = getenv("GGML_HEXAGON_INT_ROT")) { opt_int_rot = (uint32_t) atoi(s_ro); }
+    if (const char * s_pn = getenv("GGML_HEXAGON_PLE_NC")) { opt_ple_nc = (uint32_t) atoi(s_pn); }
+    if (const char * s_pg = getenv("GGML_HEXAGON_PLE_NCG")) { opt_ple_ncg = (uint32_t) atoi(s_pg); }
     if (const char * s_sp = getenv("GGML_HEXAGON_INT_SPLIT")) { opt_int_split = atoi(s_sp); }
     if (const char * s_so = getenv("GGML_HEXAGON_INT_SMOOTH_OPTIONAL")) { g_int_smooth_optional = atoi(s_so) != 0; }
     if (const char * s_sm = getenv("GGML_HEXAGON_INT_SMOOTH")) { ggml_hexagon_load_int_smooth(s_sm); }
@@ -10771,6 +10804,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_mm_select = str_mm_select ? atoi(str_mm_select)                   : opt_mm_select;
     opt_fa_select = str_fa_select ? atoi(str_fa_select)                   : opt_fa_select;
     opt_fa_head_split = str_fa_head_split ? atoi(str_fa_head_split)       : opt_fa_head_split;
+    if (getenv("GGML_HEXAGON_FA_OSTORE")) { opt_fa_ostore = atoi(getenv("GGML_HEXAGON_FA_OSTORE")); }
     opt_gdn_select    = str_gdn_select    ? atoi(str_gdn_select)          : opt_gdn_select;
     opt_ar_select     = str_ar_select     ? atoi(str_ar_select)           : opt_ar_select;
     opt_ar_scatter    = str_ar_scatter    ? atoi(str_ar_scatter)          : opt_ar_scatter;
