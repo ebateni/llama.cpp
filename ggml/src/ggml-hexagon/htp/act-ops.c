@@ -18,6 +18,14 @@
 #include "htp-tensor.h"
 #include "htp-vtcm.h"
 
+// per-thread pipeline depth of the f32 activation ops: block = rows_per_thread / ACT_STAGES, at least ACT_MINBLK rows
+#ifndef ACT_STAGES
+#define ACT_STAGES 8
+#endif
+#ifndef ACT_MINBLK
+#define ACT_MINBLK 4
+#endif
+
 #define htp_act_preamble                                 \
     const struct htp_tensor * src0 = actx->octx->src[0]; \
     const struct htp_tensor * src1 = actx->octx->src[1]; \
@@ -419,6 +427,12 @@ static void gelu_mul_f32(const float * restrict src0,
         const uint32_t nvec = nc / 32;
         const uint32_t nloe = nc % 32;
         uint32_t i = 0;
+        for (; i + (HVX_GELU_X - 1) < nvec; i += HVX_GELU_X) {
+            HVX_Vector gx[HVX_GELU_X];
+            hvx_vec_gelu_f32_xn(&vx[i], gx);
+            #pragma unroll
+            for (int q = 0; q < HVX_GELU_X; ++q) { vd[i + q] = hvx_vec_mul_f32_f32(gx[q], vg[i + q]); }
+        }
         for (; i < nvec; i++) {
             vd[i] = hvx_vec_mul_f32_f32(hvx_vec_gelu_f32(vx[i]), vg[i]);
         }
@@ -808,8 +822,8 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
     // compute and DMA-out strictly serial. Cap the block so each thread runs at least 4 pipeline stages.
     {
         const uint32_t rows_per_thread = actx.src0_nrows_per_thread;
-        uint32_t cap = (rows_per_thread + 3) / 4;
-        if (cap < 8) { cap = 8; }
+        uint32_t cap = (rows_per_thread + (ACT_STAGES - 1)) / ACT_STAGES;
+        if (cap < ACT_MINBLK) { cap = ACT_MINBLK; }
         if (actx.block > cap) { actx.block = cap; }
     }
     actx.src0_nrows = nrows;

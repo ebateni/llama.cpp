@@ -83,6 +83,37 @@ static inline __attribute__((noinline)) HVX_Vector hvx_vec_gelu_f32(HVX_Vector x
                                hvx_vec_add_f32_f32(one, hvx_vec_tanh_f32(inner)));
 }
 
+// GELU_X independent vectors through exactly the intrinsic sequence of hvx_vec_gelu_f32 (same per-lane arithmetic and rounding, so the
+// result is bit-identical); the body is latency-bound (one long dependent chain per vector), so interleaving chains lets them overlap.
+#ifndef HVX_GELU_X
+#define HVX_GELU_X 4
+#endif
+static inline __attribute__((noinline)) void hvx_vec_gelu_f32_xn(const HVX_Vector * restrict x, HVX_Vector * restrict out) {
+    const HVX_Vector half = hvx_vec_splat_f32(0.5f);
+    const HVX_Vector one  = hvx_vec_splat_f32(1.0f);
+    const HVX_Vector two  = hvx_vec_splat_f32(2.0f);
+    const HVX_Vector max_exp = hvx_vec_splat_f32(87.f);
+    const HVX_Vector min_exp = hvx_vec_splat_f32(-87.f);
+    HVX_Vector t[HVX_GELU_X];
+    #pragma unroll
+    for (int q = 0; q < HVX_GELU_X; ++q) {
+        HVX_Vector inner = hvx_vec_mul_f32_f32(x[q], x[q]);
+        inner = hvx_vec_mul_f32_f32(inner, hvx_vec_splat_f32(0.044715f));
+        inner = hvx_vec_add_f32_f32(inner, one);
+        inner = hvx_vec_mul_f32_f32(inner, x[q]);
+        inner = hvx_vec_mul_f32_f32(inner, hvx_vec_splat_f32(0.7978845608028654f));
+        HVX_Vector x2    = Q6_Vqf32_vmpy_VsfVsf(inner, two);
+        HVX_Vector sig2x = hvx_vec_fast_sigmoid_f32_guard(Q6_Vsf_equals_Vqf32(x2), one, max_exp, min_exp);
+        HVX_Vector res   = Q6_Vqf32_vmpy_VsfVsf(sig2x, two);
+        res = Q6_Vqf32_vsub_Vqf32Vsf(res, one);
+        t[q] = Q6_Vsf_equals_Vqf32(res);
+    }
+    #pragma unroll
+    for (int q = 0; q < HVX_GELU_X; ++q) {
+        out[q] = hvx_vec_mul_f32_f32(hvx_vec_mul_f32_f32(half, x[q]), hvx_vec_add_f32_f32(one, t[q]));
+    }
+}
+
 #define hvx_sigmoid_loop_body(dst_type, src_type, vec_store)                                  \
     do {                                                                                      \
         dst_type * restrict vdst = (dst_type *) dst;                                          \

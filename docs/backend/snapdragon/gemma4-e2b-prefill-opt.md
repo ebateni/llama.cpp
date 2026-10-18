@@ -616,6 +616,74 @@ excluded (pkg-new decode 54.13-54.50):
   93.8% of the target, about 3.4 ms per ubatch short of the 51.2 ms needed (the arm is at about 54.6 ms at 9.38k).
 - Both targets with one configuration: NOT MET (best-speed: decode 70.2-71.2, prefill 9.1-9.4k).
 
+## RUN 13: interleaved GELU for the PLE path
+
+RUN 13 adds a two-file, bit-identical change on top of the RUN 12 state (`htp/hvx-sigmoid.h`, `htp/act-ops.c`). Source of
+the numbers: analysis/merge-log.md "DEVICE RUN 13" and the int owner's per-op measurements. Same model, device and
+command lines as before.
+
+- Change: `hvx_vec_gelu_f32_xn` (`HVX_GELU_X` = 4) pushes four independent vectors through exactly the intrinsic
+  sequence of `hvx_vec_gelu_f32`. The GELU body is latency-bound (one long dependent chain per vector), so interleaving
+  four chains lets them overlap. It is used for the 4-aligned part of the `gelu_mul` rows (the remainder runs through the
+  old single-vector loop). The activation pipeline depth constants become `ACT_STAGES` 8 (a thread's block is
+  `rows_per_thread / ACT_STAGES`, was `/ 4`) and `ACT_MINBLK` 4 (minimum block rows, was 8).
+- Why it is bit-identical: every lane goes through the same intrinsic sequence with the same rounding; only the
+  scheduling of independent vectors changes, and the block size only changes how rows are grouped, not the per-element
+  arithmetic. This is backed by a full 20-chunk logit byte-compare on both the fp16 and the int paths (int owner) and by
+  the gates below.
+- Per op (int owner): GELU+MUL 85.6 -> 55.4 us at 512 rows and 43.9 -> 32.4 us at 209 rows, about -0.42 ms per ubatch
+  (about 0.75% of the ubatch).
+
+DEVICE RUN 13 arm table (3 clean rounds, medians; arm order rotated per round, 30 s gaps, a health check before every
+run, no contaminated A/B round; the session level was low, `pkg-new` prefill 7.35-7.42k, about 2% below RUN 12):
+
+| Arm | prefill pp512 (t/s) | ratio vs `pkg-new` | decode tg128 (t/s) | ratio vs `pkg-new` |
+|---|---|---|---|---|
+| `pkg-new` (baseline) | 7387.87 | 1.000 | 54.25 | 1.000 |
+| merged13, `INT_MM=0` (fp16 path) | 8613.57 | 1.166 | 71.27 | 1.314 |
+| merged13, int best-speed (`MASK=0x27`) | 9389.12 | 1.271 | 70.79 | 1.305 |
+| merged13, int full-coverage | 8720.57 | 1.180 | 70.39 | 1.298 |
+
+- The best-speed arm: rounds 8974.07 (stddev 13.1% inside the run) / 9389.12 / 9508.44, so its best round is 9508. The
+  ratios vs `pkg-new` are inflated by the low `pkg-new` level of this session (7388 vs 7625 in RUN 12); on absolute
+  numbers the 3-round medians are +3.4% (best-speed), +0.2% (fp16) and +1.9% (full-coverage) over RUN 12, which is more
+  than the 0.75% the change can explain, so the 3-round table is not an attribution of this change. The in-run pp512
+  sample of the best-speed arm in the decode runs is 8853.51, so the honest band is 8.9-9.5k t/s, central about 9.4k.
+- 80-sample alternating test, merged13 vs merged12 (`llama-bench -p 512 -n 0 -r 10` with per-sample times, pair order
+  swapped every round, 7 s gaps, health check at every round start):
+
+| Comparison | median (t/s) | median delta | mean delta (z) | ms/run | round pairs |
+|---|---|---|---|---|---|
+| int best-speed, merged13 vs merged12 (80 / 80 samples) | 9462.6 vs 9386.1 | +0.81% | +0.95% (z 1.3) | +0.44 | 6 of 8 positive |
+| same without one round flagged contaminated (70 / 70) | - | +0.88% | +0.71% (z 0.9) | +0.47 | 5 of 7 positive |
+| fp16 `INT_MM=0`, merged13 vs merged12 (40 / 40 samples) | 8704.5 vs 8618.5 | +1.00% | +0.70% (z 0.9) | +0.59 | 4 of 4 positive |
+
+  Both pairs point in the predicted direction and size (+0.8..1.0% median = 0.44-0.59 ms per ubatch, the per-op figure is
+  -0.42 ms), and 10 of 12 round pairs favour merged13. The unpaired z is only 0.9-1.3 (per-sample stddev 250-460 t/s
+  against an effect of 60-90 t/s), so the test confirms consistency; it does not resolve the 0.8% at 2 sigma. One round
+  start (health pp128 2784.85 = 68.2% of the best seen) fell under the 70% line and is flagged; the result is given with
+  and without it and does not change. Not a regression anywhere.
+
+### Gates (RUN 13)
+
+- `INT_MM=0` bit-identity (hard stop): PARITY_IDENTICAL, `llama-perplexity` PPL exactly 134.3955 +/- 6.77407, 5-output
+  gate SAME on all five (g0 g1 g2 s2 s0).
+- Int best-speed (`MASK=0x27`): KLD 0.006692 +/- 0.000328, top-p 96.647%, PPL 132.5813 (-1.34%), greedy identical; the
+  same numbers to the last digit as RUN 12, so the GELU change does not move a logit statistic.
+- Int full-coverage: KLD 0.006942, top-p 96.569%, PPL 132.1043 (-1.70%), greedy identical; unchanged from RUNs 9-12.
+- `INT_MM=1` guard: one warning, as before.
+- Static compile matrix 31 objects / 0 errors on all 8 cells (SDK 6.6.0.0 and 6.7.0.0 x v73 v75 v79 v81); host `clang++`
+  syntax check 0 errors. v73 / v75 / v79 are compile-only.
+
+### KPI distance (RUN 13)
+
+- Decode target 70 t/s: MET in all three merged arms (71.27 `INT_MM=0`, 70.79 best-speed, 70.39 full-coverage). The
+  best-speed margin is +0.79 by median (rounds 70.34-71.28), thin as before; full-coverage has one round at 69.77.
+- Prefill target 10000 t/s: NOT MET. Best arm (best-speed): 9389.12 (3-round median), 9508.44 (best round); 80-sample
+  median 9462.6 = 94.6% of the target, 537 t/s short (the 3-round median is 611 short, 93.9%). The arm is at about 54.1
+  ms per ubatch at 9.46k against the 51.2 ms needed.
+- Both targets with one configuration: NOT MET (best-speed: decode 70.4-71.3, prefill about 9.4k).
+
 ## Optimization steps
 
 Numbers per step are medians of 6-8 interleaved `llama-bench` pp512 rounds on 10.92.138.99. That device was later found throttled on battery, so only the relative change between adjacent builds is meaningful. The final table above is from 10.92.137.16.
