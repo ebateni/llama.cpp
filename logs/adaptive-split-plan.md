@@ -167,6 +167,15 @@ so this is also the **re-measured baseline**. Quality (IQ / needle / cookie) is 
   1/10 at **1c and 4c, with fusion on and off**. So it is not the multi-core split and not the
   fusions; it is a single-core kernel or the model. Gemma-2-2B is fine. Re-check on this branch.
 - **MoE 4c host OOM** at ub1024 / d16k while 1c passes; 4c uses extra host memory (M5).
+- **Upstream PR in flight (Alan Zhu, 2026-10-18), affects M1 / M2 / M4 / M6.**
+  - (a) FA HMX→HVX crossover for SWA models: Gemma's 25 SWA layers move to HVX FA (2–3× per op).
+    - M1 only acts on the HMX path, so on top of this PR its gain shrinks to the global layers.
+    - His crossover is tuned against upstream HMX, which on mdev runs mostly on NSP0 for n_kv=2. With M1 the 4c HMX side is faster, so the crossover must be re-measured with `FA_SPLIT=2`.
+    - Expect a merge conflict in `ggml_hexagon_precompute_flash_attn_params` and the solver signature.
+    - In M7, the kernel choice (HMX/HVX) and the partition choice belong in one cost model.
+  - (b) Gemma4 op-sequence fusions (as Metal and CUDA do): overlap with M2 (GEGLU) and M4 (post-norm + ADD + layer-scale). Agree ownership and `OPFUSION` bits (we planned 128/256/512) before writing them.
+  - (c) OPBATCH default 1280 → 2K: every baseline shifts, so re-measure knob-off after the rebase. This helps M6, since the whole graph fits in one batch and batch boundaries are full syncs.
+  - Plan: share M1 with Alan before his merge; split fusion ownership; after the merge, rebase and re-run T2/T3 on Gemma.
 - **Pre-existing FA test-ops failures** (52–65 FAIL lines, nondeterministic, also at 1c). Need the logs (M1-4) to see which cases; possibly tolerance or an uninitialised-read issue.
 - **llama 4c at d16k is ~10% slower than the old branch.** Old binaries (`75360014b`, 520 upstream commits older): 1724 / 1817 t/s at ub1024 / 2048. This branch: 1567 / 1624. 1c is identical (476 / 495), so this is a multi-core regression in newer upstream, likely the FA KV-head split (#29974) at long KV (llama `n_kv=8`). Gemma and Qwen3.5 are not affected. Test R-1 checks it with `FA_HEAD_SPLIT=0`. If the regression is real, the head split vs Q-block split choice becomes a depth-dependent knob (principle 3) for the cost model.
 - **Causal block skipping** in HMX FA: every Q-block streams the full KV, including fully
@@ -208,3 +217,4 @@ so this is also the **re-measured baseline**. Quality (IQ / needle / cookie) is 
 | `f4a9b2801` | **M1 auto** `GGML_HEXAGON_FA_SPLIT=2`: cost-model choice between the team split and upstream, per FA op; `hmx_fa_find_chunk_size` returns its cost. Harness: `git add -f` so the run's `*.log` files are pushed. Plan: M1 results, re-measured baseline, llama d16k regression vs the old branch |
 | (this commit) | M1 named "FA adaptive team split"; M1 closing test set T1–T4 and criteria |
 | (this commit) | Host: memoize `hmx_fa_find_chunk_size` (32-entry cache on the full input tuple). FA precompute runs every prefill ubatch (KV length changes), and auto doubles the search; all layers share ~2 shapes, so this makes it ~free. Results are identical |
+| (this commit) | Plan: dependency on Alan Zhu's in-flight PR (FA HMX/HVX SWA crossover, Gemma4 fusions, OPBATCH 2K): impact on M1/M2/M4/M6 |
