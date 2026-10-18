@@ -260,7 +260,7 @@ static inline __attribute__((always_inline)) void hmx_int8_wht32_x4(HVX_Vector *
 // pass; (2) round-to-nearest-even via the float magic number: bits(y + 12583040.0f) - bits(1.5 * 2^23) = round(y) + 128, which also
 // folds the +128 offset (y is within [-127, 127] by construction). Two independent chains per loop so the vector latencies overlap.
 // Differs from hmx_int8_quant_pair only on exact .5 ties (even vs away from zero).
-static inline void hmx_int8_quant_pair_fast(uint8_t * dst_pair, float * sc, float * x0, float * x1, uint32_t k, const float * inv_s, uint32_t rot32) {
+static inline void hmx_int8_quant_pair_fast_ex(uint8_t * dst_pair, float * sc, float * x0, float * x1, uint32_t k, const float * inv_s, uint32_t rot32, size_t cstride) {
     const uint32_t nkc = k / 32;
     const HVX_Vector abs_mask = Q6_V_vsplat_R(0x7fffffff);
     const HVX_Vector c127 = hvx_vec_splat_f32(127.0f);
@@ -325,15 +325,19 @@ static inline void hmx_int8_quant_pair_fast(uint8_t * dst_pair, float * sc, floa
         for (uint32_t kc = 0; kc < nkc; ++kc) {
             const HVX_Vector u0 = Q6_Vw_vsub_VwVw(hvx_vec_add_f32_f32(hvx_vec_mul_f32_f32(v0[kc], inv[0]), magic), base);
             const HVX_Vector u1 = Q6_Vw_vsub_VwVw(hvx_vec_add_f32_f32(hvx_vec_mul_f32_f32(v1[kc], inv[1]), magic), base);
-            *(HVX_Vector *) (dp + (size_t) kc * HMX_INT8_CROUTON_A) = Q6_Vw_vaslacc_VwVwR(Q6_Vw_vasl_VwR(u0, 8), u1, 24);
+            *(HVX_Vector *) (dp + (size_t) kc * cstride) = Q6_Vw_vaslacc_VwVwR(Q6_Vw_vasl_VwR(u0, 8), u1, 24);
         }
     } else if (x0) {
         const HVX_Vector hi = Q6_Vw_vasl_VwR(off128, 24);
         for (uint32_t kc = 0; kc < nkc; ++kc) {
             const HVX_Vector u0 = Q6_Vw_vsub_VwVw(hvx_vec_add_f32_f32(hvx_vec_mul_f32_f32(v0[kc], inv[0]), magic), base);
-            *(HVX_Vector *) (dp + (size_t) kc * HMX_INT8_CROUTON_A) = Q6_V_vor_VV(Q6_Vw_vasl_VwR(u0, 8), hi);
+            *(HVX_Vector *) (dp + (size_t) kc * cstride) = Q6_V_vor_VV(Q6_Vw_vasl_VwR(u0, 8), hi);
         }
     }
+}
+
+static inline void hmx_int8_quant_pair_fast(uint8_t * dst_pair, float * sc, float * x0, float * x1, uint32_t k, const float * inv_s, uint32_t rot32) {
+    hmx_int8_quant_pair_fast_ex(dst_pair, sc, x0, x1, k, inv_s, rot32, HMX_INT8_CROUTON_A);
 }
 
 // A16, fast form: ONE pass produces both int8 pages. t = y - round(y) is bounded by 0.5, so the low page needs no residual-max

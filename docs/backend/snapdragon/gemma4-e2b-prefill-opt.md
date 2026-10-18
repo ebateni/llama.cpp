@@ -760,6 +760,136 @@ run, no contaminated A/B round; `pkg-new` prefill 6.9-7.6k, a low sample of 6922
   per ubatch at 9.64k against the 51.2 ms needed, 1.9 ms away. Honest band 9.5-9.65k.
 - Both targets with one configuration: NOT MET (best-speed: decode 70.4, prefill 9.5-9.65k).
 
+## RUN 15: host batch path and fused qkv quantize
+
+RUN 15 adds five changes on top of the RUN 14 state: four host-side changes ("host stack") and one DSP change
+(RMS_NORM_MUL_Q8, "q8f"). Source of the numbers: analysis/merge-log.md "HOST STACK" and "DEVICE RUN 15". Same model,
+device and command lines as before. All five are bit-identical by the gates below.
+
+1. CPU gather (`ggml-cpu.c`): GET_ROWS is planned with up to 8 tasks when it gathers at least 64 rows and at least 8 MB
+   of output from a quantized table (the PLE table gather). Every other GET_ROWS stays single-task. It was single-task
+   by design in ggml, so the 18.35 MB q4_0 -> f32 gather ran on one core. The kernel is already row-range parallel, so only
+   the task count changed; an offline check of the same dequantize loop gave byte-identical output with 1 / 2 / 4 / 8
+   threads. Scheduler split 0 on the device: 854 -> 460 us.
+2. Descriptor cache (`ggml-hexagon.cpp`): the finished op batch of a reused graph (534 ops, 824 tensors, 7 buffers,
+   after buffer sort and nodirty marking) is replayed with three memcpy instead of being rebuilt. The key is a
+   fingerprint of the graph uid plus every node's opcode, op_params and kernel_params (first 16 words) and every
+   tensor's data address, type, ne / nb, shared-buffer fd / base and extra flags, so any change of address, shape or
+   buffer forces a normal build and a new capture. It is off under profiling, with multiple devices or peers, and when
+   the batch already holds ops. `GGML_HEXAGON_DESC_CACHE=0` disables it; `GGML_HEXAGON_DESC_VERIFY=1` rebuilds normally
+   every rep and memcmp's the three descriptor arrays against the snapshot. The replay is byte-identical to a rebuild
+   (DESC_VERIFY_OK, n_ops 534, n_tens 824, n_bufs 7).
+3. KV-cache `prepare()` (`src/llama-kv-cache.cpp`): when a single ubatch lands in empty cells the apply / restore round
+   trip is skipped, because for that case it is exact and unobserved (no cell is removed). Anything else (an occupied
+   cell, SWA overwrite, more than one ubatch) takes the generic path. Decode entry to init_batch 440 -> 182 us.
+4. KQ mask (`src/llama-kv-cache.cpp`): for consecutive cells with strictly ascending positions and causal or standard
+   SWA masks, a mask row is three fills around two bisections instead of a per-cell loop; chunked and symmetric SWA,
+   ALiBi, M-RoPE and non-ascending cells fall through to the per-cell code. Verified against the per-cell predicate on
+   400000 random cases (0 mismatches). `set_inputs` 241 -> 81 us. This builds on the KQ-mask fast path of RUN 10.
+5. RMS_NORM_MUL_Q8 (DSP, `htp/unary-ops.c`, `htp/matmul-ops.c`, `htp/hmx-mm-kernels-int8.h`, `htp/main.c` and headers):
+   with `GGML_HEXAGON_NORM_Q8=1` the attn_norm RMS_NORM+MUL that feeds a 3-weight qkv MUL_MAT_NX writes the int8 payload
+   and the f32 row scales itself, with the same smoothing multiply, row max and rounding as the matmul's own activation
+   quantize, and the qkv matmul skips its A_QUANT. The host only does this when it proves: 3 uses and all of them
+   MUL_MAT src1, `n_weights` 3, `int_mm` 3, `int8_split` 0, class qkv, no A16, m 64..1024 and a multiple of 32, k a
+   multiple of 64, single device. Every other DSP route for a flagged op returns INVAL_PARAMS. **Default off.**
+
+The `src/` part is now a single patch: `src/llama-kv-cache.cpp` is the only `src/` change since the RUN 10 patch
+(analysis/merged10-src.patch), and items 3 and 4 build on it, so the two are merged into one patch against the base
+(analysis/merged15-src.patch, 117 lines).
+
+Host timeline before the DSP write (probe build, int best-speed arm, 7 reps x 2 runs, medians, us):
+
+| Stage | RUN 14 state | host stack | delta |
+|---|---|---|---|
+| decode entry to init_batch done (item 3) | 440 | 182 | -258 |
+| output_reserve + apply + graph_params | 62 | 76 | +14 (noise) |
+| `set_inputs` (item 4) | 240 | 81 | -160 |
+| scheduler split 0 CPU gather (item 1) | 854 | 460 | -394 |
+| hexagon enqueue of 534 ops (item 2) | 392 | 76 | -316 |
+| logits `get_async` entry to `flush_batch` (item 2) | 102 | 2 | -100 |
+| `flush_batch` (sort / nodirty / push, item 2) | 132 | 70 | -62 |
+| host before the DSP write | 2232 | 991 | -1240 |
+
+  With `GGML_HEXAGON_DESC_CACHE=0` on the same build the host window is 1344 us, so the cache is worth 0.31-0.39 ms of
+  it. The DSP op sum is unchanged by the host stack (8 alternating pairs: 50.504 vs 50.485 ms, -0.02 ms). With q8f in the
+  RUN 15 package the host window measured 1036 us (range 906-1723) and 1233 us in a noisier second run: about 1.0-1.2 ms,
+  not demonstrably below 1.0 ms, because q8f does not touch the host timeline.
+
+### Gates (RUN 15)
+
+- `INT_MM=0` bit-identity (hard stop): PARITY_IDENTICAL, `llama-perplexity` PPL exactly 134.3955 +/- 6.77407, 5-output
+  gate SAME on all five (g0 g1 g2 s2 s0).
+- 20-chunk logits against the RUN 14 build, `fc /b`: no differences on the fp16 path (md5
+  0e36db18db77650597d4c4088025835f) and on the int best-speed path (md5 b76ef14e158447c224903a9807a704e2), with
+  `NORM_Q8` on and off (the q8f path is byte-equal to the unfused path).
+- Int best-speed (`MASK=0x27`), `NORM_Q8` 1 and 0: KLD 0.006692, top-p 96.647%, PPL 132.5813, greedy identical. Int
+  full-coverage (`MASK=cf`): KLD 0.006942, top-p 96.569%, PPL 132.1043, greedy identical. `INT_MM=1` guard: one warning.
+- `GGML_HEXAGON_DESC_VERIFY=1`: DESC_VERIFY_OK on 6 of 6 reps with `NORM_Q8=1` and 6 of 6 with `NORM_Q8=0`, including the
+  RMS_NORM_MUL_Q8 producer rewrite (the fused op reuses an existing tensor as src[2], so the tensor count stays 824).
+- Static compile matrix 31 objects / 0 errors on all 8 cells (SDK 6.6.0.0 and 6.7.0.0 x v73 v75 v79 v81); host `clang++
+  -fsyntax-only` 0 errors on `ggml-hexagon.cpp`, `llama-kv-cache.cpp` and `llama-context.cpp`. v73 / v75 / v79 are
+  compile-only.
+
+### Environment (RUN 15 best-speed)
+
+`GGML_HEXAGON_INT_MM=3 GGML_HEXAGON_INT_MM_MASK=27 GGML_HEXAGON_INT_MM_LAYERS=7ffffffff GGML_HEXAGON_INT_MM_REDUCE=2
+GGML_HEXAGON_INT_MM_REDUCE_BIG=4 GGML_HEXAGON_INT_MM_MASK16=0 GGML_HEXAGON_INT_ROT=32 GGML_HEXAGON_INT_ROT_MASK=4
+GGML_HEXAGON_INT_SMOOTH=<path>/smooth.bin GGML_HEXAGON_VMEM=5G GGML_HEXAGON_NORM_Q8=1`. `NORM_Q8` defaults to 0. The
+descriptor cache is on by default (`GGML_HEXAGON_DESC_CACHE=0` disables it, `GGML_HEXAGON_DESC_VERIFY=1` checks it). The
+gather change has no switch (it is a ggml-cpu task count).
+
+### Arm table (RUN 15)
+
+3 clean interleaved rounds, medians, `llama-bench -p 512 -r 5` per cell; `NORM_Q8=1` is on the best-speed arm only
+unless noted. Prefill health was clean in every round; two decode rounds (round 1: health pp128 2875 under 70% of the
+best 4145; round 4: tg32 45.4 under 90% of 53.5) were flagged contaminated, excluded and repeated, never averaged.
+
+| Arm | prefill pp512 (t/s), rounds | median | decode tg128 (t/s), clean rounds | median |
+|---|---|---|---|---|
+| `pkg-new` (baseline) | 7502.22 / 7570.46 / 7186.26 | 7502.22 | 54.41 / 54.32 / 54.26 | 54.32 |
+| merged15, `INT_MM=0` (fp16 path) | 8813.86 / 8716.93 / 8750.22 | 8750.22 | 71.83 / 72.36 / 71.55 | 71.83 |
+| merged15, int best-speed, `NORM_Q8=1` | 10042.68 / 9540.13 / 9787.68 | 9787.68 | 70.73 / 71.15 / 72.65 | 71.15 |
+| merged15, int best-speed, `NORM_Q8=0` | 9664.81 / 9748.76 / 9441.59 | 9664.81 | 71.51 / 71.28 / 70.87 / 72.53 | 71.40 |
+| merged15, int full-coverage | 8932.14 / 8589.12 / 8688.61 | 8688.61 | 71.12 / 70.84 / 71.31 | 71.12 |
+
+- The best-speed arm with `NORM_Q8=1` is 1.305x `pkg-new` in prefill (9788 vs 7502) and the fp16 arm 1.166x. Round 1 of
+  that arm read 10042.68 (stddev 0.7%), the first 5-rep cell above 10000, but the other two rounds were 9540 and 9788.
+  `NORM_Q8=1` vs 0 in place: +1.3% on the medians (9788 vs 9665), 2 of 3 rounds.
+- Decode is unchanged by these changes (decode graphs do not hit the fused qkv or the 512-row paths): every merged arm
+  stays above 70 t/s.
+
+### 120-sample alternation (RUN 15)
+
+Int best-speed (`MASK=0x27`), merged15 (`NORM_Q8=1`) vs the RUN 14 build, 12 rounds x 10 samples, order swapped every
+round, health at every round start (lowest pp128 3270 = 78.9% of the best seen, none flagged, nothing excluded):
+
+| Pair | merged15 | RUN 14 build | median delta | mean delta (z) | ms/run | round pairs |
+|---|---|---|---|---|---|---|
+| int best-speed, 120 / 120 | median 9928.3, mean 9723.2, stddev 491 | median 9636.9, mean 9607.4, stddev 345 | +3.02% | +1.97% (+187.6 t/s, z 3.4) | +1.56 | 11 of 12 positive |
+| fp16, 40 / 40 | median 9009.3 | median 8796.4 | +2.42% | +2.64% (z 2.5) | +1.38 | 4 of 4 positive |
+
+- Bootstrap 95% CI of the int median: 9866-9965 (the upper end is below 10000). 39 of 120 samples (32.5%) are at or
+  above 10000, maximum 10173, against 0 of 120 for the RUN 14 build. The bootstrap 95% CI of the median difference is
+  +227..+353 t/s. The single losing round (round 12, mean 9276) had a clean health check; without it the median is 9951
+  (+3.43%).
+- Median 9928.3 t/s is 51.57 ms per ubatch.
+
+### Op-sum caveat (RUN 15)
+
+- The whole-sum drop expected from q8f was not reproduced. `PROFILE=3`, int best-speed, 6 rotating rounds, 534 ops per
+  ubatch, medians: `NORM_Q8=1` 50.50 ms, `NORM_Q8=0` 51.01 ms, RUN 14 build 50.29 ms. Without the first (cold) round of
+  each arm `NORM_Q8=1` is 50.24 vs 50.30 ms, i.e. -0.06 ms. One trace varies by 0.5-1 ms from run to run, larger than the
+  0.47-0.70 ms that was claimed.
+- The per-class effect of q8f is real: MUL_MAT_NX 3.44 -> 2.96 ms (-0.48 ms, the removed qkv A_QUANT). RMS_NORM+MUL
+  1.41 -> 0.45 ms plus the new RMS_NORM+MUL+Q8 1.14 ms on the 15 producers add +0.18 ms, so the net on the 15 pairs is
+  about -0.3 ms. The end-to-end gain of the stack is therefore mostly the host-side one measured above.
+
+### KPI line (RUN 15)
+
+- Prefill target 10000 t/s: NOT MET. Best arm (int best-speed, `NORM_Q8=1`): 120-sample median 9928.3 t/s, 72 t/s (0.7%,
+  0.37 ms per ubatch) short; 3-round median 9787.68; best single 5-rep cell 10042.68.
+- Decode target 70 t/s: MET in every merged arm (71.12-71.83).
+
 ## Optimization steps
 
 Numbers per step are medians of 6-8 interleaved `llama-bench` pp512 rounds on 10.92.138.99. That device was later found throttled on battery, so only the relative change between adjacent builds is meaningful. The final table above is from 10.92.137.16.

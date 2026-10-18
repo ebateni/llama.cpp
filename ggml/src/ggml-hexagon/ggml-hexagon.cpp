@@ -147,6 +147,7 @@ static uint32_t opt_int_rot   = 0;     // GGML_HEXAGON_INT_ROT=32: R32 rotation 
 static uint32_t opt_ple_nc = 512;      // GGML_HEXAGON_PLE_NC=<cols, multiple of 32, 0 = off>: n_chunk cap of the PLE proj matmul (n = 1536)
 static uint32_t opt_ple_ncg = 64;      // GGML_HEXAGON_PLE_NCG=<cols, 0 = off>: n_chunk cap of the PLE inp_gate matmul (n = 256)
 static int      opt_int_split = 0;     // GGML_HEXAGON_INT_SPLIT=1 enables the m-split overlap of the plain int8 op (measured slower, see log M75)
+static int      opt_norm_q8 = 0;       // GGML_HEXAGON_NORM_Q8=1: qkv activations quantized to int8 by the producing RMS_NORM+MUL (RMS_NORM_MUL_Q8); 0 = unfused
 static int    opt_mm_select  = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
 static int    opt_fa_select  = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
 static int    opt_fa_ostore = 1; // 1 = flash_attn writes its output through DMA from VTCM (default on), 0 = cached stores
@@ -163,6 +164,8 @@ static u32vec opt_pmu_evt { 0x3, 0x111, 0x100, 0x105, 0x240, 0x256, 0x7D, 0x8C }
 static int opt_opbatch  = 1280; // max number of ops in a batch
 static int opt_nodirty  = 1;   // skip dirty-range tracking of DMA-only outputs that are only read by DMA
 static int opt_opqueue  = 8;   // max number of pending batches
+static int opt_desc_cache = 1;  // GGML_HEXAGON_DESC_CACHE=0 disables the per-graph op-batch descriptor cache (replay of the finished batch for a reused graph)
+static int opt_desc_verify = 0; // GGML_HEXAGON_DESC_VERIFY=1: rebuild the batch normally AND compare it with the cached descriptors (logs DESC_VERIFY_OK / _MISMATCH)
 static int opt_optrace  = 0;    // trace buffer size per thread (0 means default)
 static int opt_oppoll   = 1;    // polling for batch completions (blocking waits let DDR clocks drop and slow the DSP)
 static int opt_opfusion = 1;    // enable/disable op fusion
@@ -325,6 +328,7 @@ enum ggml_hexagon_tensor_flags {
     GGML_HEXAGON_TENSOR_FENCE     = (1 << 2),
     GGML_HEXAGON_TENSOR_FUSEABLE  = (1 << 3),
     GGML_HEXAGON_TENSOR_BF16_F16  = (1 << 4), // bf16 weight stored as f16 on the device
+    GGML_HEXAGON_TENSOR_Q8SRC     = (1 << 5), // attn_norm output read only by the 3 qkv MUL_MATs (candidate for RMS_NORM_MUL_Q8)
 };
 
 // BF16 weights are converted to F16 when loaded into HTP buffers, so matmul treats them as F16.
@@ -804,6 +808,26 @@ struct ggml_hexagon_session {
 
     uint64_t                cached_uid = 0;
     std::vector<htp_opnode> cached_nodes;
+
+    // Descriptor cache for a reused graph: the finished op batch (after buffer sort and nodirty marking) of the graph whose
+    // cached_nodes are in cached_uid. Replayed instead of rebuilding ~540 ops of descriptors each rep; see graph_compute.
+    struct desc_snapshot {
+        uint64_t                  uid = 0;
+        uint64_t                  fingerprint = 0;
+        unsigned int              n_bufs = 0, n_tens = 0, n_ops = 0;
+        size_t                    b_vmem = 0;
+        std::vector<htp_buf_desc> bufs;
+        std::vector<htp_tensor>   tens;
+        std::vector<htp_op_desc>  ops;
+    } desc_snap;
+    uint64_t desc_capture_uid  = 0;   // set after a graph_compute that produced exactly one whole batch
+    uint64_t desc_capture_fp   = 0;
+    unsigned int desc_capture_n_ops = 0;
+    uint64_t desc_enq_serial   = 0;   // bumped by every enqueue_op; capture/replay only valid if nothing else was enqueued
+    uint64_t desc_capture_serial = 0;
+    bool     desc_replay_active = false;   // op_batch arrays hold a replayed snapshot (ops[] / maps are NOT populated)
+    bool     desc_verify_pending = false;  // verify mode: compare the freshly built batch with desc_snap at the next flush
+    void     desc_materialize();           // rebuild the batch normally from cached_nodes (leaves replay mode)
 
     mutable std::unordered_set<const ggml_tensor *> needs_repack;
 
@@ -3745,7 +3769,7 @@ struct ggml_hexagon_opbatch {
     static bool op_writes_dst_by_dma(uint32_t opc) {
         switch (opc) {
             case HTP_OP_MUL: case HTP_OP_ADD: case HTP_OP_SUB: case HTP_OP_DIV:
-            case HTP_OP_RMS_NORM: case HTP_OP_RMS_NORM_MUL: case HTP_OP_ADD_RMS_NORM_MUL: case HTP_OP_RMS_NORM_MUL_ADD:
+            case HTP_OP_RMS_NORM: case HTP_OP_RMS_NORM_MUL: case HTP_OP_RMS_NORM_MUL_Q8: case HTP_OP_ADD_RMS_NORM_MUL: case HTP_OP_RMS_NORM_MUL_ADD:
             case HTP_OP_SCALE: case HTP_OP_UNARY_GELU: case HTP_OP_UNARY_SILU: case HTP_OP_UNARY_TANH:
             case HTP_OP_GLU_SWIGLU: case HTP_OP_GLU_GEGLU: case HTP_OP_GELU_MUL:
             case HTP_OP_ROPE: case HTP_OP_RMS_NORM_MUL_ROPE:
@@ -3766,7 +3790,7 @@ struct ggml_hexagon_opbatch {
                 const auto * kp = (const htp_mm_kernel_params *) o.kernel_params;
                 return slot <= kp->n_weights;
             }
-            case HTP_OP_RMS_NORM: case HTP_OP_RMS_NORM_MUL: case HTP_OP_ADD_RMS_NORM_MUL: case HTP_OP_RMS_NORM_MUL_ADD:
+            case HTP_OP_RMS_NORM: case HTP_OP_RMS_NORM_MUL: case HTP_OP_RMS_NORM_MUL_Q8: case HTP_OP_ADD_RMS_NORM_MUL: case HTP_OP_RMS_NORM_MUL_ADD:
             case HTP_OP_SCALE: case HTP_OP_UNARY_GELU: case HTP_OP_UNARY_SILU: case HTP_OP_UNARY_TANH:
             case HTP_OP_GLU_SWIGLU: case HTP_OP_GLU_GEGLU: case HTP_OP_GELU_MUL:
                 return true;
@@ -4589,6 +4613,51 @@ struct ggml_hexagon_opbatch {
         return true;
     }
 
+    // Convert the already-batched attn_norm RMS_NORM+MUL (ops[n_ops-2]) into RMS_NORM_MUL_Q8 and flag the qkv NX op (ops[n_ops-1]) as consuming
+    // its int8 payload. Fires only when every precondition of the int8 path is proven here; otherwise nothing changes (unfused path).
+    void try_q8_norm_producer() {
+        if (!opt_norm_q8 || n_ops < 2 || sess->mdev.count > 1) return;
+        htp_opnode & nx   = ops[n_ops - 1];
+        htp_opnode & norm = ops[n_ops - 2];
+        if (nx.opcode != HTP_OP_MUL_MAT_NX || nx.outputs.size() != 3 || norm.opcode != HTP_OP_RMS_NORM_MUL || norm.inputs.size() != 2 || norm.outputs.size() != 1) return;
+
+        const ggml_tensor * x = nx.inputs[3];
+        if (norm.outputs[0] != x || !x->extra || !(((const ggml_hexagon_tensor_extra *) x->extra)->flags & GGML_HEXAGON_TENSOR_Q8SRC)) return;
+
+        const ggml_tensor * xin = norm.inputs[0];
+        const ggml_tensor * nw  = norm.inputs[1];
+        const int64_t k = x->ne[0];
+        const int64_t m = x->ne[1];
+        if (x->type != GGML_TYPE_F32 || xin->type != GGML_TYPE_F32 || nw->type != GGML_TYPE_F32) return;
+        if (x->ne[2] != 1 || x->ne[3] != 1 || !ggml_is_contiguous(x) || !ggml_is_contiguous(xin) || xin->ne[0] != k || xin->ne[1] != m || xin->ne[2] != 1 || xin->ne[3] != 1) return;
+        if (nw->ne[0] != k || nw->ne[1] != 1 || nw->ne[2] != 1 || nw->ne[3] != 1) return;
+        if (k % 64 != 0 || m < 64 || m > 1024 || m % 32 != 0) return;
+
+        const auto * kp = (const struct htp_mm_kernel_params *) nx.kernel_params;
+        if (kp->n_weights != 3 || !kp->n_hmx || kp->collapse || kp->int_mm != 3 || !kp->smooth || kp->int8_split != 0 || kp->q8_in) return;
+        for (int w = 0; w < 3; w++) {
+            if (!ggml_hexagon_int8_rot_tensor(nx.inputs[w]) || ggml_hexagon_int8_class(nx.inputs[w]) != HTP_INT8_CLASS_QKV) return;
+            if (nx.inputs[w]->type != GGML_TYPE_Q4_0) return;
+            if (opt_int_mm_mask16 & HTP_INT8_CLASS_QKV) return;
+        }
+
+        // the producer reads the same smoothing vector the consumer would have read: behind the records of weight 0 -> pass it as src[2]
+        htp_mm_kernel_params nkp;
+        memcpy(&nkp, nx.kernel_params, sizeof(nkp));
+        nkp.q8_in = 1;
+        memcpy(nx.kernel_params, &nkp, sizeof(nkp));
+        memcpy(h_ops[n_ops - 1].kernel_params, &nkp, sizeof(nkp));
+
+        norm.opcode = HTP_OP_RMS_NORM_MUL_Q8;
+        norm.name   = "RMS_NORM+MUL+Q8";
+        norm.inputs.push_back(nx.inputs[0]);
+        htp_op_desc & o = h_ops[n_ops - 2];
+        o.opcode = HTP_OP_RMS_NORM_MUL_Q8;
+        o.src[2] = add_tensor(nx.inputs[0]);
+
+        HEX_VERBOSE("ggml-hex: %s RMS_NORM_MUL_Q8 producer (#%u)\n", sess->c_name(), n_ops - 2);
+    }
+
     bool try_fuse_mul_mat_nx(const htp_opnode & node) {
         if (n_ops == 0 || node.opcode != HTP_OP_MUL_MAT) return false;
         if (!is_mergeable_mul_mat(node.node)) return false;
@@ -4664,6 +4733,8 @@ struct ggml_hexagon_opbatch {
             for (uint32_t d = curr_n + 1; d < HTP_OP_MAX_OUTPUTS; d++) {
                 o.dst[d] = 0xffff;
             }
+
+            if (curr_n + 1 == 3) { try_q8_norm_producer(); }
 
             HEX_VERBOSE("ggml-hex: %s fused MUL_MAT_NX (N=%u, #%u)\n", sess->c_name(), curr_n + 1, n_ops - 1);
             return true;
@@ -5205,7 +5276,9 @@ struct ggml_hexagon_opqueue {
         req.n_tensors = op_batch->n_tens;
         req.n_ops     = op_batch->n_ops;
 
-        op_cache[slot]   = op_batch->ops;
+        if (opt_profile) {
+            op_cache[slot]   = op_batch->ops;   // only the profile dump in pop() reads it
+        }
         start_usec[slot] = ggml_time_us();
 
         const size_t b_size = sizeof(htp_buf_desc)  * req.n_bufs;
@@ -5284,7 +5357,7 @@ struct ggml_hexagon_opqueue {
         uint8_t * m_ptr = (uint8_t*) dbuf.ptr;
         uint8_t * p_ptr = m_ptr + (b_size + t_size + o_size);
 
-        if (rsp.n_ops > 0) {
+        if (rsp.n_ops > 0 && opt_profile) {
             auto & ops = op_cache[slot];
             GGML_ASSERT(rsp.n_ops <= ops.size());
 
@@ -5398,10 +5471,34 @@ void ggml_hexagon_session::start_batch() {
 void ggml_hexagon_session::flush_batch(size_t min_ops) {
     if (op_batch->n_ops < min_ops) { return; }
 
-    op_batch->sort_buffers();
-    if (this->mdev.count <= 1) {
-        op_batch->mark_nodirty();
+    if (!desc_replay_active) {
+        op_batch->sort_buffers();
+        if (this->mdev.count <= 1) {
+            op_batch->mark_nodirty();
+        }
     }
+
+    // capture the finished batch of a whole-graph batch for replay on the next rep of the same (reused) graph
+    if (opt_desc_cache && !desc_replay_active && desc_capture_uid != 0 && desc_capture_uid == cached_uid &&
+        desc_capture_serial == desc_enq_serial && op_batch->n_ops == desc_capture_n_ops) {
+        if (desc_verify_pending && desc_snap.uid == desc_capture_uid) {
+            const bool same = desc_snap.n_bufs == op_batch->n_bufs && desc_snap.n_tens == op_batch->n_tens && desc_snap.n_ops == op_batch->n_ops &&
+                memcmp(desc_snap.bufs.data(), op_batch->h_bufs.data(), sizeof(htp_buf_desc) * op_batch->n_bufs) == 0 &&
+                memcmp(desc_snap.tens.data(), op_batch->h_tens.data(), sizeof(htp_tensor)   * op_batch->n_tens) == 0 &&
+                memcmp(desc_snap.ops.data(),  op_batch->h_ops.data(),  sizeof(htp_op_desc)  * op_batch->n_ops)  == 0;
+            fprintf(stderr, "DESC_VERIFY_%s n_ops %u n_tens %u n_bufs %u\n", same ? "OK" : "MISMATCH", op_batch->n_ops, op_batch->n_tens, op_batch->n_bufs);
+        } else {
+            desc_snap.uid         = desc_capture_uid;
+            desc_snap.fingerprint = desc_capture_fp;
+            desc_snap.n_bufs = op_batch->n_bufs; desc_snap.n_tens = op_batch->n_tens; desc_snap.n_ops = op_batch->n_ops;
+            desc_snap.b_vmem = op_batch->b_vmem;
+            desc_snap.bufs.assign(op_batch->h_bufs.begin(), op_batch->h_bufs.begin() + op_batch->n_bufs);
+            desc_snap.tens.assign(op_batch->h_tens.begin(), op_batch->h_tens.begin() + op_batch->n_tens);
+            desc_snap.ops.assign (op_batch->h_ops.begin(),  op_batch->h_ops.begin()  + op_batch->n_ops);
+        }
+    }
+    desc_capture_uid = 0;
+    desc_verify_pending = false;
 
     htp_opbatch_req req {};
     dspqueue_buffer dbuf{};
@@ -5443,9 +5540,23 @@ void ggml_hexagon_session::flush_batch(size_t min_ops) {
     }
 
     op_batch->reset();
+    desc_replay_active = false;
+}
+
+void ggml_hexagon_session::desc_materialize() {
+    // leave replay mode: drop the replayed arrays and rebuild the batch the normal way from the graph's cached nodes
+    desc_replay_active = false;
+    op_batch->reset();
+    for (const auto & n : cached_nodes) {
+        enqueue_op(n);
+    }
 }
 
 void ggml_hexagon_session::enqueue_op(const htp_opnode & node) {
+    if (desc_replay_active) {
+        desc_materialize();   // some other op is being queued on top of a replayed batch: restore the normal state first
+    }
+    desc_enq_serial++;
     auto clone_tensor_buffer = [this](const ggml_tensor * t) {
         auto sbuf = this->mmap_tensor(t);
         if (!sbuf) return;
@@ -9264,7 +9375,21 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
             auto * extra = (ggml_hexagon_tensor_extra *) graph->nodes[i]->extra;
             if (!extra) continue;
 
-            extra->flags &= ~GGML_HEXAGON_TENSOR_FUSEABLE;
+            extra->flags &= ~(GGML_HEXAGON_TENSOR_FUSEABLE | GGML_HEXAGON_TENSOR_Q8SRC);
+
+            // attn_norm candidate for RMS_NORM_MUL_Q8: the normalized rows are read by exactly 3 MUL_MATs (Q, K, V as src1) and nothing else
+            if (opt_norm_q8 && graph->nodes[i]->op == GGML_OP_MUL && ggml_node_has_n_uses(graph, i, 3)) {
+                int n_mm = 0;
+                bool only_mm = true;
+                for (int j = i + 1; j < graph->n_nodes && only_mm; j++) {
+                    const ggml_tensor * c = graph->nodes[j];
+                    for (int sidx = 0; sidx < GGML_MAX_SRC; sidx++) {
+                        if (c->src[sidx] != graph->nodes[i]) { continue; }
+                        if (c->op == GGML_OP_MUL_MAT && sidx == 1) { n_mm++; } else { only_mm = false; }
+                    }
+                }
+                if (only_mm && n_mm == 3) { extra->flags |= GGML_HEXAGON_TENSOR_Q8SRC; }
+            }
 
             if (graph->nodes[i]->op == GGML_OP_RMS_NORM && ggml_can_fuse(graph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL })) {
                 extra->flags |= GGML_HEXAGON_TENSOR_FUSEABLE;
@@ -9442,9 +9567,62 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
         }
     }
 
-    // Queue and execute
-    for (const auto & node : *nodes_ptr) {
-        sess->enqueue_op(node);
+    // Queue and execute.
+    // Descriptor cache: a reused graph (cache_hit) enqueues the same ops with the same tensors at the same addresses every rep, and the
+    // batch build (fusion tests, add_tensor lookups, descriptor writes, buffer sort, nodirty marking) is ~0.5 ms of host time in front of
+    // the DSP. The finished batch of the previous rep is replayed when a fingerprint of all node op_params and tensor addresses matches.
+    // GGML_HEXAGON_DESC_CACHE=0 disables it; GGML_HEXAGON_DESC_VERIFY=1 rebuilds normally and compares with the snapshot.
+    const bool desc_ok = opt_desc_cache && !opt_profile && sess->mdev.count <= 1 && sess->virt_peers.empty() && sess->phys_peers.empty() &&
+                         graph->uid != 0 && nodes_ptr == &sess->cached_nodes && sess->op_batch->empty();
+    uint64_t desc_fp = 0;
+    if (desc_ok) {
+        // FNV-1a over everything the descriptors are derived from
+        auto mix = [&](uint64_t v) { desc_fp = (desc_fp ^ v) * 0x100000001b3ULL; };
+        desc_fp = 0xcbf29ce484222325ULL;
+        mix(graph->uid); mix(nodes_ptr->size());
+        for (const auto & n : *nodes_ptr) {
+            const ggml_tensor * t = n.node;
+            mix((uint64_t) n.opcode);
+            const uint32_t * p = (const uint32_t *) (n.has_op_params ? (const void *) n.op_params : (const void *) t->op_params);
+            for (int i = 0; i < GGML_MAX_OP_PARAMS / 4; i += 2) { mix(((uint64_t) p[i + 1] << 32) | p[i]); }
+            // every tensor: data address, shape, strides, type, and the shared buffer (fd + base) it lives in
+            auto mix_t = [&](const ggml_tensor * x) {
+                if (!x) { mix(0x9e3779b97f4a7c15ULL); return; }
+                mix((uint64_t) (uintptr_t) x->data); mix((uint64_t) x->type);
+                for (int i = 0; i < GGML_MAX_DIMS; i++) { mix((uint64_t) x->ne[i]); mix((uint64_t) x->nb[i]); }
+                const auto * sb = x->buffer ? static_cast<const ggml_hexagon_shared_buffer *>(x->buffer->context) : nullptr;
+                mix(sb ? (uint64_t) (uint32_t) sb->fd() : 0); mix(sb ? (uint64_t) (uintptr_t) sb->base() : 0);
+                mix(x->extra ? (uint64_t) ((const ggml_hexagon_tensor_extra *) x->extra)->flags : 0);
+            };
+            for (const auto * s : n.inputs)  { mix_t(s); }
+            for (const auto * d : n.outputs) { mix_t(d); }
+            for (int i = 0; i < 16; i++) { mix((uint64_t) (uint32_t) n.kernel_params[i]); }
+        }
+    }
+
+    if (desc_ok && sess->desc_snap.uid == graph->uid && sess->desc_snap.fingerprint == desc_fp && !opt_desc_verify) {
+        // replay: restore the finished batch directly into the batch arrays
+        auto * b = sess->op_batch;
+        memcpy(b->h_bufs.data(), sess->desc_snap.bufs.data(), sizeof(htp_buf_desc) * sess->desc_snap.n_bufs);
+        memcpy(b->h_tens.data(), sess->desc_snap.tens.data(), sizeof(htp_tensor)   * sess->desc_snap.n_tens);
+        memcpy(b->h_ops.data(),  sess->desc_snap.ops.data(),  sizeof(htp_op_desc)  * sess->desc_snap.n_ops);
+        b->n_bufs = sess->desc_snap.n_bufs; b->n_tens = sess->desc_snap.n_tens; b->n_ops = sess->desc_snap.n_ops; b->b_vmem = sess->desc_snap.b_vmem;
+        // the buffers are mapped on this session already: the snapshot was captured from a batch whose enqueue_op() calls mapped them,
+        // and the fingerprint includes every buffer fd/base (a buffer that was freed and reallocated changes it)
+        sess->desc_replay_active = true;
+        sess->desc_enq_serial++;
+    } else {
+        const uint64_t flushes0 = sess->batch_req_seq;
+        for (const auto & node : *nodes_ptr) {
+            sess->enqueue_op(node);
+        }
+        if (desc_ok && sess->batch_req_seq == flushes0) {
+            sess->desc_capture_uid = graph->uid;  sess->desc_capture_fp = desc_fp;
+            sess->desc_capture_n_ops = sess->op_batch->n_ops;  sess->desc_capture_serial = sess->desc_enq_serial;
+            sess->desc_verify_pending = (opt_desc_verify != 0 && sess->desc_snap.uid == graph->uid && sess->desc_snap.fingerprint == desc_fp);
+        } else {
+            sess->desc_capture_uid = 0;
+        }
     }
 
     if (sess->last_error > HTP_STATUS_OK) {
@@ -10779,6 +10957,8 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     if (getenv("GGML_HEXAGON_NODIRTY")) { opt_nodirty = atoi(getenv("GGML_HEXAGON_NODIRTY")); }
     opt_optrace   = str_optrace  ? strtoul(str_optrace, NULL, 0)          : (opt_opbatch * 256);
     opt_oppoll    = str_oppoll   ? strtoul(str_oppoll,  NULL, 0)          : opt_oppoll;
+    if (const char * s_dc = getenv("GGML_HEXAGON_DESC_CACHE"))  { opt_desc_cache  = atoi(s_dc); }
+    if (const char * s_dv = getenv("GGML_HEXAGON_DESC_VERIFY")) { opt_desc_verify = atoi(s_dv); }
     opt_opfusion  = str_opfusion ? atoi(str_opfusion)                     : opt_opfusion;
     opt_profile   = str_profile  ? atoi(str_profile)                      : 0;
     opt_etm       = str_etm      ? atoi(str_etm)                          : 0;
@@ -10798,6 +10978,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     if (const char * s_pn = getenv("GGML_HEXAGON_PLE_NC")) { opt_ple_nc = (uint32_t) atoi(s_pn); }
     if (const char * s_pg = getenv("GGML_HEXAGON_PLE_NCG")) { opt_ple_ncg = (uint32_t) atoi(s_pg); }
     if (const char * s_sp = getenv("GGML_HEXAGON_INT_SPLIT")) { opt_int_split = atoi(s_sp); }
+    if (const char * s_nq = getenv("GGML_HEXAGON_NORM_Q8")) { opt_norm_q8 = atoi(s_nq); }
     if (const char * s_so = getenv("GGML_HEXAGON_INT_SMOOTH_OPTIONAL")) { g_int_smooth_optional = atoi(s_so) != 0; }
     if (const char * s_sm = getenv("GGML_HEXAGON_INT_SMOOTH")) { ggml_hexagon_load_int_smooth(s_sm); }
     if (const char * s_sch = getenv("GGML_HEXAGON_INT_MM_SCHEME")) { opt_int_mm_scheme = (uint32_t) atoi(s_sch); }

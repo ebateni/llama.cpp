@@ -769,6 +769,33 @@ llama_memory_context_ptr llama_kv_cache::init_update(llama_context * lctx, bool 
 llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_ubatch> & ubatches) {
     llama_kv_cache::slot_info_vec_t res;
 
+    // Fast path for the common prefill shape: ONE ubatch placed into free cells.
+    // The generic loop below applies the ubatch (apply_ubatch: seq_add, pos_set, ext_set per cell, std::set inserts) only to take
+    // the state back out again (cp / set / seq_pos_rm) because prepare() must leave the cache untouched. For a single ubatch nothing
+    // reads that intermediate state, and when every target cell is EMPTY apply_ubatch neither removes a cell nor purges other
+    // positions (seq_pos_max_rm stays -1), so apply + restore is an exact round trip and can be skipped. find_slot() does not
+    // modify the cells, so the sinfo is the one the generic loop computes. Any occupied target cell (SWA overwrite, defrag, ...)
+    // takes the generic path below.
+    if (ubatches.size() == 1) {
+        auto sinfo_new = find_slot(ubatches[0], false);
+        if (sinfo_new.empty()) {
+            return {};
+        }
+
+        bool all_empty = true;
+        for (uint32_t s = 0; s < sinfo_new.n_stream() && all_empty; ++s) {
+            const auto & cells = v_cells[sinfo_new.strm[s]];
+            for (const uint32_t idx : sinfo_new.idxs[s]) {
+                if (!cells.is_empty(idx)) { all_empty = false; break; }
+            }
+        }
+
+        if (all_empty) {
+            res.push_back(std::move(sinfo_new));
+            return res;
+        }
+    }
+
     struct state_t {
         slot_info sinfo; // slot info for the ubatch
 
@@ -1600,6 +1627,9 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, T * data
         std::unordered_map<llama_seq_id, std::vector<uint32_t>> seq_idxs;
         // positions of the cells in seq_idxs (all of them are non-empty cells of that sequence)
         std::unordered_map<llama_seq_id, std::vector<llama_pos>> seq_pos;
+        // 1 = the recorded cells are consecutive (idxs[k] = idxs[0] + k) with strictly ascending positions: every row is then
+        // [drop ... keep window ... drop] and the window comes from two binary searches (see below); 0 = generic loop
+        std::unordered_map<llama_seq_id, int> seq_win;
 
         for (uint32_t ii = 0; ii < n_tps; ++ii) {
             const uint32_t i = s*n_tps + ii;
@@ -1659,6 +1689,35 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, T * data
                 const uint32_t * ix = idxs.data();
                 const llama_pos * pp = pk.data();
                 T * row = data + idst;
+
+                // Window form: valid for causal masks with no SWA or the standard SWA, when the recorded cells are consecutive and
+                // their positions strictly ascend. Then cell k is kept iff p1 - n_swa < pp[k] <= p1, i.e. k in [lo, hi), which is
+                // exactly what the per-cell test below computes for every k (same predicate, evaluated by bisection).
+                if (causal && nk > 0 && (!swa || swa_type == LLAMA_SWA_TYPE_STANDARD || swa_type == LLAMA_SWA_TYPE_NONE)) {
+                    auto & w = seq_win[seq_id];
+                    if (w == 0) {
+                        bool ok = true;
+                        for (size_t k = 1; k < nk && ok; ++k) {
+                            ok = (ix[k] == ix[0] + k) && (pp[k] > pp[k - 1]);
+                        }
+                        w = ok ? 1 : 2;
+                    }
+                    if (w == 1) {
+                        // first k with pp[k] > p1  (cells after it are in the future)
+                        const size_t hi = std::upper_bound(pp, pp + nk, p1) - pp;
+                        size_t lo = 0;
+                        if (swa && swa_type == LLAMA_SWA_TYPE_STANDARD) {
+                            // masked when p1 - p0k >= n_swa  <=>  p0k <= p1 - n_swa  -> first k with pp[k] > p1 - n_swa
+                            lo = std::upper_bound(pp, pp + nk, (llama_pos) ((int64_t) p1 - (int64_t) n_swa)) - pp;
+                        }
+                        if (lo > hi) { lo = hi; }
+                        T * r0 = row + ix[0];
+                        std::fill(r0,          r0 + lo, mask_drop);
+                        std::fill(r0 + lo,     r0 + hi, mask_keep);
+                        std::fill(r0 + hi,     r0 + nk, mask_drop);
+                        continue;
+                    }
+                }
 
                 for (size_t k = 0; k < nk; ++k) {
                     const llama_pos p0k = pp[k];

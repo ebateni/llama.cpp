@@ -22,6 +22,8 @@
 #include "htp-tensor.h"
 #include "htp-vtcm.h"
 #include "hex-profile.h"
+#include "hmx-mm-kernels-int8.h"
+#define HMX_INT8_MAX_ROWS_Q8 1024   // must equal HMX_INT8_MAX_ROWS in matmul-ops.c (the plain int8 op refuses m > 1024)
 
 struct htp_unary_context;
 
@@ -108,6 +110,12 @@ struct htp_unary_context {
 
     // RMS_NORM_MUL_ADD only: the scale sits after the weight rows in VTCM
     bool                      has_scale;
+
+    // RMS_NORM_MUL_Q8 only: int8 activation payload (HMX crouton layout) + per-row scales written to dst
+    uint8_t *                 q8_inv_s;        // VTCM copy of the 1/s_k smoothing vector (or NULL)
+    size_t                    q8_stage_per_thread;   // stride of the per-thread VTCM blocks
+    uint32_t                  q8_nrows;        // total rows (m) of the tensor
+    uint32_t                  q8_scale_off;    // byte offset of the f32 row scales inside dst
 };
 
 // Convert flat row index to DDR byte offset using the tensor's actual strides.
@@ -1290,6 +1298,91 @@ static void unary_thread_rms_norm_mul_f32(unsigned int nth, unsigned int ith, vo
     dma_queue_flush(dma_q);
 }
 
+// 2a. RMS_NORM_MUL_Q8: rms_norm(x) * w for ROW PAIRS (2 rows = the unit of the HMX activation crouton), then the exact int8 A8
+// quantizer of the plain int8 matmul (hmx_int8_quant_pair_fast: same smoothing multiply, same row max, same magic-number rounding on
+// the same f32 values the matmul used to DMA back), writing the 2 KB-crouton payload and the f32 row scales into dst. Each thread owns
+// whole pairs, so no payload word and no scale is shared. dst layout: payload n_rt * (k/32) * 2048 B, then f32 scales at q8_scale_off.
+static void unary_thread_rms_norm_mul_q8(unsigned int nth, unsigned int ith, void * data) {
+    (void) nth;
+    const struct htp_unary_context * uctx = (const struct htp_unary_context *) data;
+    struct htp_ops_context * octx = uctx->octx;
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+
+    const uint32_t k = uctx->nc;
+    const uint32_t m = uctx->q8_nrows;
+    const uint32_t nkc = k / 32;
+    const uint32_t n_pairs = (m + 1) / 2;
+    const uint32_t n_thr = octx->n_threads;
+    const uint32_t p0 = (uint32_t) (((uint64_t) n_pairs * ith) / n_thr);
+    const uint32_t p1 = (uint32_t) (((uint64_t) n_pairs * (ith + 1)) / n_thr);
+    if (p0 >= p1) { return; }
+
+    const size_t src_stride = octx->src[0]->nb[1];
+    const size_t row_al     = uctx->src0_row_size_aligned;
+    dma_queue * dma_q = octx->ctx->dma[ith];
+
+    float epsilon = 0.f;
+    memcpy(&epsilon, octx->op_params, sizeof(float));
+
+    // one block per thread: [weight row | 2 x (2 input rows) | x0 | x1 | 2 x crouton words (nkc * 128) | row scales], stride q8_stage_per_thread
+    uint8_t * blk    = uctx->vtcm_src1 + (size_t) ith * uctx->q8_stage_per_thread;
+    uint8_t * w_vtcm = blk;
+    uint8_t * pair[2] = { blk + row_al, blk + 3 * row_al };
+    uint8_t * stg    = blk + 5 * row_al;
+    float *   x0     = (float *) stg;
+    float *   x1     = (float *) (stg + row_al);
+    uint8_t * words[2] = { stg + 2 * row_al, stg + 2 * row_al + (size_t) nkc * 128 };
+    float *   scl    = (float *) (stg + 2 * row_al + (size_t) nkc * 256);
+
+    dma_queue_push(dma_q, dma_make_data(w_vtcm, uctx->data_src1), uctx->src1_row_size_aligned, 0, uctx->src1_data_row_size, 1);
+    dma_queue_pop(dma_q);
+
+    // Software pipeline on the thread's DMA queue (strict FIFO): inputs run two pairs ahead, the payload scatter of pair g completes
+    // while pair g+1 computes. Queue order per iteration g: [out(g-2)] in(g) are popped in push order, so pops never mismatch.
+    #define Q8_IN(g_) do {                                                                                                         \
+        const uint32_t _r = 2 * (g_);                                                                                              \
+        dma_queue_push(dma_q, dma_make_data(pair[((g_) - p0) & 1], (uint8_t *) (uintptr_t) uctx->data_src0 + (size_t) _r * src_stride), \
+                       row_al, src_stride, uctx->src0_data_row_size, (_r + 1 < m) ? 2 : 1);                                         \
+    } while (0)
+
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, p0);
+    const uint32_t r_first = 2 * p0;
+    Q8_IN(p0);
+    if (p0 + 1 < p1) { Q8_IN(p0 + 1); }
+    for (uint32_t gp = p0; gp < p1; ++gp) {
+        const uint32_t li  = gp - p0;
+        const uint32_t row = 2 * gp;
+        const bool     two = (row + 1 < m);
+        if (li >= 2) { dma_queue_pop(dma_q); }   // out(gp - 2): frees words[li & 1]
+        dma_queue_pop(dma_q);                    // in(gp)
+        uint8_t * in = pair[li & 1];
+        hvx_fast_rms_norm_mul_f32(in, w_vtcm, (uint8_t *) x0, (int) k, epsilon);
+        if (two) { hvx_fast_rms_norm_mul_f32(in + row_al, w_vtcm, (uint8_t *) x1, (int) k, epsilon); }
+
+        float sc[2] = { 0.0f, 0.0f };
+        hmx_int8_quant_pair_fast_ex(words[li & 1], sc, x0, two ? x1 : NULL, k, (const float *) uctx->q8_inv_s, 0, 128);
+        scl[row - r_first] = sc[0];
+        if (two) { scl[row + 1 - r_first] = sc[1]; }
+
+        // the nkc words of this pair go to (row_pair>>4)*nkc*2048 + (row_pair&15)*128 + kc*2048 in DDR
+        const size_t doff = (size_t) (gp >> 4) * nkc * HMX_INT8_CROUTON_A + (size_t) (gp & 15) * 128;
+        dma_queue_push(dma_q, dma_make_data((uint8_t *) (uintptr_t) uctx->data_dst + doff, words[li & 1]), HMX_INT8_CROUTON_A, 128, 128, nkc);
+        if (gp + 2 < p1) { Q8_IN(gp + 2); }
+    }
+    #undef Q8_IN
+    // drain the outstanding scatters (the last two pairs; with a single pair only one)
+    const uint32_t n_p = p1 - p0;
+    dma_queue_pop(dma_q);
+    if (n_p >= 2) { dma_queue_pop(dma_q); }
+    // this thread's row scales (one contiguous run)
+    const uint32_t r_last = (2 * p1 < m) ? 2 * p1 : m;
+    const size_t   sbytes = (size_t) (r_last - r_first) * sizeof(float);
+    dma_queue_push(dma_q, dma_make_data((uint8_t *) (uintptr_t) uctx->data_dst + uctx->q8_scale_off + (size_t) r_first * sizeof(float), scl),
+                   sbytes, sbytes, sbytes, 1);
+    dma_queue_pop(dma_q);
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, p0);
+}
+
 // 2b. ADD_RMS_NORM_MUL: add the two residual inputs, keep the sum in VTCM for the norm,
 // then write both the sum (next layer's residual) and the normalized result.
 static void unary_thread_add_rms_norm_mul_f32(unsigned int nth, unsigned int ith, void * data) {
@@ -1758,7 +1851,7 @@ static int execute_op_unary(struct htp_ops_context * octx) {
     int err = HTP_STATUS_OK;
 
     const struct htp_tensor * src0 = octx->src[0];
-    const struct htp_tensor * dst  = octx->dst;
+    const struct htp_tensor * dst  = octx->dsts[0];
 
     const bool is_f16 = (src0->type == HTP_TYPE_F16);
 
@@ -2028,7 +2121,82 @@ static int execute_op_unary(struct htp_ops_context * octx) {
     return err;
 }
 
+// RMS_NORM_MUL_Q8 entry. Layout contract with the host fusion pass (ggml_hexagon_opbatch::try_fuse_norm_q8) and the plain int8 op:
+//   src[0] = f32 activation rows [k x m], src[1] = f32 norm weight [k], src[2] = qkv weight 0 (Q4_0 tensor with the packed int8 region,
+//   only used to locate the 1/s_k smoothing vector behind the records), dst = the norm output tensor reused as the payload buffer:
+//   payload  : ceil(m/32) * (k/32) * 2048 bytes (HMX activation croutons, int8 + 128 zero point, as hmx_int8_quant_pair_fast writes them)
+//   scales   : m f32 row scales at byte offset scale_off = round_up(payload, 128)
+// The op never falls back silently: any unmet precondition returns NO_SUPPORT, and the host guarantees the consumer is the int8 plain op.
+static int execute_op_rms_norm_mul_q8(struct htp_ops_context * octx) {
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * src1 = octx->src[1];
+    const struct htp_tensor * wq   = octx->src[2];
+    const struct htp_tensor * dst  = octx->dsts[0];
+    const struct htp_unary_kernel_params * kparams = (const struct htp_unary_kernel_params *) octx->kernel_params;
+
+    if (!src0 || !src1 || !wq || !dst || src0->type != HTP_TYPE_F32 || src1->type != HTP_TYPE_F32 || octx->ctx->mdev.count > 1) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+    const uint32_t k = src0->ne[0];
+    const uint32_t m = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    if (k % 64 != 0 || m < 64 || (m % 32) != 0 || m > HMX_INT8_MAX_ROWS_Q8 || src1->ne[0] != k || (src0->data & 127) || (dst->data & 127) ||
+        (src0->nb[1] & 127) || src1->ne[1] * src1->ne[2] * src1->ne[3] != 1) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+    if (!htp_ops_context_set_n_threads(octx, kparams->n_threads)) {
+        return HTP_STATUS_INVAL_PARAMS;
+    }
+    const uint32_t n_thr = octx->n_threads;
+    const uint32_t nkc   = k / 32;
+    const size_t row_al  = hex_round_up((size_t) k * sizeof(float), 128);
+    const size_t payload = (size_t) ((m + 31) / 32) * nkc * HMX_INT8_CROUTON_A;
+    const size_t scale_off = hex_round_up(payload, 128);
+
+    // VTCM: smoothing vector | per thread: [weight row | 2 input rows | stage x0 x1 words scales]
+    const size_t inv_s_bytes = hex_round_up((size_t) k * sizeof(float), 128);
+    const size_t scl_bytes   = hex_round_up(((size_t) ((m + n_thr - 1) / n_thr) + 2) * sizeof(float), 128);
+    const size_t per_thr     = row_al /*w*/ + 4 * row_al /*2 x in pair*/ + 2 * row_al /*x0 x1*/ + (size_t) nkc * 256 /*2 x words*/ + scl_bytes;
+    if (inv_s_bytes + (size_t) n_thr * per_thr > octx->ctx->vtcm_size) {
+        return HTP_STATUS_VTCM_TOO_SMALL;
+    }
+    uint8_t * base = (uint8_t *) octx->ctx->vtcm_base;
+    uint8_t * inv_s = base;
+    uint8_t * thr0  = base + inv_s_bytes;
+
+    // 1/s_k sits 128-aligned behind the packed records of weight 0 (same address math as the plain int8 op, F16 branch included)
+    const size_t n_w   = wq->ne[1];
+    const size_t rec_b = (size_t) nkc * 2048 + 2048;
+    const size_t i8off = wq->type == HTP_TYPE_F16 ? hex_round_up((size_t) k * n_w * 2, 128) : hex_round_up((size_t) nkc * 18 * hex_round_up(n_w, 32), 128);
+    dma_queue * dq0 = octx->ctx->dma[0];
+    dma_queue_push(dq0, dma_make_data(inv_s, wq->data + i8off + (n_w / 64) * rec_b), (size_t) k * 4, (size_t) k * 4, (size_t) k * 4, 1);
+    dma_queue_pop(dq0);
+
+    struct htp_unary_context uctx;
+    memset(&uctx, 0, sizeof(uctx));
+    uctx.octx                  = octx;
+    uctx.kparams               = kparams;
+    uctx.data_src0             = src0->data;
+    uctx.data_src1             = src1->data;
+    uctx.data_dst              = dst->data;
+    uctx.src0_data_row_size    = (size_t) k * sizeof(float);
+    uctx.src1_data_row_size    = (size_t) k * sizeof(float);
+    uctx.src0_row_size_aligned = row_al;
+    uctx.src1_row_size_aligned = row_al;
+    uctx.nc                    = k;
+    uctx.vtcm_src1             = thr0;          // base of the per-thread blocks
+    uctx.q8_stage_per_thread   = per_thr;
+    uctx.q8_inv_s              = inv_s;
+    uctx.q8_nrows              = m;
+    uctx.q8_scale_off          = (uint32_t) scale_off;
+
+    work_queue_run(octx->ctx->work_queue, unary_thread_rms_norm_mul_q8, &uctx, n_thr);
+    return HTP_STATUS_OK;
+}
+
 int op_unary(struct htp_ops_context * octx) {
+    if (octx->op == HTP_OP_RMS_NORM_MUL_Q8) {
+        return execute_op_rms_norm_mul_q8(octx);
+    }
     switch (octx->src[0]->type) {
         case HTP_TYPE_F32:
         case HTP_TYPE_F16:

@@ -4659,6 +4659,10 @@ static int hmx_mm_nx_2d_int8_f32(struct htp_ops_context * octx, const struct htp
     if (n_weights > 4) { return HTP_STATUS_NO_SUPPORT; }
     if (octx->op == HTP_OP_MUL_MAT_ADD) { return HTP_STATUS_NO_SUPPORT; }
     const bool act_tiled = (octx->op == HTP_OP_MUL_MAT_AT);   // x = tiled f16 activation from the fused GEGLU_T producer
+    // q8_in: the activation is the int8 payload + row scales written by RMS_NORM_MUL_Q8 (host sets kparams->q8_in only when it emitted that
+    // producer for this exact tensor). The payload replaces the f32 rows; every requirement below must hold or the op reports NO_SUPPORT
+    // loudly (the host guarantees the int8 path runs, so a refusal here is a bug and must never fall back to the f32 path).
+    const bool q8_in = kparams->q8_in != 0;
 
     const struct htp_tensor * restrict act = octx->src[n_weights];
     const int    k          = (int) act->ne[0];
@@ -4668,6 +4672,9 @@ static int hmx_mm_nx_2d_int8_f32(struct htp_ops_context * octx, const struct htp
     if (act->type != HTP_TYPE_F32 || k % 32 != 0 || m < 1 || m > HMX_INT8_MAX_ROWS || ctx->mdev.count > 1 ||
         (act->data & (VLEN - 1)) != 0) {
         return HTP_STATUS_NO_SUPPORT;
+    }
+    if (q8_in && (kparams->int_mm != 3 || kparams->int_mm == 6 || act_tiled || m < 64 || (m % 32) != 0 || kparams->int8_split != 0 || !kparams->smooth || n_weights != 3)) {
+        return HTP_STATUS_INVAL_PARAMS;   // payload mode needs plain A8, one quantize block, no m-split, m >= 64 (the producer's own limits)
     }
     // per-weight checks (fused NX with several weights shares one activation); n_max sizes the VTCM layout
     size_t n_max = 0;
@@ -4790,7 +4797,23 @@ static int hmx_mm_nx_2d_int8_f32(struct htp_ops_context * octx, const struct htp
         // (the row tiles are independent in a_u8 / a_scale / the output buffers). The weights are streamed once per sub-block.
         const bool     split    = (kparams->int8_split & 1) && n_rt >= 2 && n_threads >= 3;
         const uint32_t rt_split = split ? (n_rt + 1) / 2 : n_rt;
-        I8F_QUANT(mr, n_rows, n_rt, 0, rt_split * 16, 0);
+        if (q8_in) {
+            // payload from RMS_NORM_MUL_Q8: n_rt croutons-rows of (k/32) * 2048 B at the m-block start, row scales behind the whole payload.
+            // Same bytes the f32 -> int8 quantize would have produced into a_u8 / a_scale for these rows.
+            const size_t pay_total = (size_t) (m / 32) * n_k_tiles * HMX_INT8_CROUTON_A;
+            const size_t scale_off = hex_align_up(pay_total, 128);
+            const uint8_t * pay = (const uint8_t *) (uintptr_t) act->data + (size_t) (mr / 32) * n_k_tiles * HMX_INT8_CROUTON_A;
+            const size_t   pbytes = (size_t) n_rt * n_k_tiles * HMX_INT8_CROUTON_A;
+            const uint8_t * scl = (const uint8_t *) (uintptr_t) act->data + scale_off + mr * sizeof(float);
+            const size_t   sbytes = hex_align_up((size_t) n_rt * 32 * sizeof(float), 128);
+            dma_queue_push(ctx->dma[0], dma_make_data(a_u8, pay), pbytes, pbytes, pbytes, 1);
+            dma_queue_pop(ctx->dma[0]);
+            dma_queue_push(ctx->dma[0], dma_make_data((uint8_t *) a_scale, scl), sbytes, sbytes, sbytes, 1);
+            dma_queue_pop(ctx->dma[0]);
+            // m % 32 == 0 (required above): no padded rows, the DMA'd scales cover exactly the n_rt * 32 rows
+        } else {
+            I8F_QUANT(mr, n_rows, n_rt, 0, rt_split * 16, 0);
+        }
 
         for (int sub = 0; sub < (split ? 2 : 1); ++sub) {
         const uint32_t rt_lo   = sub ? rt_split : 0;
@@ -5806,6 +5829,8 @@ static int op_matmul_impl(struct htp_ops_context * octx) {
         return status;
     }
 
+    if (kparams->q8_in) { return HTP_STATUS_INVAL_PARAMS; }   // payload activations exist only for the fused NX op
+
     if (kparams->n_hmx) {
         if (kparams->int_mm >= 2) {
             const int rc8 = hmx_mm_nx_2d_int8_f32(octx, kparams);
@@ -6464,6 +6489,13 @@ static int op_matmul_nx_impl(struct htp_ops_context * octx) {
     const int status = htp_mm_init_context(octx, kparams);
     if (status != HTP_STATUS_OK) {
         return status;
+    }
+
+    if (kparams->q8_in) {
+        // the activation bytes are int8 payload + scales: ONLY hmx_mm_nx_2d_int8_f32 can read them. Every other route would read them as f32.
+        if (octx->op != HTP_OP_MUL_MAT_NX || !kparams->n_hmx || kparams->int_mm != 3 || kparams->collapse) { return HTP_STATUS_INVAL_PARAMS; }
+        const int rc8 = hmx_mm_nx_2d_int8_f32(octx, kparams);
+        return rc8 == HTP_STATUS_NO_SUPPORT ? HTP_STATUS_INVAL_PARAMS : rc8;
     }
 
     // Merge decision: int8 HMX geglu (int branch) first, then HMX f32 geglu;

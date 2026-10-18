@@ -128,6 +128,7 @@ enum htp_op_code {
     HTP_OP_GELU_MUL,           // dst = gelu(src0) * src1 (row-wise, src1 may be strided)
     HTP_OP_MUL_MAT_CAP,        // m=1 q4_0 mat-vec with the logit softcap epilogue: s2 * tanh(s1 * (W x)); params = [s1, s2]
     HTP_OP_MUL_MAT_GELU_MUL,   // m=1 q4_0 mat-vec with epilogue dst = gelu(W x) * src[3] (src[2] unused)
+    HTP_OP_RMS_NORM_MUL_Q8,    // rms_norm(x) * w, quantized to the int8 qkv activation payload (crouton layout + row scales) in dst; only the host fusion pass emits it
 
     HTP_OP_INVALID
 };
