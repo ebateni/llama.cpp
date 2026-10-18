@@ -1,0 +1,45 @@
+===== DEVICE INVOCATION =====
+timestamp=2026-10-18T14:27:51,171091707-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ testops\ 1\ 0\ FLASH_ATTN_EXT 
+device_args=testops 1 0 FLASH_ATTN_EXT 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-18T14:36:11,169248029-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ testops\ 1\ 1\ FLASH_ATTN_EXT 
+device_args=testops 1 1 FLASH_ATTN_EXT 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-18T14:44:31,070246588-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ testops\ 1\ 2\ FLASH_ATTN_EXT 
+device_args=testops 1 2 FLASH_ATTN_EXT 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-18T14:52:51,167145556-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ testops\ 2\ 0\ FLASH_ATTN_EXT 
+device_args=testops 2 0 FLASH_ATTN_EXT 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-18T15:08:22,617858314-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ testops\ 2\ 1\ FLASH_ATTN_EXT 
+device_args=testops 2 1 FLASH_ATTN_EXT 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-18T15:23:54,221636104-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ testops\ 2\ 2\ FLASH_ATTN_EXT 
+device_args=testops 2 2 FLASH_ATTN_EXT 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-18T15:39:26,162837992-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ testops\ 4\ 0\ FLASH_ATTN_EXT 
+device_args=testops 4 0 FLASH_ATTN_EXT 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-18T16:09:24,046031873-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ testops\ 4\ 1\ FLASH_ATTN_EXT 
+device_args=testops 4 1 FLASH_ATTN_EXT 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-18T16:39:22,748330055-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ testops\ 4\ 2\ FLASH_ATTN_EXT 
+device_args=testops 4 2 FLASH_ATTN_EXT 
+
