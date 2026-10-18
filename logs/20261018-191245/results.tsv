@@ -1,0 +1,17 @@
+model	cores	split	ab	ubatch	pp_tokens	pp_ts	tg_ts	iq	needle	cookie_ok	depth
+gemma-4-E4B_q4_0-it	1	single	1	1024	2048	1232.28	17.67	7/10	PASS	OK	0
+gemma-4-E4B_q4_0-it	1	single	1	2048	2048	1213.85	16.66	7/10	PASS	OK	0
+gemma-4-E4B_q4_0-it	1	single	2	1024	2048	1231.83	17.66	7/10	PASS	OK	0
+gemma-4-E4B_q4_0-it	1	single	2	2048	2048	1213.56	16.67	7/10	PASS	OK	0
+gemma-4-E4B_q4_0-it	1	single	1	1024	2048	1002.55	14.91	7/10	PASS	OK	16384
+gemma-4-E4B_q4_0-it	1	single	1	2048	2048	985.63	14.67	7/10	PASS	OK	16384
+gemma-4-E4B_q4_0-it	1	single	2	1024	2048	1007.14	14.35	7/10	PASS	OK	16384
+gemma-4-E4B_q4_0-it	1	single	2	2048	2048	980.21	14.11	7/10	PASS	OK	16384
+gemma-4-E4B_q4_0-it	4	row	1	1024	2048	3212.86	34.24	7/10	PASS	OK	0
+gemma-4-E4B_q4_0-it	4	row	1	2048	2048	3282.99	32.88	7/10	PASS	OK	0
+gemma-4-E4B_q4_0-it	4	row	2	1024	2048	3191.05	34.28	7/10	PASS	OK	0
+gemma-4-E4B_q4_0-it	4	row	2	2048	2048	3297.45	32.86	7/10	PASS	OK	0
+gemma-4-E4B_q4_0-it	4	row	1	1024	2048	2809.25	28.43	7/10	PASS	OK	16384
+gemma-4-E4B_q4_0-it	4	row	1	2048	2048	2792.73	27.52	7/10	PASS	OK	16384
+gemma-4-E4B_q4_0-it	4	row	2	1024	2048	2768.54	29.60	7/10	PASS	OK	16384
+gemma-4-E4B_q4_0-it	4	row	2	2048	2048	2805.19	27.53	7/10	PASS	OK	16384
