@@ -684,6 +684,82 @@ run, no contaminated A/B round; the session level was low, `pkg-new` prefill 7.3
   ms per ubatch at 9.46k against the 51.2 ms needed.
 - Both targets with one configuration: NOT MET (best-speed: decode 70.4-71.3, prefill about 9.4k).
 
+## RUN 14: interleaved ROPE and FA softmax row pairs
+
+RUN 14 adds a three-file, bit-identical change on top of the RUN 13 state (`htp/flash-attn-ops.c`, `htp/hvx-norm.h`,
+`htp/rope-ops.c`). Source of the numbers: analysis/merge-log.md "DEVICE RUN 14" and the owner's per-op measurements.
+Same model, device and command lines as before.
+
+- ROPE and the fused RMS_NORM+MUL+ROPE: the sin/cos blocks are processed 4 at a time, and the new
+  `hvx_fast_rms_norm_mul_f32_xn` normalizes 4 rows at a time in the fused spad loops (`rope-ops.c`, `hvx-norm.h`). The
+  tails keep the old single-row paths.
+- FA softmax: `fa_sm_pairs_kv128` / `fa_sm_pairs_kv64` run two row pairs per pass as straight-line code
+  (`flash-attn-ops.c`). They are taken only for the plain-mask case (mask present, no softcap, no alibi), `kv_rows` of
+  128 or 64 with `Bc >= kv_rows`, and whole row pairs; every other case, and the tail, keeps the old path.
+- Why it is bit-identical: each row and each lane goes through the same arithmetic in the same order; only independent
+  rows / vectors are interleaved to hide latency. This is backed by a full 20-chunk logit byte-compare on both the fp16 and
+  the int paths (owner) and by the gates below.
+- Per op (owner): FA_EXT 386.5 -> 338.3 us on the 15 big ops (-0.72 ms per ubatch) and RMS_NORM_MUL_ROPE 116.5 ->
+  104.6 us (-0.36 ms), about -1.1 ms per ubatch together (about 2.0% of the ubatch).
+
+DEVICE RUN 14 arm table (3 clean rounds, medians; arm order rotated per round, 30 s gaps, a health check before every
+run, no contaminated A/B round; `pkg-new` prefill 6.9-7.6k, a low sample of 6922.91 inside round 2):
+
+| Arm | prefill pp512 (t/s) | ratio vs `pkg-new` | decode tg128 (t/s) | ratio vs `pkg-new` |
+|---|---|---|---|---|
+| `pkg-new` (baseline) | 7519.36 | 1.000 | 54.24 | 1.000 |
+| merged14, `INT_MM=0` (fp16 path) | 8717.14 | 1.159 | 70.55 | 1.301 |
+| merged14, int best-speed (`MASK=0x27`) | 9524.93 | 1.267 | 70.44 | 1.299 |
+| merged14, int full-coverage | 8801.36 | 1.170 | 70.45 | 1.299 |
+
+- The best-speed arm: rounds 9524.93 / 9620.43 / 9409.10, best round 9620. Against RUN 13 the absolute medians are +1.2%
+  (`INT_MM=0`), +1.4% (best-speed) and +0.9% (full-coverage) while `pkg-new` is +1.8%, so the ratios vs `pkg-new` are
+  flat; the 3-round table is not an attribution of this change. The in-run pp512 sample of the best-speed arm in the
+  decode runs is 9601.48.
+- 80-sample alternating test, merged14 vs merged13 (`llama-bench -p 512 -n 0 -r 10` with per-sample times, pair order
+  swapped every round, 7 s gaps, health at every round start, no round flagged):
+
+| Comparison | median (t/s) | median delta | mean delta (z) | ms/run | round pairs |
+|---|---|---|---|---|---|
+| int best-speed, merged14 vs merged13 (80 / 80) | 9641.6 vs 9408.7 | +2.48% | +4.42% (z 4.2) | +1.31 | 8 of 8 positive |
+| same without the one bad merged13 round (70 / 70) | - | +2.06% | +2.66% (z 2.6) | +1.10 | 7 of 7 positive |
+| fp16 `INT_MM=0`, merged14 vs merged13 (40 / 40) | 8873.9 vs 8720.0 | +1.77% | +1.65% (z 1.6) | +1.02 | 4 of 4 positive |
+
+  The +4.42% mean is inflated by one bad merged13 round (cell mean 8177, stddev 754.8 t/s, with a clean health check at
+  its start). Use the conservative range: the effect is +2.1% to +2.5% (1.1-1.3 ms per ubatch) on the int best-speed arm,
+  and +1.8% (median) on fp16 with only 40 samples. The conservative end-to-end figure (+2.06%, 1.10 ms) matches the
+  owner's op-level estimate of -1.1 ms (about 2.0%). The GELU change of RUN 13 is not part of this comparison (both
+  builds contain it).
+
+### Gates (RUN 14)
+
+- `INT_MM=0` bit-identity (hard stop): PARITY_IDENTICAL, `llama-perplexity` PPL exactly 134.3955 +/- 6.77407, 5-output
+  gate SAME on all five (g0 g1 g2 s2 s0).
+- Int best-speed (`MASK=0x27`): KLD 0.006692 +/- 0.000328, top-p 96.647%, PPL 132.5813 (-1.34%), greedy identical; the
+  same numbers to the last digit as RUNs 12 and 13.
+- Int full-coverage: KLD 0.006942, top-p 96.569%, PPL 132.1043 (-1.70%), greedy identical; unchanged from RUNs 9-13.
+- `INT_MM=1` guard: one warning, as before.
+- Static compile matrix 31 objects / 0 errors on all 8 cells (SDK 6.6.0.0 and 6.7.0.0 x v73 v75 v79 v81); host `clang++`
+  syntax check 0 errors (the host file is unchanged by this patch). v73 / v75 / v79 are compile-only.
+
+### Decode watch item (RUN 14)
+
+- Decode target 70 t/s is MET by median in all three merged arms (70.55 `INT_MM=0`, 70.44 best-speed, 70.45
+  full-coverage), but the margin is only +0.4..+0.6 t/s and three rounds are below 70: best-speed round 2 = 68.83,
+  full-coverage round 2 = 69.34, `INT_MM=0` round 1 = 69.85. Decode is about 0.5 t/s lower than in RUNs 12 and 13
+  (71.2-71.7 for `INT_MM=0`) while `pkg-new` decode is unchanged (54.24).
+- It is not resolved whether this is session level (all arms moved together in round 2) or a small decode cost: the patch
+  touches FA / ROPE / RMS paths that decode also uses, but with one row, where the old tail paths run. It is recorded as a
+  watch item, not a gate failure: no gate failed and no decode regression has been demonstrated.
+
+### KPI distance (RUN 14)
+
+- Decode target 70 t/s: MET by median, thin, see the watch item above.
+- Prefill target 10000 t/s: NOT MET. Best arm (best-speed): 9524.93 (3-round median), 9620.43 (best round); 80-sample
+  median 9641.6 = 96.4% of the target, 358 t/s short (the 3-round median is 475 short, 95.2%). The arm is at about 53.1 ms
+  per ubatch at 9.64k against the 51.2 ms needed, 1.9 ms away. Honest band 9.5-9.65k.
+- Both targets with one configuration: NOT MET (best-speed: decode 70.4, prefill 9.5-9.65k).
+
 ## Optimization steps
 
 Numbers per step are medians of 6-8 interleaved `llama-bench` pp512 rounds on 10.92.138.99. That device was later found throttled on battery, so only the relative change between adjacent builds is meaningful. The final table above is from 10.92.137.16.

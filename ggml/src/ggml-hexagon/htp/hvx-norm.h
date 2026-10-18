@@ -320,6 +320,59 @@ static inline void hvx_fast_rms_norm_mul_add_f32(const uint8_t * restrict x,
     }
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// Row-interleaved variants: HVX_NORM_X independent rows go through exactly the intrinsic sequence of the single-row
+// kernels above (same per-row accumulation order, same rounding points, so the result is bit-identical). One row is a
+// short dependent chain (sum-of-squares accumulate -> horizontal reduce -> inverse -> 3x Newton rsqrt), so a single row
+// is latency-bound; X rows in flight overlap those chains. Only rows with num_elems % 32 == 0 take this path; callers
+// run the leftover rows (and ragged rows) through the single-row kernels.
+#ifndef HVX_NORM_X
+#define HVX_NORM_X 4
+#endif
+
+#define HVX_NORM_ROW(base, stride, r) ((const HVX_Vector *) ((const uint8_t *) (base) + (size_t) (r) * (stride)))
+#define HVX_NORM_ROWW(base, stride, r) ((HVX_Vector *) ((uint8_t *) (base) + (size_t) (r) * (stride)))
+
+// dst[r] = rms_norm(src[r]) * weight, X rows; weight is a single row (wstride == 0) or one row per input row.
+static inline void hvx_fast_rms_norm_mul_f32_xn(const uint8_t * src, size_t sstride,
+                                                const uint8_t * weight, size_t wstride,
+                                                uint8_t * dst, size_t dstride,
+                                                const int num_elems, float epsilon) {
+    const int nvec = num_elems / VLEN_FP32;
+    HVX_Vector sum_v[HVX_NORM_X];
+    #pragma unroll
+    for (int r = 0; r < HVX_NORM_X; ++r) { sum_v[r] = Q6_V_vsplat_R(0x00000000); }
+
+    for (int i = 0; i < nvec; i++) {
+        #pragma unroll
+        for (int r = 0; r < HVX_NORM_X; ++r) {
+            HVX_Vector v1 = HVX_NORM_ROW(src, sstride, r)[i];
+            sum_v[r] = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v[r], Q6_Vqf32_vmpy_VsfVsf(v1, v1));
+        }
+    }
+
+    const HVX_Vector epsilon_v = hvx_vec_splat_f32(epsilon);
+    const HVX_Vector denom_v   = hvx_vec_inverse_f32(hvx_vec_splat_f32((float) num_elems));
+    HVX_Vector scale_v[HVX_NORM_X];
+    #pragma unroll
+    for (int r = 0; r < HVX_NORM_X; ++r) {
+        HVX_Vector s = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(sum_v[r]));
+        HVX_Vector mean_v         = Q6_Vqf32_vmpy_VsfVsf(s, denom_v);
+        HVX_Vector mean_epsilon_v = Q6_Vqf32_vadd_Vqf32Vsf(mean_v, epsilon_v);
+        scale_v[r] = hvx_vec_rsqrt_f32(Q6_Vsf_equals_Vqf32(mean_epsilon_v));
+    }
+
+    for (int i = 0; i < nvec; i++) {
+        #pragma unroll
+        for (int r = 0; r < HVX_NORM_X; ++r) {
+            HVX_Vector v1 = HVX_NORM_ROW(src, sstride, r)[i];
+            HVX_Vector v3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(v1, scale_v[r]));
+            HVX_Vector result = Q6_Vqf32_vmpy_VsfVsf(v3, HVX_NORM_ROW(weight, wstride, r)[i]);
+            HVX_NORM_ROWW(dst, dstride, r)[i] = Q6_Vsf_equals_Vqf32(result);
+        }
+    }
+}
+
 #undef HVX_NORM_ADD_F32
 #undef HVX_NORM_MUL_F32
 

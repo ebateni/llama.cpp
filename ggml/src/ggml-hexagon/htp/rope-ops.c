@@ -151,6 +151,39 @@ static inline void rope_cache_hvx_32(float * cache, uint32_t i0,
     }
 }
 
+#ifndef ROPE_CACHE_X
+#define ROPE_CACHE_X 4
+#endif
+// ROPE_CACHE_X consecutive 32-pair blocks starting at cache[i0] through the identical per-lane sequence of rope_cache_hvx_32.
+static inline void rope_cache_hvx_32_xn(float * cache, uint32_t i0, const HVX_Vector * v_theta_in,
+                                        const float * freq_factors, HVX_Vector v_freq_scale, HVX_Vector v_mscale) {
+    HVX_Vector vcos[ROPE_CACHE_X];
+    HVX_Vector vsin[ROPE_CACHE_X];
+    #pragma unroll
+    for (int q = 0; q < ROPE_CACHE_X; ++q) {
+        HVX_Vector v_theta = v_theta_in[q];
+        if (freq_factors) {
+            HVX_Vector v_ff = hvx_vmemu(freq_factors + (i0 + q * 64) / 2);
+            v_theta = hvx_vec_mul_f32_f32(v_theta, hvx_vec_inverse_f32(v_ff));
+        }
+        HVX_Vector v_theta_final = hvx_vec_mul_f32_f32(v_theta, v_freq_scale);
+        hvx_vec_sincos_f32(v_theta_final, &vcos[q], &vsin[q]);
+        vcos[q] = hvx_vec_mul_f32_f32(vcos[q], v_mscale);
+        vsin[q] = hvx_vec_mul_f32_f32(vsin[q], v_mscale);
+    }
+    #pragma unroll
+    for (int q = 0; q < ROPE_CACHE_X; ++q) {
+        float * c = cache + i0 + q * 64;
+        if (((uintptr_t) c) % 128 == 0) {
+            hvx_vmem(c + 0)  = vcos[q];
+            hvx_vmem(c + 32) = vsin[q];
+        } else {
+            hvx_vec_store_u(c + 0,  32 * sizeof(float), vcos[q]);
+            hvx_vec_store_u(c + 32, 32 * sizeof(float), vsin[q]);
+        }
+    }
+}
+
 static __attribute__((noinline)) void rope_cache_init(const float    theta_base,
                             const float    freq_scale,
                             const float *  freq_factors,
@@ -174,7 +207,19 @@ static __attribute__((noinline)) void rope_cache_init(const float    theta_base,
 
         float theta_block = theta_base;
 
-        for (uint32_t b = 0; b < n_blocks; b++) {
+        uint32_t b = 0;
+        // ROPE_CACHE_X blocks at a time: each block is one long dependent sincos chain, the blocks are independent
+        // (theta_block advances by the same scalar multiplications in the same order), so interleaving them is bit-identical.
+        for (; b + ROPE_CACHE_X <= n_blocks; b += ROPE_CACHE_X) {
+            HVX_Vector v_theta[ROPE_CACHE_X];
+            #pragma unroll
+            for (int q = 0; q < ROPE_CACHE_X; ++q) {
+                v_theta[q] = hvx_vec_mul_f32_f32(hvx_vec_splat_f32(theta_block), v_theta_powers);
+                theta_block *= theta_scale_32;
+            }
+            rope_cache_hvx_32_xn(cache, b * 64, v_theta, freq_factors, v_freq_scale, v_mscale);
+        }
+        for (; b < n_blocks; b++) {
             uint32_t i0 = b * 64;
             HVX_Vector v_theta_base = hvx_vec_splat_f32(theta_block);
             HVX_Vector v_theta = hvx_vec_mul_f32_f32(v_theta_base, v_theta_powers);
@@ -516,6 +561,23 @@ static inline void hvx_rope_f32_aa(float * restrict dst, const float * restrict 
     }
 }
 
+// In-place RMS norm * weight over nr rows of the spad slot: HVX_NORM_X rows at a time (bit-identical to the one-row kernel).
+static inline void rope_norm_rows(const struct htp_rope_context * rctx, uint8_t * seg, uint32_t nr, uint32_t ne0) {
+    const size_t    stride = rctx->src0_row_size_aligned;
+    const uint8_t * w      = (const uint8_t *) rctx->norm_w;
+    uint32_t k = 0;
+    if ((ne0 % VLEN_FP32) == 0) {
+        for (; k + HVX_NORM_X <= nr; k += HVX_NORM_X) {
+            uint8_t * s = seg + k * stride;
+            hvx_fast_rms_norm_mul_f32_xn(s, stride, w, 0, s, stride, ne0, rctx->norm_eps);
+        }
+    }
+    for (; k < nr; k++) {
+        uint8_t * s = seg + k * stride;
+        hvx_fast_rms_norm_mul_f32(s, w, s, ne0, rctx->norm_eps);
+    }
+}
+
 static void inline rope_basic_f32_inplace(struct htp_rope_context * rctx, uint8_t * src,
                    uint32_t nr, const float * restrict theta_cache) {
     const uint32_t n_offs = rctx->n_offs;
@@ -633,10 +695,7 @@ static void rope_job_f32_flat(unsigned int nth, unsigned int ith, void * data) {
             }
             uint8_t * seg = spad + r * rctx->src0_row_size_aligned;
             if (rctx->norm_w) {
-                for (uint32_t k = 0; k < run; k++) {
-                    uint8_t * s = seg + k * rctx->src0_row_size_aligned;
-                    hvx_fast_rms_norm_mul_f32(s, (const uint8_t *) rctx->norm_w, s, ne0, rctx->norm_eps);
-                }
+                rope_norm_rows(rctx, seg, run, ne0);
             }
             if (is_neox || is_vision) {
                 rope_neox_f32_inplace(rctx, seg, run, ne, theta_cache);
@@ -766,10 +825,7 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
 
                     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, cur_ir);
                     if (rctx->norm_w) {
-                        for (uint32_t r = 0; r < cnr; r++) {
-                            uint8_t * s = cur_spad + r * rctx->src0_row_size_aligned;
-                            hvx_fast_rms_norm_mul_f32(s, (const uint8_t *) rctx->norm_w, s, ne0, rctx->norm_eps);
-                        }
+                        rope_norm_rows(rctx, cur_spad, cnr, ne0);
                     }
                     if (is_neox || is_vision) {
                         rope_neox_f32_inplace(rctx, cur_spad, cnr, ne, theta_cache);

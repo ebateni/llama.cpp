@@ -1181,6 +1181,201 @@ typedef struct {
     struct fastdiv_values     thread_div;
 } fa_softmax_args_t;
 
+// ---------------------------------------------------------------------------------------------------------------------
+// Straight-line softmax for FA_SM_P row pairs at once (plain-mask case, kv_rows == 128: two 64-column chunks). The
+// per-pair work is a chain of short dependent steps (mask/max -> horizontal max -> m_prev -> exp2 -> shuff -> horizontal
+// sum), so a single pair leaves the VLIW slots idle. The pairs are independent; with the chunk loop unrolled the compiler
+// can interleave them. Every vector value is produced by exactly the intrinsic sequence of the generic path (the row
+// buffers are simply kept in registers instead of VTCM), so the P tiles, rowmax and rowsum are bit-identical.
+#ifndef FA_SM_P
+#define FA_SM_P 2
+#endif
+
+static inline __attribute__((always_inline)) void fa_sm_load_masks(
+    const fa_softmax_args_t * args, const struct hmx_fa_context * factx, const bool mask_broadcast, const bool is_g1,
+    const size_t n_rows_g, const size_t r, const size_t c, HVX_Vector v_neg_inf, HVX_Vector * m0, HVX_Vector * m1) {
+    if (mask_broadcast) {
+        if (is_g1) {
+            *m0 = *(const HVX_Vector *) (args->mask_vtcm + (r + 0) * args->mask_vtcm_row_stride + c);
+            *m1 = v_neg_inf;
+            if (r + 1 < n_rows_g) {
+                *m1 = *(const HVX_Vector *) (args->mask_vtcm + (r + 1) * args->mask_vtcm_row_stride + c);
+            }
+        } else {
+            const size_t qi0 = fastdiv(r + 0, &factx->div_G);
+            *m0 = *(const HVX_Vector *) (args->mask_vtcm + qi0 * args->mask_vtcm_row_stride + c);
+            *m1 = v_neg_inf;
+            if (r + 1 < n_rows_g) {
+                const size_t qi1 = fastdiv(r + 1, &factx->div_G);
+                if (qi1 == qi0) {
+                    *m1 = *m0;
+                } else {
+                    *m1 = *(const HVX_Vector *) (args->mask_vtcm + qi1 * args->mask_vtcm_row_stride + c);
+                }
+            }
+        }
+    } else {
+        *m0 = *(const HVX_Vector *) (args->mask_vtcm + (r + 0) * args->mask_vtcm_row_stride + c);
+        *m1 = v_neg_inf;
+        if (r + 1 < n_rows_g) {
+            *m1 = *(const HVX_Vector *) (args->mask_vtcm + (r + 1) * args->mask_vtcm_row_stride + c);
+        }
+    }
+}
+
+static inline __attribute__((always_inline)) void fa_sm_pairs_impl(
+    const int NCH, const fa_softmax_args_t * args, struct hmx_fa_context * factx, const bool mask_broadcast, const bool is_g1,
+    const size_t n_rows_g, const size_t Bc, const uint32_t r_base, const uint32_t r_vec_off_base,
+    const HVX_Vector m_prev_v0, const HVX_Vector m_prev_v1, HVX_Vector * rowmax_acc_v, HVX_Vector * rowsum_acc_v) {
+    const HVX_Vector v_neg_inf     = Q6_Vh_vsplat_R(0xfbff);
+    const HVX_Vector v_log2e_f     = hvx_vec_splat_f16(EXP_LOG2E_F);
+    const HVX_Vector v_threshold_f = Q6_Vh_vsplat_R(0xcc00);  // fp16 -16.0
+    const HVX_VectorPred q_tail_keep = Q6_Q_vsetq2_R(64 * sizeof(__fp16));
+
+    HVX_Vector rb[FA_SM_P][2][2];  // [pair][row][chunk] (chunk < NCH used)
+    HVX_Vector rmax[FA_SM_P][2];
+
+    // decode + mask + rowmax (both chunks)
+    #pragma unroll
+    for (int p = 0; p < FA_SM_P; ++p) {
+        const uint32_t r  = r_base + 2 * p;
+        const uint32_t r0 = r / HMX_FP16_TILE_N_ROWS;
+        const uint32_t r1 = r % HMX_FP16_TILE_N_ROWS;
+        const __fp16 * s_ld_base = factx->vtcm_s_tiles[args->buf_idx] + r0 * HMX_FP16_TILE_N_ROWS * Bc;
+        HVX_Vector mx0 = v_neg_inf;
+        HVX_Vector mx1 = v_neg_inf;
+        #pragma unroll
+        for (int ci = 0; ci < NCH; ++ci) {
+            const __fp16 *     in_dtile = s_ld_base + ci * HMX_FP16_TILE_N_ELMS * 2;
+            const HVX_Vector * pv_s_in0 = ((const HVX_Vector *) in_dtile) + r1 / 2;
+            const HVX_Vector * pv_s_in1 = pv_s_in0 + 16;
+            HVX_VectorPair vp_s_drow = Q6_W_vdeal_VVR(*pv_s_in1, *pv_s_in0, -2);
+            HVX_Vector     v_s0      = Q6_V_lo_W(vp_s_drow);
+            HVX_Vector     v_s1      = Q6_V_hi_W(vp_s_drow);
+
+            HVX_Vector v_mask0, v_mask1;
+            fa_sm_load_masks(args, factx, mask_broadcast, is_g1, n_rows_g, r, ci * 64, v_neg_inf, &v_mask0, &v_mask1);
+
+            const HVX_VectorPred q_keep0 = Q6_Q_and_QQ(Q6_Q_vcmp_gt_VhfVhf(v_mask0, v_threshold_f), q_tail_keep);
+            const HVX_VectorPred q_keep1 = Q6_Q_and_QQ(Q6_Q_vcmp_gt_VhfVhf(v_mask1, v_threshold_f), q_tail_keep);
+            HVX_Vector v_mask0_scaled = hvx_vec_mul_f16_f16(v_mask0, v_log2e_f);
+            HVX_Vector v_mask1_scaled = hvx_vec_mul_f16_f16(v_mask1, v_log2e_f);
+            rb[p][0][ci] = Q6_V_vmux_QVV(q_keep0, hvx_vec_add_f16_f16(v_s0, v_mask0_scaled), v_neg_inf);
+            rb[p][1][ci] = Q6_V_vmux_QVV(q_keep1, hvx_vec_add_f16_f16(v_s1, v_mask1_scaled), v_neg_inf);
+            mx0 = Q6_Vhf_vmax_VhfVhf(mx0, rb[p][0][ci]);
+            mx1 = Q6_Vhf_vmax_VhfVhf(mx1, rb[p][1][ci]);
+        }
+        rmax[p][0] = mx0;
+        rmax[p][1] = mx1;
+    }
+
+    // horizontal max, m_new = max(m_prev, rowmax), insert into the per-vector accumulator
+    HVX_Vector dup_m[FA_SM_P][2];
+    #pragma unroll
+    for (int p = 0; p < FA_SM_P; ++p) {
+        const uint32_t r         = r_base + 2 * p;
+        const uint32_t r_vec_off = r_vec_off_base + 2 * p;
+        HVX_Vector v_s_rowmax0 = hvx_vec_reduce_max_f16(rmax[p][0]);
+        HVX_Vector v_s_rowmax1 = hvx_vec_reduce_max_f16(rmax[p][1]);
+
+        HVX_Vector v_m_prev0, v_m_prev1;
+        if (r_vec_off < 32) {
+            HVX_Vector v0 = hvx_vec_repl_f32(Q6_V_vror_VR(m_prev_v0, r_vec_off * 4));
+            v_m_prev0 = hvx_vec_f32_to_f16(v0, v0);
+            if (r + 1 < n_rows_g) {
+                HVX_Vector v1 = hvx_vec_repl_f32(Q6_V_vror_VR(m_prev_v0, (r_vec_off + 1) * 4));
+                v_m_prev1 = hvx_vec_f32_to_f16(v1, v1);
+            } else {
+                v_m_prev1 = Q6_V_vzero();
+            }
+        } else {
+            HVX_Vector v0 = hvx_vec_repl_f32(Q6_V_vror_VR(m_prev_v1, (r_vec_off - 32) * 4));
+            v_m_prev0 = hvx_vec_f32_to_f16(v0, v0);
+            if (r + 1 < n_rows_g) {
+                HVX_Vector v1 = hvx_vec_repl_f32(Q6_V_vror_VR(m_prev_v1, (r_vec_off + 1 - 32) * 4));
+                v_m_prev1 = hvx_vec_f32_to_f16(v1, v1);
+            } else {
+                v_m_prev1 = Q6_V_vzero();
+            }
+        }
+        dup_m[p][0] = Q6_Vhf_vmax_VhfVhf(v_m_prev0, v_s_rowmax0);
+        dup_m[p][1] = Q6_Vhf_vmax_VhfVhf(v_m_prev1, v_s_rowmax1);
+
+        HVX_VectorPred p_start = Q6_Q_vsetq_R(r_vec_off * 2);
+        HVX_VectorPred p_mid   = Q6_Q_vsetq_R((r_vec_off + 1) * 2);
+        HVX_VectorPred p_end   = Q6_Q_vsetq2_R((r_vec_off + 2) * 2);
+        HVX_VectorPred p_lane0 = Q6_Q_and_QQn(p_mid, p_start);
+        HVX_VectorPred p_lane1 = Q6_Q_and_QQn(p_end, p_mid);
+        *rowmax_acc_v          = Q6_V_vmux_QVV(p_lane0, dup_m[p][0], *rowmax_acc_v);
+        *rowmax_acc_v          = Q6_V_vmux_QVV(p_lane1, dup_m[p][1], *rowmax_acc_v);
+    }
+
+    // P = exp2(S - m_new), P tile store, row sums
+    HVX_Vector rsum[FA_SM_P][2];
+    #pragma unroll
+    for (int p = 0; p < FA_SM_P; ++p) {
+        const uint32_t r  = r_base + 2 * p;
+        const uint32_t r0 = r / HMX_FP16_TILE_N_ROWS;
+        const uint32_t r1 = r % HMX_FP16_TILE_N_ROWS;
+        __fp16 * p_st_base = factx->vtcm_p_tiles[args->buf_idx] + r0 * HMX_FP16_TILE_N_ROWS * Bc;
+
+        HVX_Vector pr[2][2];  // [row][chunk]
+        #pragma unroll
+        for (int ci = 0; ci < NCH; ++ci) {
+            pr[0][ci] = hvx_vec_exp2_f16(Q6_Vhf_equals_Vqf16(Q6_Vqf16_vsub_VhfVhf(rb[p][0][ci], dup_m[p][0])));
+            pr[1][ci] = hvx_vec_exp2_f16(Q6_Vhf_equals_Vqf16(Q6_Vqf16_vsub_VhfVhf(rb[p][1][ci], dup_m[p][1])));
+        }
+        #pragma unroll
+        for (int ci = 0; ci < NCH; ++ci) {
+            __fp16 *     out_dtile = p_st_base + ci * HMX_FP16_TILE_N_ELMS * 2;
+            HVX_Vector * pv_p_out0 = ((HVX_Vector *) out_dtile) + r1 / 2;
+            HVX_Vector * pv_p_out1 = pv_p_out0 + 16;
+            HVX_VectorPair vp_p_dual = Q6_W_vshuff_VVR(pr[1][ci], pr[0][ci], -2);
+            *pv_p_out0 = Q6_V_lo_W(vp_p_dual);
+            *pv_p_out1 = Q6_V_hi_W(vp_p_dual);
+        }
+        HVX_Vector s0 = Q6_V_vzero();
+        HVX_Vector s1 = Q6_V_vzero();
+        #pragma unroll
+        for (int ci = 0; ci < NCH; ++ci) {
+            HVX_VectorPair vp_p0 = hvx_vec_f16_to_f32_shuff(pr[0][ci]);
+            HVX_VectorPair vp_p1 = hvx_vec_f16_to_f32_shuff(pr[1][ci]);
+            s0 = Q6_Vqf32_vadd_Vqf32Vqf32(s0, Q6_Vqf32_vadd_VsfVsf(Q6_V_lo_W(vp_p0), Q6_V_hi_W(vp_p0)));
+            s1 = Q6_Vqf32_vadd_Vqf32Vqf32(s1, Q6_Vqf32_vadd_VsfVsf(Q6_V_lo_W(vp_p1), Q6_V_hi_W(vp_p1)));
+        }
+        rsum[p][0] = s0;
+        rsum[p][1] = s1;
+    }
+
+    #pragma unroll
+    for (int p = 0; p < FA_SM_P; ++p) {
+        const uint32_t r_vec_off = r_vec_off_base + 2 * p;
+        HVX_Vector rowsum0_sf = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(rsum[p][0]));
+        HVX_Vector rowsum1_sf = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(rsum[p][1]));
+        HVX_Vector rv0_v = hvx_vec_f32_to_f16(rowsum0_sf, rowsum0_sf);
+        HVX_Vector rv1_v = hvx_vec_f32_to_f16(rowsum1_sf, rowsum1_sf);
+
+        HVX_VectorPred p_start = Q6_Q_vsetq_R(r_vec_off * 2);
+        HVX_VectorPred p_mid   = Q6_Q_vsetq_R((r_vec_off + 1) * 2);
+        HVX_VectorPred p_end   = Q6_Q_vsetq2_R((r_vec_off + 2) * 2);
+        HVX_VectorPred p_lane0 = Q6_Q_and_QQn(p_mid, p_start);
+        HVX_VectorPred p_lane1 = Q6_Q_and_QQn(p_end, p_mid);
+        *rowsum_acc_v          = Q6_V_vmux_QVV(p_lane0, rv0_v, *rowsum_acc_v);
+        *rowsum_acc_v          = Q6_V_vmux_QVV(p_lane1, rv1_v, *rowsum_acc_v);
+    }
+}
+
+#define FA_SM_WRAP(NAME, NCH)                                                                                         \
+    static __attribute__((noinline)) void NAME(                                                                        \
+        const fa_softmax_args_t * args, struct hmx_fa_context * factx, const bool mask_broadcast, const bool is_g1,   \
+        const size_t n_rows_g, const size_t Bc, const uint32_t r_base, const uint32_t r_vec_off_base,                  \
+        const HVX_Vector m_prev_v0, const HVX_Vector m_prev_v1, HVX_Vector * rowmax_acc_v, HVX_Vector * rowsum_acc_v) { \
+        fa_sm_pairs_impl(NCH, args, factx, mask_broadcast, is_g1, n_rows_g, Bc, r_base, r_vec_off_base, m_prev_v0,     \
+                         m_prev_v1, rowmax_acc_v, rowsum_acc_v);                                                       \
+    }
+FA_SM_WRAP(fa_sm_pairs_kv128, 2)
+FA_SM_WRAP(fa_sm_pairs_kv64, 1)
+
 static inline void fa_softmax_impl(
     unsigned int n, unsigned int i, void * data,
     const bool has_mask,
@@ -1237,6 +1432,19 @@ static inline void fa_softmax_impl(
             uint32_t r = r_vec_idx * 64 + r_vec_off;
             if (r >= hex_align_up(n_rows_g, 2)) {
                 break;
+            }
+
+            if (has_mask && !has_softcap && !has_alibi && (kv_rows == 128 || kv_rows == 64) && Bc >= kv_rows &&
+                r_vec_off + 2 * FA_SM_P <= 64 && r + 2 * FA_SM_P <= hex_align_up(n_rows_g, 2)) {
+                if (kv_rows == 128) {
+                    fa_sm_pairs_kv128(args, factx, mask_broadcast, is_g1, n_rows_g, Bc, r, r_vec_off,
+                                      m_prev_v0, m_prev_v1, &rowmax_acc_v, &rowsum_acc_v);
+                } else {
+                    fa_sm_pairs_kv64(args, factx, mask_broadcast, is_g1, n_rows_g, Bc, r, r_vec_off,
+                                     m_prev_v0, m_prev_v1, &rowmax_acc_v, &rowsum_acc_v);
+                }
+                r_vec_off += 2 * (FA_SM_P - 1);
+                continue;
             }
 
             uint32_t r0 = r / HMX_FP16_TILE_N_ROWS;
