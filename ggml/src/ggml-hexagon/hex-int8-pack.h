@@ -47,7 +47,60 @@ static inline size_t hex_int8_extra_bytes(uint32_t k, uint32_t n, bool smooth = 
 // stored int8 is clip((q * sign(d_g) * R_g + 8) >> 4) with q in -8..7. This is exactly what the DSP's on-the-fly expand produces
 // (hmx_int8_expand_q4_0_ref in htp/hmx-mm-kernels-int8.h), so a class measured with this scheme reports the W4A8 numbers without
 // changing any kernel; the DDR cost is the same 1 B/weight as scheme 0 (only the on-the-fly expand saves those bytes).
-static inline void hex_int8_pack_q44(uint8_t * dst, const uint8_t * src_rows, uint32_t n, uint32_t k, uint32_t reduce) {
+//
+// With smoothing (and/or R32) the Q4.4 values cannot be kept as they are: W' = W * s_k breaks the per-block constant scale, and the
+// activation side divides by s_k (and rotates), so the weights must carry the same transform. hex_int8_pack_q44 therefore composes
+// two stages: (1) the Q4.4 int8 values times the row scale s_n (exactly the values above), (2) hex_int8_pack_impl applies s_k /
+// sign / rotation and RE-DERIVES the per-row scale (amax/127 of the transformed row) and the window shift (bound = 127*sum|w8'|)
+// from the transformed row, so col_mul, the bias table and the zero-point correction all describe the final int8 values.
+// Without smoothing and without rotation the exact path (hex_int8_pack_q44_exact) is used unchanged.
+template <typename Fetch>
+static inline void hex_int8_pack_impl(uint8_t * dst, uint32_t n, uint32_t k, uint32_t reduce, bool rotate, const float * smooth,
+                                      uint32_t rot_block, Fetch fetch);
+
+static inline void hex_int8_q44_row(const uint8_t * rp, uint32_t nkc, float * row) {
+    float dmax = 0.0f;
+    for (uint32_t b = 0; b < nkc; ++b) {
+        uint16_t dh; memcpy(&dh, rp + b * 18, 2);
+        const uint32_t ex = (dh >> 10) & 31, ma = dh & 1023;
+        const float d = (ex == 0) ? ldexpf((float) ma, -24) : (ex == 31 ? 0.0f : ldexpf((float) (ma | 1024), (int) ex - 25));
+        dmax = d > dmax ? d : dmax;
+    }
+    const float sn = dmax / 15.875f;
+    for (uint32_t b = 0; b < nkc; ++b) {
+        uint16_t dh; memcpy(&dh, rp + b * 18, 2);
+        const uint32_t sg = (dh >> 15) & 1, ex = (dh >> 10) & 31, ma = dh & 1023;
+        float d = (ex == 0) ? ldexpf((float) ma, -24) : (ex == 31 ? 0.0f : ldexpf((float) (ma | 1024), (int) ex - 25));
+        if (sg) { d = -d; }
+        const int sgn = (d < 0.0f) ? -1 : 1;
+        const int R = dmax > 0.0f ? (int) floorf(fabsf(d) / dmax * 254.0f + 0.5f) : 0;
+        const uint8_t * qs = rp + b * 18 + 2;
+        for (uint32_t i = 0; i < 16; ++i) {
+            for (int half = 0; half < 2; ++half) {
+                const int q = (int) (half ? (qs[i] >> 4) : (qs[i] & 0xF)) - 8;
+                int w8 = (q * sgn * R + 8) >> 4;
+                w8 = w8 > 127 ? 127 : (w8 < -127 ? -127 : w8);
+                row[b * 32 + i + (half ? 16 : 0)] = (float) w8 * sn;
+            }
+        }
+    }
+}
+
+static inline void hex_int8_pack_q44_exact(uint8_t * dst, const uint8_t * src_rows, uint32_t n, uint32_t k, uint32_t reduce);
+
+static inline void hex_int8_pack_q44(uint8_t * dst, const uint8_t * src_rows, uint32_t n, uint32_t k, uint32_t reduce,
+                                     bool rotate = false, const float * smooth = nullptr, uint32_t rot_block = 0) {
+    if (!smooth && !rotate && !rot_block) {
+        hex_int8_pack_q44_exact(dst, src_rows, n, k, reduce);
+        return;
+    }
+    const uint32_t nkc = k / 32;
+    hex_int8_pack_impl(dst, n, k, reduce, rotate, smooth, rot_block, [&](uint32_t c, float * row) {
+        hex_int8_q44_row(src_rows + (size_t) c * nkc * 18, nkc, row);
+    });
+}
+
+static inline void hex_int8_pack_q44_exact(uint8_t * dst, const uint8_t * src_rows, uint32_t n, uint32_t k, uint32_t reduce) {
     const size_t   rec_bytes = hex_int8_record_bytes(k);
     const uint32_t nkc = k / 32;
     for (uint32_t c = 0; c < n; ++c) {

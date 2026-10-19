@@ -2799,13 +2799,16 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
             // the large-k class has a much bigger accumulator bound, so it gets the full window range (see M37)
             const uint32_t red = (tensor->ne[0] > 8192) ? opt_int_mm_reduce_big : opt_int_mm_reduce;
             uint8_t * dst8 = (uint8_t *) tensor->data + ggml_hexagon_int8_rot_offset(tensor);
-            if (opt_int_mm_scheme == 1) {
-                hex_int8_pack_q44(dst8, (const uint8_t *) data, (uint32_t) tensor->ne[1], (uint32_t) tensor->ne[0], red);
-            } else {
+            {
                 const std::vector<float> * sm = ggml_hexagon_int8_smooth_vec(tensor);
                 const uint32_t rb = ggml_hexagon_int8_rot_block(tensor);
-                hex_int8_pack_rotated(dst8, (const uint8_t *) data, (uint32_t) tensor->ne[1], (uint32_t) tensor->ne[0], red,
-                                      ggml_hexagon_int8_rot_enabled(tensor), sm ? sm->data() : nullptr, rb);
+                if (opt_int_mm_scheme == 1) {   // W4A8 numerics (Q4.4); smoothing/R32 are applied on top and the row scale/window re-derived
+                    hex_int8_pack_q44(dst8, (const uint8_t *) data, (uint32_t) tensor->ne[1], (uint32_t) tensor->ne[0], red, false,
+                                      sm ? sm->data() : nullptr, rb);
+                } else {
+                    hex_int8_pack_rotated(dst8, (const uint8_t *) data, (uint32_t) tensor->ne[1], (uint32_t) tensor->ne[0], red,
+                                          ggml_hexagon_int8_rot_enabled(tensor), sm ? sm->data() : nullptr, rb);
+                }
                 if (sm) {   // activation multiplier (sign * c / s_k) behind the records, read by the DSP quantizer
                     float * inv = (float *) (dst8 + hex_int8_extra_bytes((uint32_t) tensor->ne[0], (uint32_t) tensor->ne[1]));
                     for (size_t i = 0; i < sm->size(); ++i) { inv[i] = hex_int8_act_mult((uint32_t) i, (*sm)[i], rb); }
@@ -2826,14 +2829,17 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
         if (ggml_hexagon_int8_rot_tensor(tensor)) {
             const uint32_t red = (tensor->ne[0] > 8192) ? opt_int_mm_reduce_big : opt_int_mm_reduce;
             uint8_t * dst8 = (uint8_t *) tensor->data + ggml_hexagon_int8_rot_offset(tensor);
-            if (opt_int_mm_scheme == 1) {
-                hex_int8_pack_q44(dst8, extra->shadow_buf.data(), (uint32_t) tensor->ne[1], (uint32_t) tensor->ne[0], red);
-            } else {
+            {
                 const std::vector<float> * sm = ggml_hexagon_int8_smooth_vec(tensor);
                 const uint32_t rb = ggml_hexagon_int8_rot_block(tensor);
-                hex_int8_pack_rotated(dst8, extra->shadow_buf.data(), (uint32_t) tensor->ne[1], (uint32_t) tensor->ne[0], red,
-                                      ggml_hexagon_int8_rot_enabled(tensor), sm ? sm->data() : nullptr, rb);
-                if (sm) {   // activation multiplier (sign * c / s_k) behind the records, read by the DSP quantizer
+                if (opt_int_mm_scheme == 1) {
+                    hex_int8_pack_q44(dst8, extra->shadow_buf.data(), (uint32_t) tensor->ne[1], (uint32_t) tensor->ne[0], red, false,
+                                      sm ? sm->data() : nullptr, rb);
+                } else {
+                    hex_int8_pack_rotated(dst8, extra->shadow_buf.data(), (uint32_t) tensor->ne[1], (uint32_t) tensor->ne[0], red,
+                                          ggml_hexagon_int8_rot_enabled(tensor), sm ? sm->data() : nullptr, rb);
+                }
+                if (sm) {
                     float * inv = (float *) (dst8 + hex_int8_extra_bytes((uint32_t) tensor->ne[0], (uint32_t) tensor->ne[1]));
                     for (size_t i = 0; i < sm->size(); ++i) { inv[i] = hex_int8_act_mult((uint32_t) i, (*sm)[i], rb); }
                 }

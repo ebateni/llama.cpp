@@ -974,6 +974,50 @@ excluded); fp16 `INT_MM=0` 4 x 10:
   repetitions with 1-3% noise; the 120-sample estimate is the better statistic, and the 3-round figure reads 9955.
 - Decode target 70 t/s: MET in every merged arm (70.71-72.46).
 
+## Scheme-1 int8 packing fix and the closed precision-matrix items
+
+Source: analysis/hmx-int-log.md M147-M150 (base HEAD 0c0245a99, device 2026-10-19). Same model and device as before.
+
+### Correctness fix: `INT_MM_SCHEME=1` with smoothing
+
+- This is a correctness fix for an environment combination that was not shipped. It is not a speed or accuracy
+  improvement, and it changes nothing for the shipped configurations (the scheme is unset there).
+- The bug: `GGML_HEXAGON_INT_MM_SCHEME=1` (`hex_int8_pack_q44`, load-time Q4.4 numerics) took no smoothing or rotation
+  argument and its `set_tensor` branch skipped the write of the 1/s_k activation multiplier, while the allocator, the
+  kparams `smooth` field and the DSP quantizer still expected that vector. Scheme 1 together with
+  `GGML_HEXAGON_INT_SMOOTH` on an A8 class therefore divided the activations by an unwritten vector. Measured on the
+  unfixed build: KLD 28.64, top-p 1.10%, PPL 1.4e13 (garbage).
+- The fix (`ggml-hexagon.cpp`, `hex-int8-pack.h`): `hex_int8_pack_q44` keeps the exact legacy path, byte-identical to the
+  DSP expand, when there is no smoothing and no rotation. Otherwise it feeds the dequantized Q4.4 rows into
+  `hex_int8_pack_impl`, the code scheme 0 uses, so s_k, the sign and the WHT32 are applied first and the per-row scale, the
+  window shift, colsum / ibias and col_mul are recomputed from the final int8 values. Both `set_tensor` sites (single-shot
+  and shadow buffer) now write the 1/s_k vector for either scheme.
+- Gates (package built from HEAD plus the patch, compared against the previous package built from identical sources):
+  20-chunk logits byte-identical on the fp16 path and on the int best-speed arm; 5-output gate SAME on all five, all
+  outputs non-empty; `INT_MM=0` PPL exactly 134.3955 +/- 6.77407; int best-speed KLD 0.006692 +/- 0.000328, top-p 96.647%,
+  PPL 132.5813. Op sum, 6 rotating pairs: median delta +0.23 ms (noise). Host decode check of the new packer: relative
+  error 1.7e-9 unsmoothed, 9.7e-4 smoothed and 1.4e-3 smoothed + R32, zero window violations.
+- W4A8 (scheme 1) is correct now but must not ship: it fails the 0.008 KLD gate in all three measured recipes
+  (gate+up smoothed 0.00912 vs 0.00735 for W8A8; best-speed 0.01112 / top-p 95.549% vs 0.00669; qkv + o + gate+up with R32
+  0.00957 vs 0.00380). It runs the same int8 HMX job, so there is no speed difference either (120-sample alternation,
+  10 clean rounds: -0.10% median, z -0.17; op sum +0.10 ms median, noise). The requantization of the weights after the
+  Q4.4 grid costs about 1.18x weight error on real tensors.
+
+### Closed items
+
+- True int4 weights (`weight.n`): it executes on v81 and is bit-correct (0 mismatches of 2048 outputs against the int8
+  result from the same weight values), but it is the same rate per MAC as int8 (about 5.06 cycles per k32 per 64 filters
+  for both), and the HMX has one scale per output column, so a per-column 4-bit grid gives 12.4x the weight error of the
+  shipped Q4.4-int8 weights (KLD 0.608 on device). Closed; the only gain would be half the weight bytes, and the model's
+  per-block scales cannot be expressed in the operand.
+- A16 full coverage (down, the k=12288 class and the PLE gate / proj as two-pass W8A16, with R32 and the gate+up
+  epilogue overlap): passes the quality gate (KLD 0.006942, top-p 96.569%) but is 9.3% slower than best-speed (60-sample
+  alternation, 10250.4 vs 9292.7 median; op sum +7.04 ms, mostly down +3.0 ms and PLE gate / proj +2.5 ms). No
+  recommendation change.
+- o-proj producer-side quantize in `FLASH_ATTN_EXT` (`GGML_HEXAGON_O_Q8=1`): bit-identical (20-chunk logits, 5-output
+  gate, PPL, KLD unchanged), but a net loss on the device: FA +1.04 ms, o-proj -0.59 ms, pair net +0.45 ms (op sum median
+  pair delta +0.72 ms). The FA O store is already the HVX-hot tail of the op. Closed, not in the package.
+
 ## Optimization steps
 
 Numbers per step are medians of 6-8 interleaved `llama-bench` pp512 rounds on 10.92.138.99. That device was later found throttled on battery, so only the relative change between adjacent builds is meaningful. The final table above is from 10.92.137.16.
