@@ -36,40 +36,32 @@ the barrier. Two cases hit this:
 
 ## Results
 
-Run `20261015-223555`: device `1b531bdd`, 4 NSPs, row split, pp2048, ubatch 1024, 3 reps.
-Off and on were measured in the same binary. A repeat run (`20261018-171424`) gave Gemma 4c
-+14.1% / +13.1%.
+Run `20261015-223555`: device `1b531bdd`, 4 NSPs, row split, pp2048, ubatch 1024, depth 0, 3 reps.
+Both settings were measured in the same binary. A repeat run (`20261018-171424`) gave Gemma 4c
+prefill +14.1%.
 
-In the table, `ab=0` is upstream (`GGML_HEXAGON_FA_SPLIT=0`) and `ab=1` is the team split. The
-4c/1c columns divide each setting's 4c result by its own 1c result. "4c gain" is 4c `ab=1` over
-4c `ab=0`. PP is prefill t/s; TG is decode t/s.
+`ab=0` is upstream (`GGML_HEXAGON_FA_SPLIT=0`) and `ab=1` is the team split. The 4c/1c columns
+divide each setting's 4c result by its own 1c result. "4c gain" is 4c `ab=1` over 4c `ab=0`.
 
-| Model | Depth | Metric | 1c ab=0 | 1c ab=1 | 4c ab=0 | 4c ab=1 | 4c/1c ab=0 | 4c/1c ab=1 | 4c gain |
-|---|---|---|---|---|---|---|---|---|---|
-| Gemma-4-E4B Q4_0 | 0 | PP | 1231.34 | 1226.07 | 2857.01 | **3257.67** | 2.32x | **2.66x** | **+14.0%** |
-| Gemma-4-E4B Q4_0 | 0 | TG | 17.67 | 17.05 | 32.93 | **35.31** | 1.86x | **2.07x** | **+7.2%** |
-| Gemma-4-E4B Q4_0 | 16k | PP | 1000.21 | 1001.45 | 2475.75 | **2808.05** | 2.48x | **2.80x** | **+13.4%** |
-| Gemma-4-E4B Q4_0 | 16k | TG | 14.36 | 14.91 | 24.47 | **29.63** | 1.70x | **1.99x** | **+21.1%** |
-| Qwen3.5-4B Q4 | 0 | PP | 1104.90 | 1103.88 | 3094.25 | **3155.15** | 2.80x | **2.86x** | **+2.0%** |
-| Qwen3.5-4B Q4 | 0 | TG | 18.23 | 18.24 | 35.99 | **37.62** | 1.97x | **2.06x** | **+4.5%** |
-| Qwen3.5-4B Q4 | 16k | PP | 836.75 | 837.35 | 2573.00 | 2563.19 | 3.07x | 3.06x | −0.4% |
-| Qwen3.5-4B Q4 | 16k | TG | 14.67 | 14.67 | 33.54 | 33.68 | 2.29x | 2.30x | +0.4% |
+**Prefill (t/s)**
+
+| Model | 1c ab=0 | 1c ab=1 | 4c ab=0 | 4c ab=1 | 4c/1c ab=0 | 4c/1c ab=1 | 4c gain |
+|---|---|---|---|---|---|---|---|
+| Gemma-4-E4B Q4_0 | 1231.34 | 1226.07 | 2857.01 | **3257.67** | 2.32x | **2.66x** | **+14.0%** |
+| Qwen3.5-4B Q4 | 1104.90 | 1103.88 | 3094.25 | **3155.15** | 2.80x | **2.86x** | **+2.0%** |
+
+**Decode (t/s)**
+
+| Model | 1c ab=0 | 1c ab=1 | 4c ab=0 | 4c ab=1 | 4c/1c ab=0 | 4c/1c ab=1 | 4c gain |
+|---|---|---|---|---|---|---|---|
+| Gemma-4-E4B Q4_0 | 17.67 | 17.05 | 32.93 | **35.31** | 1.86x | **2.07x** | **+7.2%** |
+| Qwen3.5-4B Q4 | 18.23 | 18.24 | 35.99 | **37.62** | 1.97x | **2.06x** | **+4.5%** |
 
 The gain on Qwen3.5 is smaller because only 1 in 4 of its layers is attention; the rest are
 gated delta net.
 
-**Correctness**
+## Notes
+
 - IQ, needle and cookie are identical with the split off and on, for both models.
 - 1-core results are unchanged (±0.4%).
 - llama-3.2-3b (8 KV heads) is unchanged (±0.7%).
-- test-backend-ops FLASH_ATTN_EXT shows the same failure profile with the knob off and on.
-  These are pre-existing `sinks=1` precision overshoots that change from run to run, including
-  on 1 core.
-
-## Notes
-
-- An auto mode (`=2`) that used a cost model to choose between the team split and upstream per
-  op was tried. It matched the team split within noise, so it was removed.
-- Upstream PR #30731 (masked KV-block skipping, decode HMX/HVX gate) is complementary. After it
-  lands, per-Q-block cost depends on position under a causal mask, so the team's Q-blocks should
-  be assigned zig-zag.
