@@ -1,7 +1,7 @@
 # hexagon: adaptive KV-head team split for flash attention on multi-NSP
 
-Branch `ebateni/adaptive-split` (`02f7ad0f5`, default on in `b3ff128a7`). Knob: `GGML_HEXAGON_FA_SPLIT`
-(1 = team split, the default; 0 = upstream behaviour).
+Branch `ebateni/adaptive-split`, commit `7d6e771b7` on upstream master `31288c9c6`. Knob:
+`GGML_HEXAGON_FA_SPLIT` (1 = team split, the default; 0 = previous partitioning).
 
 ## Problem
 
@@ -13,13 +13,14 @@ the barrier. Two cases hit this:
 
 - **Prefill** with few KV heads: Gemma-4 (2), Qwen3.5 attention layers (2). For Gemma-4-E4B at
   ubatch 1024, the single-NSP FA was about 15% of the 4-core graph.
-- **Decode**: there is a single Q-block, so FA always runs on one NSP.
+- **Decode** on the HMX path (DK > 256, or DK = 256 with fewer KV heads than threads, e.g.
+  Gemma-4): there is a single Q-block, so FA runs on one NSP.
 
 ## Solution
 
 - **Teams.** The NSPs form `gcd(n_kv_heads, N)` teams of `N / teams` NSPs each. Each team owns a
   contiguous group of KV heads, so an NSP only reads the K/V of its own heads. The team's Q-blocks
-  are split evenly over its members.
+  are split evenly over its members, in contiguous ranges.
   - Gemma (2 KV heads, 4 NSPs) gets 2 teams × 2 NSPs.
   - When `n_kv % N == 0` this reduces exactly to upstream's KV-head split, so nothing changes.
 - **Per-NSP Br cost.** `hmx_fa_find_chunk_size` takes `q_split`, the number of NSPs sharing the
@@ -29,6 +30,9 @@ the barrier. Two cases hit this:
   `htp/flash-attn-ops.h`, the HMX FA partition in `htp/flash-attn-ops.c`, and the FA precompute in
   `ggml-hexagon.cpp`. The FA kernel is unchanged; only the head and Q ranges per NSP differ. The
   HVX FA path is untouched.
+- **Load balance.** The kernel skips fully masked KV blocks, so under a causal mask later Q-blocks
+  cost more than earlier ones. With a shallow KV cache, the contiguous split within a team is
+  therefore not perfectly balanced. Assigning Q-blocks zig-zag within the team would fix this.
 - **Tests.** New test-backend-ops FA cases cover:
   - n_kv = 1, 2, 6;
   - GQA factor 4 and 8;
@@ -38,7 +42,8 @@ the barrier. Two cases hit this:
 
 Run `20261015-223555`: device `1b531bdd`, 4 NSPs, row split, pp2048, ubatch 1024, depth 0, 3 reps.
 Both settings were measured in the same binary. A repeat run (`20261018-171424`) gave Gemma 4c
-prefill +14.1%.
+prefill +14.1%. These numbers were measured on an upstream base without masked KV-block skipping.
+Re-measurement on the current base is pending.
 
 `ab=0` is upstream (`GGML_HEXAGON_FA_SPLIT=0`) and `ab=1` is the team split. The 4c/1c columns
 divide each setting's 4c result by its own 1c result. "4c gain" is 4c `ab=1` over 4c `ab=0`.
@@ -65,3 +70,5 @@ gated delta net.
 - IQ, needle and cookie are identical with the split off and on, for both models.
 - 1-core results are unchanged (±0.4%).
 - llama-3.2-3b (8 KV heads) is unchanged (±0.7%).
+- Qwen3.5-35B-A3B (MoE, 2 KV heads): 4c prefill +2.1% (963.6 -> 983.7 t/s), within noise.
+  Attention is a small share of the MoE graph.
