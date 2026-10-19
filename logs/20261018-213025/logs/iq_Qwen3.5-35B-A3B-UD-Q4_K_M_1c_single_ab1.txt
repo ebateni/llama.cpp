@@ -1,0 +1,13 @@
+Q#	EXPECTED	GOT	MATCH	PROMPT
+1	43	What is 17 + 26? Answer with just the number.  <think> Thinking Process:  1.  **Analyze the Request:** The user is asking for the sum of	NO	What is 17 + 26? Answer with just the number.
+2	56		NO	What is 8 multiplied by 7? Answer with just the number.
+3	63		NO	What is 100 minus 37? Answer with just the number.
+4	Tokyo		NO	The capital of Italy is Rome. The capital of Japan is
+5	Au		NO	The chemical symbol for oxygen is O. The chemical symbol for gold is
+6	10		NO	Complete the sequence: 2, 4, 6, 8,
+7	blue		NO	Roses are red, violets are
+8	Jupiter		NO	The largest planet in our solar system is
+9	7		NO	How many days are in a week? Answer with just the number.
+10	cold		NO	The opposite of "big" is small. The opposite of "hot" is
+
+SCORE: 0/10
