@@ -102,7 +102,8 @@ struct htp_mm_kernel_params {
     uint8_t  int8_split;         // 1 = plain int8 op quantizes the second row sub-block while the HMX works on the first
     uint8_t  smooth;             // 1 = a 1/s_k activation smoothing vector sits behind the packed records of weight 0
     uint8_t  q8_in;              // 1 = the activation is the int8 payload + row scales written by RMS_NORM_MUL_Q8 (set only by the host fusion pass)
-    uint8_t  q8_pad[3];
+    uint8_t  wq8;                // 1 = decode (m=1) matmul of an f16 weight that has a Q8_0-tiled shadow at wq8_off (GGML_HEXAGON_MP_Q8): run the HVX q8_0 x q8_0 vrmpy kernel on it
+    uint8_t  q8_pad[2];
 
     int32_t  m_chunk;            // Row chunk size (M chunk)
     int32_t  n_chunk;            // Col chunk size (N chunk)
@@ -114,6 +115,7 @@ struct htp_mm_kernel_params {
     int32_t  vtcm_act_size;      // activation scratchpad size in VTCM
     int32_t  vtcm_bias_size;     // bias scratchpad size in VTCM (fused only)
     int32_t  vtcm_dst_size;      // dst scratchpad size in VTCM
+    uint32_t wq8_off;            // byte offset of the Q8_0-tiled shadow from the start of the weight tensor (128 B aligned)
 
     // Precomputed division values
     struct fastdiv_values div_ne12_ne1;

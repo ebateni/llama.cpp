@@ -148,6 +148,7 @@ static uint32_t opt_ple_nc = 512;      // GGML_HEXAGON_PLE_NC=<cols, multiple of
 static uint32_t opt_ple_ncg = 64;      // GGML_HEXAGON_PLE_NCG=<cols, 0 = off>: n_chunk cap of the PLE inp_gate matmul (n = 256)
 static int      opt_int_split = 0;     // GGML_HEXAGON_INT_SPLIT=1 enables the m-split overlap of the plain int8 op (measured slower, see log M75)
 static int      opt_norm_q8 = 0;       // GGML_HEXAGON_NORM_Q8=1: qkv activations quantized to int8 by the producing RMS_NORM+MUL (RMS_NORM_MUL_Q8); 0 = unfused
+static int      opt_mp_q8 = 0;         // GGML_HEXAGON_MP_Q8=1: per_layer_model_proj (BF16, f16 on the device) gets a Q8_0-tiled shadow copy and its m=1 (decode) matmul runs the HVX q8_0 vrmpy matvec instead of the f16 dot
 static int    opt_mm_select  = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
 static int    opt_fa_select  = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
 static int    opt_fa_ostore = 1; // 1 = flash_attn writes its output through DMA from VTCM (default on), 0 = cached stores
@@ -550,6 +551,67 @@ static void ggml_hexagon_load_int_smooth(const char * path) {
 static inline size_t ggml_hexagon_int8_rot_offset(const struct ggml_tensor * t) {
     if (t->type == GGML_TYPE_BF16) { return hex_round_up(ggml_nbytes(t), 128); }
     return hex_round_up(ggml_hexagon_tiled_row_size(t->type, t->ne[0]) * hex_round_up(t->ne[1], 32), 128);
+}
+
+// per_layer_model_proj decode shadow (GGML_HEXAGON_MP_Q8): Q8_0-tiled copy of the weight behind the f16 data (and behind the HMX int8 region if that exists)
+static inline bool ggml_hexagon_mp_q8_tensor(const struct ggml_tensor * t) {
+    return opt_mp_q8 && t->type == GGML_TYPE_BF16 && strcmp(t->name, "per_layer_model_proj.weight") == 0 &&
+           t->ne[0] % 32 == 0 && t->ne[1] % 32 == 0 && t->ne[2] == 1 && t->ne[3] == 1;
+}
+
+static inline size_t ggml_hexagon_mp_q8_bytes(const struct ggml_tensor * t) {
+    return ggml_row_size(GGML_TYPE_Q8_0, t->ne[0]) * hex_round_up(t->ne[1], 32);
+}
+
+static inline size_t ggml_hexagon_mp_q8_offset(const struct ggml_tensor * t) {
+    size_t off = ggml_hexagon_int8_rot_offset(t);
+    if (ggml_hexagon_int8_rot_tensor(t)) {
+        off += hex_int8_extra_bytes((uint32_t) t->ne[0], (uint32_t) t->ne[1]) + ggml_hexagon_int8_smooth_bytes(t);
+    }
+    return hex_round_up(off, 128);
+}
+
+// Quantize the dense f16 rows [n][k] to Q8_0 (amax/127 per 32-block, f16 scale, round-to-nearest) and store them in the DSP q8_0 tiled layout
+// (same layout as repack_q8_0_tiled: per 32x32 tile 1024 B of column-pair interleaved quants + 32 f16 scales, 1088 B).
+static void ggml_hexagon_mp_q8_pack(uint8_t * dst, const uint16_t * src_rows, uint32_t n, uint32_t k) {
+    const uint32_t n_col_tiles = hex_round_up(n, 32) / 32;
+    const uint32_t n_k_tiles   = k / 32;
+    const size_t   tile_size   = HTP_MM_WEIGHT_TILE_SIZE_Q8_0;
+    const uint32_t nth = 8;
+    std::vector<std::thread> th;
+    for (uint32_t t = 0; t < nth; ++t) {
+        th.emplace_back([&, t]() {
+            for (uint32_t ct = t; ct < n_col_tiles; ct += nth) {
+                for (uint32_t kt = 0; kt < n_k_tiles; ++kt) {
+                    uint8_t * tile = dst + ((size_t) ct * n_k_tiles + kt) * tile_size;
+                    ggml_half * scale_dst = (ggml_half *) (tile + 1024);
+                    for (uint32_t row = 0; row < 32; ++row) {
+                        const uint32_t r = ct * 32 + row;
+                        int8_t qs[32] = { 0 };
+                        ggml_half d16 = 0;
+                        if (r < n) {
+                            float x[32];
+                            float amax = 0.0f;
+                            for (uint32_t i = 0; i < 32; ++i) {
+                                x[i] = GGML_FP16_TO_FP32(src_rows[(size_t) r * k + kt * 32 + i]);
+                                amax = fmaxf(amax, fabsf(x[i]));
+                            }
+                            const float d  = amax / 127.0f;
+                            const float id = d != 0.0f ? 1.0f / d : 0.0f;
+                            for (uint32_t i = 0; i < 32; ++i) { qs[i] = (int8_t) roundf(x[i] * id); }
+                            d16 = GGML_FP32_TO_FP16(d);
+                        }
+                        for (uint32_t cp = 0; cp < 16; ++cp) {
+                            tile[cp * 64 + 2 * row + 0] = (uint8_t) qs[cp * 2 + 0];
+                            tile[cp * 64 + 2 * row + 1] = (uint8_t) qs[cp * 2 + 1];
+                        }
+                        scale_dst[row] = d16;
+                    }
+                }
+            }
+        });
+    }
+    for (auto & x : th) { x.join(); }
 }
 
 static inline bool ggml_hexagon_is_hmx_weight_type(enum ggml_type type) {
@@ -2766,18 +2828,24 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
         for (size_t i = 0; i < size / sizeof(ggml_bf16_t); i++) {
             dst[i] = GGML_FP32_TO_FP16(GGML_BF16_TO_FP32(src[i]));
         }
-        if (ggml_hexagon_int8_rot_tensor(tensor)) {
-            // dense f16 copy complete -> pack the int8 records behind it (the f16 copy stays for the fp16 fallback)
+        if (ggml_hexagon_int8_rot_tensor(tensor) || ggml_hexagon_mp_q8_tensor(tensor)) {
+            // dense f16 copy complete -> pack the int8 records / Q8_0 shadow behind it (the f16 copy stays for the fp16 fallback)
             extra->shadow_size += size;
             if (extra->shadow_size >= ggml_nbytes(tensor)) {
-                const uint32_t red = opt_int_mm_reduce;
-                uint8_t * dst8 = (uint8_t *) tensor->data + ggml_hexagon_int8_rot_offset(tensor);
-                const std::vector<float> * sm = ggml_hexagon_int8_smooth_vec(tensor);
-                hex_int8_pack_f16(dst8, (const uint16_t *) tensor->data, (uint32_t) tensor->ne[1], (uint32_t) tensor->ne[0], red,
-                                  sm ? sm->data() : nullptr);
-                if (sm) {
-                    float * inv = (float *) (dst8 + hex_int8_extra_bytes((uint32_t) tensor->ne[0], (uint32_t) tensor->ne[1]));
-                    for (size_t i = 0; i < sm->size(); ++i) { inv[i] = hex_int8_act_mult((uint32_t) i, (*sm)[i], 0); }
+                if (ggml_hexagon_int8_rot_tensor(tensor)) {
+                    const uint32_t red = opt_int_mm_reduce;
+                    uint8_t * dst8 = (uint8_t *) tensor->data + ggml_hexagon_int8_rot_offset(tensor);
+                    const std::vector<float> * sm = ggml_hexagon_int8_smooth_vec(tensor);
+                    hex_int8_pack_f16(dst8, (const uint16_t *) tensor->data, (uint32_t) tensor->ne[1], (uint32_t) tensor->ne[0], red,
+                                      sm ? sm->data() : nullptr);
+                    if (sm) {
+                        float * inv = (float *) (dst8 + hex_int8_extra_bytes((uint32_t) tensor->ne[0], (uint32_t) tensor->ne[1]));
+                        for (size_t i = 0; i < sm->size(); ++i) { inv[i] = hex_int8_act_mult((uint32_t) i, (*sm)[i], 0); }
+                    }
+                }
+                if (ggml_hexagon_mp_q8_tensor(tensor)) {
+                    ggml_hexagon_mp_q8_pack((uint8_t *) tensor->data + ggml_hexagon_mp_q8_offset(tensor), (const uint16_t *) tensor->data,
+                                            (uint32_t) tensor->ne[1], (uint32_t) tensor->ne[0]);
                 }
                 extra->shadow_size = 0;
             }
@@ -3206,8 +3274,11 @@ static size_t ggml_backend_hexagon_buffer_type_get_alloc_size(ggml_backend_buffe
         }
         return sz;
     }
-    if (t->type == GGML_TYPE_BF16 && ggml_hexagon_int8_rot_tensor(t)) {
-        return ggml_hexagon_int8_rot_offset(t) + hex_int8_extra_bytes((uint32_t) t->ne[0], (uint32_t) t->ne[1]) + ggml_hexagon_int8_smooth_bytes(t);
+    if (t->type == GGML_TYPE_BF16 && (ggml_hexagon_int8_rot_tensor(t) || ggml_hexagon_mp_q8_tensor(t))) {
+        size_t sz = ggml_hexagon_int8_rot_tensor(t) ?
+            ggml_hexagon_int8_rot_offset(t) + hex_int8_extra_bytes((uint32_t) t->ne[0], (uint32_t) t->ne[1]) + ggml_hexagon_int8_smooth_bytes(t) : ggml_nbytes(t);
+        if (ggml_hexagon_mp_q8_tensor(t)) { sz = ggml_hexagon_mp_q8_offset(t) + ggml_hexagon_mp_q8_bytes(t); }
+        return sz;
     }
     return ggml_nbytes(t);
 
@@ -6965,6 +7036,23 @@ static void ggml_hexagon_precompute_matmul_params_impl(
         if (ggml_hexagon_precompute_hmx_mm_params(sess, src0, src1, dst, wtype, ne00_padded, ne01_tiled, ne02, ne11, ne12, ne11_padded, is_matmul_id, is_batched, src2_size, vtcm_budget, kparams)) {
             goto finalize;
         }
+    }
+
+    // GGML_HEXAGON_MP_Q8: m=1 matmul of the BF16 per_layer_model_proj runs the HVX q8_0 matvec on the Q8_0-tiled shadow of the weight
+    if (opt_mp_q8 && !is_matmul_id && !is_batched && ne11 * ne12 * ne13 == 1 && ggml_hexagon_mp_q8_tensor(src0)) {
+        ggml_tensor src0_q8 = *src0;
+        src0_q8.type  = GGML_TYPE_Q8_0;
+        src0_q8.nb[0] = ggml_type_size(GGML_TYPE_Q8_0);
+        src0_q8.nb[1] = ggml_row_size(GGML_TYPE_Q8_0, src0->ne[0]);
+        src0_q8.nb[2] = src0_q8.nb[1] * src0->ne[1];
+        src0_q8.nb[3] = src0_q8.nb[2];
+        ggml_hexagon_precompute_hvx_mm_params(sess, &src0_q8, src1, dst, GGML_TYPE_Q8_0, ne02, ne03, ne10, ne11, ne12, ne13, is_matmul_id, src2_row_size, vtcm_budget, kparams);
+        if (kparams->kernel_type != HTP_MM_KERNEL_UNSUPPORTED) {
+            kparams->wq8     = 1;
+            kparams->wq8_off = (uint32_t) ggml_hexagon_mp_q8_offset(src0);
+            goto finalize;
+        }
+        memset(kparams, 0, sizeof(*kparams));
     }
 
     // Fallback to HVX parameter computation
@@ -10985,6 +11073,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     if (const char * s_pg = getenv("GGML_HEXAGON_PLE_NCG")) { opt_ple_ncg = (uint32_t) atoi(s_pg); }
     if (const char * s_sp = getenv("GGML_HEXAGON_INT_SPLIT")) { opt_int_split = atoi(s_sp); }
     if (const char * s_nq = getenv("GGML_HEXAGON_NORM_Q8")) { opt_norm_q8 = atoi(s_nq); }
+    if (const char * s_mq = getenv("GGML_HEXAGON_MP_Q8")) { opt_mp_q8 = atoi(s_mq); }
     if (const char * s_so = getenv("GGML_HEXAGON_INT_SMOOTH_OPTIONAL")) { g_int_smooth_optional = atoi(s_so) != 0; }
     if (const char * s_sm = getenv("GGML_HEXAGON_INT_SMOOTH")) { ggml_hexagon_load_int_smooth(s_sm); }
     if (const char * s_sch = getenv("GGML_HEXAGON_INT_MM_SCHEME")) { opt_int_mm_scheme = (uint32_t) atoi(s_sch); }

@@ -5857,6 +5857,21 @@ static int op_matmul_impl(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
+    if (kparams->wq8) {
+        // m=1 matvec of an f16 weight with a Q8_0-tiled shadow (GGML_HEXAGON_MP_Q8): run the q8_0 x q8_0 vrmpy kernel on the shadow
+        const struct htp_tensor * w16 = octx->src[0];
+        struct htp_tensor w8 = *w16;
+        w8.type  = HTP_TYPE_Q8_0;
+        w8.data  = w16->data + kparams->wq8_off;
+        w8.nb[1] = (w16->ne[0] / 32) * (HTP_MM_WEIGHT_TILE_SIZE_Q8_0 / 32);
+        w8.nb[2] = w8.nb[1] * w8.ne[1];
+        w8.nb[3] = w8.nb[2];
+        octx->src[0] = &w8;
+        const int rc = hvx_mm_matmul(octx);
+        octx->src[0] = w16;
+        return rc;
+    }
+
     return hvx_mm_matmul(octx);
 }
 

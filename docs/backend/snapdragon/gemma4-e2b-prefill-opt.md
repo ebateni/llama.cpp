@@ -1018,6 +1018,53 @@ Source: analysis/hmx-int-log.md M147-M150 (base HEAD 0c0245a99, device 2026-10-1
   gate, PPL, KLD unchanged), but a net loss on the device: FA +1.04 ms, o-proj -0.59 ms, pair net +0.45 ms (op sum median
   pair delta +0.72 ms). The FA O store is already the HVX-hot tail of the op. Closed, not in the package.
 
+## Decode: Q8_0 shadow for the m=1 per_layer_model_proj matvec (`GGML_HEXAGON_MP_Q8`)
+
+Source of the numbers: analysis/E2B-HVX-LOG.md (sections W-1 to W-4c and the Phase 3 table), Windows SC8480XP, HTP v81,
+base HEAD 502007d24. The package was built from the same sources as this change.
+
+- Where decode stands: the decode weight matmuls were already integer vrmpy. At m=1 the host builds HVX params
+  (m=1 is never HMX-eligible), and the DSP runs `hvx_mm_matmul` (`matmul-ops.c`, act_nrows == 1 branch) ->
+  `hvx_mv_2d_repacked_pk_q4_0` -> `tiled_vec_dot_q4_0_32x1_pk_v` -> `accum_q4_0_32x1` (`hvx-mm-kernels-tiled.h`), a
+  `Q6_Vw_vrmpyacc_VwVbVb` int8 x int8 -> int32 dot. The decode ubatch counters (`PROFILE=3`) show HVX_COMP and
+  HVX_A_QUANT, 0 HVX_W_DEQUANT, and HMX_COMP only from flash attention; the prefill batch has the HVX_W_DEQUANT events
+  (fp16 HMX weight dequant). There is no dequantize-to-f16 dot at m=1.
+- The one exception: `per_layer_model_proj.weight` (BF16, stored as f16 on the device) was the only float weight matmul
+  left at m=1: 0.233 ms, 1.58% of the decode ubatch (14.72 ms). Everything else that is float at decode (flash attention
+  7.75%, norm + rope, GELU) is non-matmul math that stays float.
+- Change: `GGML_HEXAGON_MP_Q8=1` (**default 0**) quantizes the f16 device copy of `per_layer_model_proj.weight` to a
+  Q8_0-tiled shadow at load (amax/127 per 32, f16 scale, round to nearest, the 1088-byte tile layout of
+  `repack_q8_0_tiled`). The shadow is +1.06 B/weight = +14.6 MB, placed behind the f16 data (and behind the HMX int8
+  region when that is packed). For the m=1, non-batched, non-matmul_id case the host computes HVX params as for a Q8_0
+  weight and sets `wq8` / `wq8_off`; the DSP then runs the existing `hvx_mv_2d_repacked_q8_0` vrmpy kernel on the shadow.
+  No new DSP kernel. The kernel params gain `wq8` (1 byte, from the old pad) and `wq8_off` (u32), and the struct still
+  fits 128 bytes. If the Q8_0 params are unsupported the host falls back to the old f16 params. The f16 copy stays for
+  prefill / HMX.
+- The decode gain is real but small, and the gate defaults off. A ceiling of about 1.6% of decode exists for this op.
+
+Numbers (all from the log):
+
+| Quantity | `MP_Q8=0` | `MP_Q8=1` | delta |
+|---|---|---|---|
+| `per_layer_model_proj` op per decode token (`PROFILE=1`, 10 ubatches x 3 runs per arm) | 214 us | 143 us | -71 us (-33%) |
+| median decode batch (`PROFILE=1`) | 14230 us | 14154 us | -76 us (-0.5%) |
+| decode tg128, 60-sample median (int best-speed arm) | 73.229 t/s | 73.567 t/s | +0.338 (+0.46%), bootstrap 95% CI [+0.237, +0.460] |
+| prefill pp512, 60-sample median | 10262.35 t/s | 10201.60 t/s | -0.59%, CI [-103.3, +29.5] includes 0, means within 0.05% |
+
+- The alternation: 12 rounds, order swapped every round, a health check before every run (pp128 3.8-4.2k, no foreign
+  process), `llama-bench -p 512 -n 128 -r 5` on the int best-speed arm (`INT_MM=3 MASK=27 ... NORM_Q8=1`), only
+  `GGML_HEXAGON_MP_Q8=0|1` differs; 60 samples per arm, no excluded runs. Prefill is unaffected by construction: the
+  shadow is used only at m=1, and the prefill matmul of this weight is m=512. The -0.59% prefill median is noise.
+- Quality gates: with the gate unset the build is bit-identical to the previous package (PPL 134.3955 +/- 6.77407, greedy
+  48-token md5 98ad464bb636534f9080d76dabb46c89). With the gate on, the greedy md5 is identical on both the `INT_MM=0` and
+  the int best-speed arms, and the int arm PPL is 132.5813 with the gate off and on (the 40-chunk run never hits m=1).
+  The m=1 path was exercised with a `-b 1` PPL, 10 chunks: 235.3916 reference vs 234.5697 with the gate on (-0.35%, inside
+  the +/- 24.9 statistical error). No KLD run was made. The only numeric change is the Q8_0 quantization of one 1536 x
+  8960 matrix in the one-row ubatch, so this is not bit-identical to the f16 dot when it is on.
+- Context, not part of this change: `GGML_HEXAGON_NHMX=0` (HVX only) on the previous package, `INT_MM=0`: pp512 516.11 vs
+  9093.08 with HMX, tg128 69.46 vs 73.17, PPL 134.8720 (+0.35%), greedy identical. The HVX-only integer path is
+  quality-clean but not a prefill option.
+
 ## Optimization steps
 
 Numbers per step are medians of 6-8 interleaved `llama-bench` pp512 rounds on 10.92.138.99. That device was later found throttled on battery, so only the relative change between adjacent builds is meaningful. The final table above is from 10.92.137.16.
