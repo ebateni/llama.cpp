@@ -51,6 +51,16 @@ static inline void hex_l2flush(void * addr, size_t size) {
     }
 }
 
+// invalidate (drop without writing back) the cache lines of [addr, addr+size). Used on a range the host wrote after the DSP cleaned its cache.
+static inline void hex_l2inval(void * addr, size_t size) {
+    if (size == 0) return;
+    const uint32_t s = ((uint32_t) addr) & ~(HEX_L2_LINE_SIZE - 1);
+    const uint32_t e = (((uint32_t) addr) + size + HEX_L2_LINE_SIZE - 1) & ~(HEX_L2_LINE_SIZE - 1);
+    for (uint32_t i = s; i < e; i += HEX_L2_LINE_SIZE) {
+        Q6_dcinva_A((void *) i);
+    }
+}
+
 static inline void hex_pause() {
     asm volatile(" pause(#255)\n");
 }

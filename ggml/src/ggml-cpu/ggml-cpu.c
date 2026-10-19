@@ -3151,6 +3151,11 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
             continue;
         }
 
+        // a node flagged DEFER is computed later by the consumer's backend (ggml_backend_cpu_compute_node clears the flag while it runs the node)
+        if (node->flags & GGML_TENSOR_FLAG_DEFER) {
+            continue;
+        }
+
         // TODO: move fused-op detection into ggml_graph_plan so fusion decisions are made once at planning time
         // Try fused ops, fall back to normal compute
         const int n_fused = ggml_cpu_try_fuse_ops(cgraph, node_n, &params, cplan);

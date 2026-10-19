@@ -755,6 +755,36 @@ static int op_fence(struct htp_ops_context * octx) {
     const struct htp_tensor * sync = octx->src[0];
     atomic_uint * sync_fence = (atomic_uint *) (uintptr_t) sync->data;
 
+    if (mode == 2) {
+        // host-written fence (PLE gather overlap): wait for seq (bounded by op_params[2] microseconds, error status on expiry, never a hang), then
+        // invalidate exactly the range of src[1] (the tensor the host wrote after the batch started) before any later op reads it
+        const struct htp_tensor * ple = octx->src[1];
+        const uint64_t t0 = HAP_perf_get_qtimer_count();
+        const uint64_t limit = (uint64_t) (uint32_t) octx->op_params[2];
+        int st = HTP_STATUS_OK;
+        while (1) {
+            uint32_t sync_seq, sync_status;
+            htp_fence_read(sync_fence, &sync_seq, &sync_status);
+            if ((int32_t)(sync_seq - seq) >= 0) {
+                if (sync_status > HTP_STATUS_OK) { st = sync_status; }
+                break;
+            }
+            if (HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - t0) > limit) {
+                FARF(ERROR, "ggml-hex: host-fence TIMEOUT : fence %p seq 0x%x after %llu us", sync_fence, seq, (unsigned long long) limit);
+                st = HTP_STATUS_INTERNAL_ERR;
+                break;
+            }
+            hex_pause();
+        }
+        if (st == HTP_STATUS_OK && ple) {
+            asm volatile ("syncht" : : : "memory");
+            htp_inval_range(ctx, htp_tensor_data(ple), ple->size);
+            asm volatile ("syncht" : : : "memory");
+        }
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_FENCE, (uint16_t) seq);
+        return st;
+    }
+
     if (mode == 1) {
         htp_flush_dirty_ranges(ctx);
 

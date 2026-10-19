@@ -190,6 +190,33 @@ static enum ggml_status ggml_backend_cpu_graph_compute(ggml_backend_t backend, s
     return ggml_graph_compute(cgraph, &cplan);
 }
 
+// run a single node (used for nodes flagged GGML_TENSOR_FLAG_DEFER, which ggml_graph_compute_thread skips) with the backend's threadpool
+static enum ggml_status ggml_backend_cpu_compute_node(ggml_backend_t backend, struct ggml_tensor * node) {
+    struct ggml_backend_cpu_context * cpu_ctx = (struct ggml_backend_cpu_context *)backend->context;
+
+    const uint32_t saved = node->flags;
+    node->flags &= ~(uint32_t) GGML_TENSOR_FLAG_DEFER;
+
+    struct ggml_cgraph one = {};
+    struct ggml_tensor * nodes[1] = { node };
+    one.size = 1; one.n_nodes = 1; one.nodes = nodes;
+
+    struct ggml_cplan cplan = ggml_graph_plan(&one, cpu_ctx->n_threads, cpu_ctx->threadpool);
+    if (cpu_ctx->work_size < cplan.work_size) {
+        delete[] cpu_ctx->work_data;
+        cpu_ctx->work_data = new uint8_t[cplan.work_size];
+        cpu_ctx->work_size = cplan.work_size;
+    }
+    cplan.work_data           = (uint8_t *)cpu_ctx->work_data;
+    cplan.abort_callback      = cpu_ctx->abort_callback;
+    cplan.abort_callback_data = cpu_ctx->abort_callback_data;
+    cplan.use_ref             = cpu_ctx->use_ref;
+
+    const enum ggml_status st = ggml_graph_compute(&one, &cplan);
+    node->flags = saved;
+    return st;
+}
+
 static const struct ggml_backend_i ggml_backend_cpu_i = {
     /* .get_name                = */ ggml_backend_cpu_get_name,
     /* .free                    = */ ggml_backend_cpu_free,
@@ -686,6 +713,9 @@ static void * ggml_backend_cpu_get_proc_address(ggml_backend_reg_t reg, const ch
     }
     if (strcmp(name, "ggml_threadpool_free") == 0) {
         return (void *)ggml_threadpool_free;
+    }
+    if (strcmp(name, "ggml_backend_cpu_compute_node") == 0) {
+        return (void *)ggml_backend_cpu_compute_node;
     }
     if (strcmp(name, "ggml_backend_cpu_set_threadpool") == 0) {
         return (void *)ggml_backend_cpu_set_threadpool;

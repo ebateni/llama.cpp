@@ -1096,6 +1096,61 @@ Same model, device and command lines as before; int best-speed arm with `NORM_Q8
 - One alternation attempt that ran 12 rounds from a single batch file stalled for 55 minutes on one cell with no output and
   was cut; no result from it is used, and the stall was not reproduced (52 bounded cells later ran without a hang).
 
+## Prefill: overlap the PLE row gather with the first DSP ops (`GGML_HEXAGON_PLE_OVERLAP`, default OFF)
+
+Source of the numbers: analysis/merge-log.md "PLE-GATHER OVERLAP" and "MERGED17", base HEAD 487e6b8ed plus the qkv change
+above. **The switch defaults off**: with `GGML_HEXAGON_PLE_OVERLAP` unset or 0 the behaviour is the sequential path, the
+bench prints 0 "PLE_OVERLAP engaged" lines and the outputs are identical to the previous build. Same model, device and
+command lines as before; int best-speed arm with `NORM_Q8=1`.
+
+- The problem: the 512-row PLE gather (GET_ROWS of the Q4_0 per-layer table, 18.35 MB f32 out, about 354 us on 8 CPU
+  threads) ran in CPU split 0 before the DSP batch existed.
+- Change (10 files: `ggml.h`, `ggml-cpu.c`, `ggml-cpu.cpp`, `ggml-hexagon.cpp`, `htp/hex-utils.h`, `htp/htp-tensor.c`,
+  `htp/htp-tensor.h`, `htp/main.c`, `src/llama-context.cpp`, `src/models/gemma4.cpp`): with the switch on, `gemma4.cpp`
+  flags the gather `GGML_TENSOR_FLAG_DEFER` (only for at least 64 tokens, a quantized table, at least 8 MB of output and
+  the HTP registered) and the CPU backend skips a DEFER node. The Hexagon `graph_compute` derives the first consumer from
+  the fused op list (op 35 of 1136 in the trace of the two-ubatch prompt) and enqueues a `HTP_OP_FENCE` (`FENCE_HOST`)
+  before it. The batch is written after only the 89 us embedding gather; the host then runs the deferred gather while the
+  DSP is already working. The fence op waits on a host-written slot with a bounded timeout
+  (`GGML_HEXAGON_PLE_TIMEOUT_US`, default 500000; on expiry the batch fails with an error status, never a hang) and
+  invalidates exactly the PLE range before the consumer. The descriptor cache is kept: the cached FENCE descriptor's
+  sequence is patched per rep. The DSP op sum carries one extra FENCE op of 59-60 us.
+- Host before the DSP write (probe tree, int best-speed, 7 reps per run, medians, two runs per setting): overlap off 869 /
+  878 us; on 835 / 561 us (min 562 / 481; one on-run was bimodal with a 835 us median and a 562 us minimum). CPU split 0:
+  376 -> 62-70 us (only the 89 us embedding gather remains). The gather itself still runs on 8 CPU threads, now at the same
+  time as the DSP busy-polls on 6 threads; no thermal or power measurement was made.
+- Gates: 20-chunk logits `fc /b` no differences with the overlap ON, OFF and unset, on fp16 (md5
+  0e36db18db77650597d4c4088025835f) and on the int arm (md5 b76ef14e158447c224903a9807a704e2); 5-output gate SAME on all
+  five for fp16 ON, int ON and int unset; `INT_MM=0` PPL 134.3955 +/- 6.77407; int best-speed KLD 0.006692, top-p 96.647%,
+  PPL 132.5813; full coverage KLD 0.006942, top-p 96.569%, PPL 132.1043; static compile matrix 31 objects / 0 errors on
+  8 cells; with the switch on the trace shows consumer-op 35 of 1136, 0 fallbacks, 0 timeouts.
+- End to end, 120-sample alternations (int best-speed): +0.51% median (10294.0 vs 10242.2, mean +0.87% z 4.8, 8 of 12
+  pairs, median-gain CI +27..+106 t/s) in the first session on the older base, +0.24% (CI -37..+74) in the combined-tree
+  session, so the effect is +0.24% to +0.51% depending on the session, and the combined-session interval includes 0. fp16:
+  +0.10% (2 of 4 pairs, z 1.4). 0.3 ms of a 49.4 ms batch is 0.6%, which is what was measured.
+- Combined tree (qkv change plus this one, "m17"), 4 arms x 12 rounds x 10 samples, order rotated: m17 10320.9 vs
+  10246.3 for HEAD (+0.73% median, +75 t/s, mean +0.78%, z 3.1, 8 of 12 round pairs, median-gain CI +18..+119); 116 of 120
+  m17 samples at or above 10000. m17 vs qkv alone +0.31% (CI -4..+71), vs this change alone +0.49% (CI +15..+85). The
+  gains look additive (+74.6 t/s vs +67.2 for the sum of the singles); the data cannot resolve an interaction of +/-55
+  t/s. The best single estimate of the combination is +0.6% to +0.7%.
+- Defect note: the first version of this patch (sha 602ae6eb...) was diffed against 502007d24. Applied to 487e6b8ed it
+  still applied, but its `ggml-hexagon.cpp` hunks silently DELETED the `GGML_HEXAGON_MP_Q8` code (17 removed lines
+  mentioning `opt_mp_q8` / `wq8`). It was parked as `analysis/ple-overlap-DEFECTIVE-reverts-mp_q8.patch.txt`. The patch
+  committed here is the re-diffed one (445 lines, 10 files, sha256 02e08eca41a7ed5d81aa92a222fb290193182acb92bb569942537118175d1d64)
+  and touches no MP_Q8 line (MP_Q8 is still present in the tree). HEAD + qkv + this patch is byte-identical to the m17 tree.
+- Caveats: (1) the DSP op sum does not show a gain. `PROFILE=3` medians (8 rounds, 5 arms): HEAD 49.178 ms, qkv only 49.066,
+  this change on 48.941, m17 off 48.455, m17 on 49.074; the differences are inside the 0.5-1 ms run spread and are not
+  evidence of a gain. (2) The 48-token `PARITY_IDENTICAL` check against `par_new.txt` was not re-run: that reference file
+  is gone from the device. The greedy text of the previous build and of this one with the overlap off and on was
+  byte-identical, and the 20-chunk logits and the 5-output gate stand in for it. (3) The mechanism relies on the host
+  writing 18 MB to an rpcmem buffer that the DSP then invalidates; correctness is covered by the byte-identical logits on
+  both paths, 62 bounded soak runs and the 5-output gate, but there is no formal argument for all cache states. (4) One
+  stage stalled for 55 minutes without a result and was killed; a second 55-minute stall happened in the qkv test
+  session. Neither was reproduced (62 bounded runs here, 52 bounded cells there), so their cause is unknown, and the
+  timeout path was therefore never observed firing either: the bound is implemented but not exercised. This is why the
+  switch stays off by default. (5) The sampled int output (high temperature) is not reproducible even on the unmodified
+  HEAD (three runs gave two different md5s), so a DIFF there is the baseline's own nondeterminism.
+
 ## Optimization steps
 
 Numbers per step are medians of 6-8 interleaved `llama-bench` pp512 rounds on 10.92.138.99. That device was later found throttled on battery, so only the relative change between adjacent builds is meaningful. The final table above is from 10.92.137.16.

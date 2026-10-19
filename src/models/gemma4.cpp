@@ -531,6 +531,10 @@ ggml_tensor * llama_model_gemma4::graph::build_inp_per_layer() {
 
         inp_per_layer = ggml_get_rows(ctx0, model.per_layer_tok_embd, inp->tokens);
         cb(inp_per_layer, "inp_per_layer_selected", -1);
+        if (ubatch.n_tokens >= 64 && ggml_is_quantized(model.per_layer_tok_embd->type) && ggml_nbytes(inp_per_layer) >= (size_t) 8 * 1024 * 1024 &&
+            getenv("GGML_HEXAGON_PLE_OVERLAP") && atoi(getenv("GGML_HEXAGON_PLE_OVERLAP")) != 0 && ggml_backend_reg_by_name("HTP") != nullptr) {
+            inp_per_layer->flags |= GGML_TENSOR_FLAG_DEFER;   // the consumer backend (hexagon) runs it after it launched its batch
+        }
     } else {
         // Multimodal embedding path: use padding token (ID=0) embedding
         // TODO: verify if this is the correct behavior in transformers implementation
