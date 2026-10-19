@@ -6,7 +6,7 @@ upstream `620d2225c`. Device `1b531bdd`, 4 NSPs, row split (`GGML_HEXAGON_DEVICE
 This file is the living plan and history. It is updated and pushed after every step.
 Detailed measurements live in [`adaptive-split-baseline.md`](adaptive-split-baseline.md).
 
-_Last updated: 2026-10-18 — M1 measured on this branch: Gemma ub1024 **+14%**, but ub2048 −1–3%. `FA_SPLIT=2` (auto) is pushed to keep the gain without the loss; awaiting its A/B._
+_Last updated: 2026-10-18 — **M1 closed**: team split is the default (`FA_SPLIT=1`). Auto mode (`=2`) and the solver memo were reverted: they gave no gain over `=1`. Next: M2._
 
 ---
 
@@ -64,7 +64,7 @@ Details are in `adaptive-split-baseline.md`.
 
 | # | Item | Axis change? | Knob | Estimated 4c gain (upper bound from profiles) | Status |
 |---|---|---|---|---|---|
-| M1 | **FA adaptive team split** ("hexagon: adaptive KV-head team split for flash attention on multi-NSP"): KV heads -> gcd(n_kv, N) teams, Q-blocks split within each team, per-NSP Br cost | **yes** (Q-block -> KV-head team x Q-block) | `GGML_HEXAGON_FA_SPLIT=0/1` | Gemma ub1024 +15–18%; llama 0% | **measured**: Gemma ub1024 +14.0% / +13.4% (d0 / d16k), ub2048 −1.3% / −2.6%; Qwen3.5 +2–3% at d0; Gemma TG +7–16%. Auto mode `=2` pushed, awaiting A/B |
+| M1 | **FA adaptive team split** ("hexagon: adaptive KV-head team split for flash attention on multi-NSP"): KV heads -> gcd(n_kv, N) teams, Q-blocks split within each team, per-NSP Br cost | **yes** (Q-block -> KV-head team x Q-block) | `GGML_HEXAGON_FA_SPLIT=0/1` | Gemma ub1024 +15–18%; llama 0% | **CLOSED — default on.** Gemma ub1024 +14% (d0 and d16k), TG +4–21%, ub2048 −1–2% (within run-to-run noise), no other model changes |
 | M2 | GLU epilogue fusion: MUL_MAT_NX(gate, up) + SWIGLU/GEGLU -> one op | no | `GGML_HEXAGON_OPFUSION` new bit 128 | llama ~8%, Qwen ~7%, Gemma ~10% | next |
 | M3 | Qwen3.5 conv block fusion: CONCAT + SSM_CONV + SILU + state CPY | **yes** (channels -> TOKEN + 3-token halo) | OPFUSION bit 256 | Qwen3.5 ~13% | planned |
 | M4 | Residual ADD + RMS_NORM(+MUL) fusion; Gemma post-norm + ADD + layer-scale MUL | no | OPFUSION bit 512 | 3–8% | planned |
@@ -84,7 +84,7 @@ separate PR. The axis-related items are M1, M3 and M5 (+ M7); M2 and M4 are fusi
 | Dense matmuls (QKV, o, FFN, PLE) | hardcode TOKEN |
 | Elementwise (norm, act, GLU, ADD, ROPE) | hardcode TOKEN/rows; fuse |
 | FA, `n_kv % N == 0` | hardcode KV-head split (upstream) |
-| FA, `n_kv % N != 0` | `FA_SPLIT` knob: 1 = always team, 2 = auto (cost model, keeps upstream on a near-tie). Default -> 2 once validated |
+| FA, `n_kv % N != 0` | **hardcoded** team split (`FA_SPLIT=1` default; `0` = upstream, kept for A/B) |
 | SSM_CONV / conv block | TOKEN + halo once validated (M3) |
 | GATED_DELTA_NET | hardcode V-heads (upstream) |
 | MUL_MAT_ID | knob (M5) |
@@ -151,6 +151,32 @@ so this is also the **re-measured baseline**. Quality (IQ / needle / cookie) is 
 - **The ub2048 loss** is small but in the same direction at both depths, so it is treated as real. The team split does the same number of block-head units per NSP as upstream when the block count divides evenly, so the cost model sees a tie, yet it loses. Hypothesis: the larger Br per NSP or the shared-KV DDR pattern. **Fix (`=2`, auto):** run the solver for both partitions and use the team split only when it is ≥ 5% cheaper per NSP. Otherwise use upstream's exact Br/Bc and partition, so a tie reproduces upstream bit for bit. ub1024 (upstream has < 4 blocks) and decode (1 block) still pick the team.
 - **test-ops FLASH_ATTN_EXT** (run `20261015-200226`): 2577–2594 of 2640 pass in **every** configuration, including 1c where the knob does nothing (52 vs 56 FAIL lines between two identical 1c runs). So the failures are pre-existing and nondeterministic, not caused by M1. Their logs were never pushed (`*.log` is gitignored), so the harness now force-adds them; M1-4 re-runs it.
 
+
+**M1 closing runs** (binaries `96ed45522`, 3 reps):
+- `20261018-142527` (T1): test-ops FA at 1/2/4c × `FA_SPLIT` 0/1/2.
+- `20261018-171424` (T2): `=0` vs `=2`.
+- `20261018-191245` (T3): `=1` vs `=2`.
+- `20261018-200106`: Gemma-4-12B, 0/1/2. T4 (MoE) was not run.
+
+| Model | ub | depth | `=0` | `=1` (T3) | `=2` (T2 / T3) | `=2` vs `=0` |
+|---|---|---|---|---|---|---|
+| Gemma-4-E4B | 1024 | 0 | 2807 | 3213 | 3203 / 3191 | **+14.1%** |
+| Gemma-4-E4B | 1024 | 16k | 2477 | 2809 | 2801 / 2769 | **+13.1%** |
+| Gemma-4-E4B | 2048 | 0 | 3348 | 3283 | 3326 / 3297 | −0.7% |
+| Gemma-4-E4B | 2048 | 16k | 2839 | 2793 | 2790 / 2805 | −1.7% |
+| Qwen3.5-4B / llama-3.2-3b | all | all | — | — | — | within ±0.7% (Qwen ub2048 d16k +1.4%) |
+| Gemma-4-12B | 1024 | 0 | 1762 | 1777 | 1758 | ±0.8% |
+
+Gemma 4c TG: 32.9 / 31.5 / 24.4 / 23.8 with `=0`, 34.3 / 32.7 / 29.6 / 27.6 with `=2` (the same as `=1`).
+
+**Decision (owner, 2026-10-18): `=2` is not a success.** It is equal to `=1` within noise everywhere (−1.4% … +0.5%) and did not remove the ub2048 dip, so the added code and host work buy nothing. Reverted to plain M1 and made the team split the default.
+- The ub2048 −1–2% is within run-to-run noise: the same `=0` config measured 2897 and 2839 t/s (2%) in two runs.
+- So M1 = `02f7ad0f5` + default on.
+
+**test-ops** (T1, logs now pushed): 44–63 failing cases per configuration. Every one has `sinks=1`, and every one is a small NMSE overshoot (5.1e-4 … 1.4e-3 against a 5e-4 limit). The failing set changes from run to run, even between configs where the knob has no effect (1c ab0 / ab1 / ab2: 45 / 60 / 63). So this is pre-existing nondeterministic precision noise in the sinks path, not caused by M1. Upstream `ceefd16da` "hexagon: correct HMX FA sinks" (#30581, not on our base) may be the fix; check after the rebase.
+
+Gemma-4-12B is still GARBAGE (IQ 2/10) at 1c and 4c, independent of the knob.
+
 ---
 
 ## 6. Open issues
@@ -176,7 +202,7 @@ so this is also the **re-measured baseline**. Quality (IQ / needle / cookie) is 
   - (b) Gemma4 op-sequence fusions (as Metal and CUDA do): overlap with M2 (GEGLU) and M4 (post-norm + ADD + layer-scale). Agree ownership and `OPFUSION` bits (we planned 128/256/512) before writing them.
   - (c) OPBATCH default 1280 → 2K: every baseline shifts, so re-measure knob-off after the rebase. This helps M6, since the whole graph fits in one batch and batch boundaries are full syncs.
   - Plan: share M1 with Alan before his merge; split fusion ownership; after the merge, rebase and re-run T2/T3 on Gemma.
-- **Pre-existing FA test-ops failures** (52–65 FAIL lines, nondeterministic, also at 1c). Need the logs (M1-4) to see which cases; possibly tolerance or an uninitialised-read issue.
+- **Pre-existing FA test-ops failures**: all `sinks=1`, small NMSE overshoot, nondeterministic (see §5). Re-check after rebasing onto upstream, which includes `ceefd16da` (HMX FA sinks fix).
 - **llama 4c at d16k is ~10% slower than the old branch.** Old binaries (`75360014b`, 520 upstream commits older): 1724 / 1817 t/s at ub1024 / 2048. This branch: 1567 / 1624. 1c is identical (476 / 495), so this is a multi-core regression in newer upstream, likely the FA KV-head split (#29974) at long KV (llama `n_kv=8`). Gemma and Qwen3.5 are not affected. Test R-1 checks it with `FA_HEAD_SPLIT=0`. If the regression is real, the head split vs Q-block split choice becomes a depth-dependent knob (principle 3) for the cost model.
 - **Causal block skipping** in HMX FA: every Q-block streams the full KV, including fully
   masked blocks. Skipping them would roughly halve FA at depth 0, for 1c too. This is a
@@ -218,3 +244,5 @@ so this is also the **re-measured baseline**. Quality (IQ / needle / cookie) is 
 | (this commit) | M1 named "FA adaptive team split"; M1 closing test set T1–T4 and criteria |
 | (this commit) | Host: memoize `hmx_fa_find_chunk_size` (32-entry cache on the full input tuple). FA precompute runs every prefill ubatch (KV length changes), and auto doubles the search; all layers share ~2 shapes, so this makes it ~free. Results are identical |
 | (this commit) | Plan: dependency on Alan Zhu's in-flight PR (FA HMX/HVX SWA crossover, Gemma4 fusions, OPBATCH 2K): impact on M1/M2/M4/M6 |
+| owner runs | `20261018-142527` (T1 test-ops), `-171424` (T2 0 vs 2), `-191245` (T3 1 vs 2), `-200106` (Gemma-4-12B) |
+| (this commit) | **M1 closed**: reverted `FA_SPLIT=2` auto + solver memo (no gain over `=1`), team split default on (`opt_fa_split = 1`). Harness keeps `git add -f` for logs |

@@ -151,8 +151,7 @@ static size_t opt_mbuf_total  = 0;                        // total buffer space 
 static int    opt_mm_select  = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
 static int    opt_fa_select  = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
 static int    opt_fa_head_split = 1; // 1 = partition flash_attn by KV heads in multicore (default on), 0 = token-based (original)
-static int    opt_fa_split      = 0; // HMX FA mdev partition: 0 = upstream, 1 = team split (KV heads -> gcd(n_kv, N) teams, Q-blocks within a team, per-NSP Br cost),
-                                     // 2 = auto (team split only when the cost model says it is >= 5% cheaper per NSP than upstream)
+static int    opt_fa_split      = 1; // 1 = HMX FA team split (KV heads -> gcd(n_kv, N) teams, Q-blocks within a team) + per-NSP Br cost (default), 0 = upstream
 static int    opt_gdn_select = 2; // 2 = HMX -> HVX, 1 = HVX, 0 = CPU (unsupported)
 static int    opt_ar_select  = 2; // 2 = fused ALLREDUCE+ADD (default), 1 = unfused ALLREDUCE, 0 = fallback to CPY+FENCE
 static int    opt_ar_scatter = 1; // 1 = reduce-scatter the fused ALLREDUCE+ADD (default), 0 = full reduction
@@ -5173,60 +5172,6 @@ static bool ggml_hexagon_flash_attn_is_hmx_eligible(
     return S >= s_cross;
 }
 
-// hmx_fa_find_chunk_size is a brute-force (Br, Bc) search; FA precompute runs per graph and
-// prefill rebuilds the graph every ubatch (KV length changes), while all layers share a few
-// shapes. Memoize on the full input tuple; results are identical to the direct call.
-static int hmx_fa_find_chunk_size_cached(size_t * Br_out, size_t * Bc_out, size_t gqa_factor, size_t DK, size_t DV,
-                                         size_t qo_len, size_t kv_len, size_t vtcm_budget, size_t n_threads,
-                                         bool is_q_fp32, bool has_sinks, size_t n_heads, size_t q_split,
-                                         size_t * cost_out) {
-    struct entry {
-        size_t key[11];
-        int    ret;
-        size_t Br, Bc, cost;
-    };
-    static std::mutex mtx;
-    static entry      cache[32];
-    static size_t     n_used = 0, next = 0;
-
-    const size_t key[11] = { gqa_factor, DK, DV, qo_len, kv_len, vtcm_budget, n_threads,
-                             (size_t) is_q_fp32, (size_t) has_sinks, n_heads, q_split };
-    {
-        std::lock_guard<std::mutex> lock(mtx);
-        for (size_t i = 0; i < n_used; i++) {
-            if (memcmp(cache[i].key, key, sizeof(key)) == 0) {
-                *Br_out = cache[i].Br;
-                *Bc_out = cache[i].Bc;
-                if (cost_out) {
-                    *cost_out = cache[i].cost;
-                }
-                return cache[i].ret;
-            }
-        }
-    }
-
-    size_t Br = 0, Bc = 0, cost = 0;
-    const int ret = hmx_fa_find_chunk_size(&Br, &Bc, gqa_factor, DK, DV, qo_len, kv_len, vtcm_budget, n_threads,
-                                           is_q_fp32, has_sinks, n_heads, q_split, &cost);
-    {
-        std::lock_guard<std::mutex> lock(mtx);
-        entry & e = cache[next];
-        memcpy(e.key, key, sizeof(key));
-        e.ret  = ret;
-        e.Br   = Br;
-        e.Bc   = Bc;
-        e.cost = cost;
-        next   = (next + 1) % 32;
-        n_used = n_used < 32 ? n_used + 1 : 32;
-    }
-    *Br_out = Br;
-    *Bc_out = Bc;
-    if (cost_out) {
-        *cost_out = cost;
-    }
-    return ret;
-}
-
 static bool ggml_hexagon_precompute_flash_attn_params(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
@@ -5280,6 +5225,7 @@ static bool ggml_hexagon_precompute_flash_attn_params(
     // still yields >= team_size blocks (otherwise the op runs SOLO on NSP0).
     uint32_t fa_teams = 1, fa_team_size = 1;
     if (opt_fa_split && sess->mdev.count > 1) {
+        kparams->flags |= HTP_FA_FLAG_TEAM_SPLIT;
         htp_fa_mdev_teams(n_kv_heads, sess->mdev.count, kparams->head_split != 0, &fa_teams, &fa_team_size);
     }
 
@@ -5296,38 +5242,8 @@ static bool ggml_hexagon_precompute_flash_attn_params(
         // are sized for the padded tiles.
         const uint32_t DK_pad = hex_round_up(DK, 64);
         const uint32_t DV_pad = hex_round_up(DV, 64);
-        const bool is_q_f32 = (q->type == GGML_TYPE_F32);
         size_t Br = 0, Bc = 0;
-        int ret = -1;
-        bool team_split = false;
-        if (opt_fa_split == 1 && sess->mdev.count > 1) {
-            ret        = hmx_fa_find_chunk_size_cached(&Br, &Bc, G, DK_pad, DV_pad, neq1, nek1, sess->vtcm_size, sess->n_threads, is_q_f32, sinks != nullptr, n_head, fa_team_size, nullptr);
-            team_split = true;
-        } else if (opt_fa_split == 2 && sess->mdev.count > 1 && fa_teams < sess->mdev.count) {
-            // Upstream partition (n_kv % N != 0): every NSP takes all KV heads for 1/N of the
-            // Q-blocks, Br sized for a single core. Team split: kv/teams heads for 1/team_size of
-            // the Q-blocks. Compare the modelled per-NSP critical path; keep upstream on a near-tie.
-            size_t Br_t = 0, Bc_t = 0, cost_t = 0, cost_u = 0;
-            ret = hmx_fa_find_chunk_size_cached(&Br, &Bc, G, DK_pad, DV_pad, neq1, nek1, sess->vtcm_size, sess->n_threads, is_q_f32, sinks != nullptr, n_head, 1, &cost_u);
-            if (ret == 0 && hmx_fa_find_chunk_size_cached(&Br_t, &Bc_t, G, DK_pad, DV_pad, neq1, nek1, sess->vtcm_size, sess->n_threads, is_q_f32, sinks != nullptr, n_head, fa_team_size, &cost_t) == 0) {
-                // cost_u covers all Q-blocks on one core: per-NSP share is ceil(q_blocks / N) of
-                // them, times all KV heads; the team share is already per NSP, times kv/teams heads.
-                const size_t q_blocks = (neq1 + Br - 1) / Br;
-                const size_t n_mdev   = sess->mdev.count;
-                cost_u = (cost_u / q_blocks) * ((q_blocks + n_mdev - 1) / n_mdev) * n_kv_heads;
-                cost_t = cost_t * (n_kv_heads / fa_teams);
-                if (cost_t * 100 < cost_u * 95) {
-                    Br = Br_t;
-                    Bc = Bc_t;
-                    team_split = true;
-                }
-            }
-        } else {
-            ret = hmx_fa_find_chunk_size_cached(&Br, &Bc, G, DK_pad, DV_pad, neq1, nek1, sess->vtcm_size, sess->n_threads, is_q_f32, sinks != nullptr, n_head, 1, nullptr);
-        }
-        if (team_split) {
-            kparams->flags |= HTP_FA_FLAG_TEAM_SPLIT;
-        }
+        int ret = hmx_fa_find_chunk_size(&Br, &Bc, G, DK_pad, DV_pad, neq1, nek1, sess->vtcm_size, sess->n_threads, (q->type == GGML_TYPE_F32), sinks != nullptr, n_head, fa_team_size);
         if (ret == 0) {
             kparams->kernel_type = HTP_FA_KERNEL_HMX;
             if (logit_softcap == 0.0f) {

@@ -335,8 +335,7 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
                                          bool     is_q_fp32,
                                          bool     has_sinks,
                                          size_t   n_heads,
-                                         size_t   q_split,     // NSPs sharing the Q-blocks (1 = single core)
-                                         size_t * cost_out) {  // optional: modelled per-NSP cost of the pick, per KV head
+                                         size_t   q_split) {   // NSPs sharing the Q-blocks (1 = single core)
     const size_t T       = HMX_FP16_TILE_N_ROWS;  // 32
     const size_t br_unit = hmx_ceil_div(T, gqa_factor);
     const size_t bc_unit = HMX_FP16_TILE_N_COLS * 2;  // 64
@@ -400,9 +399,6 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
 
     *Br_out = best_Br;
     *Bc_out = best_Bc;
-    if (cost_out) {
-        *cost_out = best_cost;
-    }
     return 0;
 }
 
