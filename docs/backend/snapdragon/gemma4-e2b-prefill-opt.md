@@ -1065,6 +1065,37 @@ Numbers (all from the log):
   9093.08 with HMX, tg128 69.46 vs 73.17, PPL 134.8720 (+0.35%), greedy identical. The HVX-only integer path is
   quality-clean but not a prefill option.
 
+## Prefill: pipeline the fused int8 qkv matmul across the weight boundary
+
+Source of the numbers: analysis/merge-log.md "QKV WEIGHT-BOUNDARY PIPELINING" and "MERGED17", base HEAD 487e6b8ed.
+Same model, device and command lines as before; int best-speed arm with `NORM_Q8=1`.
+
+- Change: one function, `hmx_mm_nx_2d_int8_f32` in `htp/matmul-ops.c` (the fused int8 qkv op). The weights of the op (q in
+  4 chunks, then k, then v) now run as one flat step stream (`I8F_STEP`, `I8F_PUSH_S`, `I8F_EPI`) with the buffer and
+  job-slot parity continuing across the weight boundary, so the epilogue of the last chunk of a weight overlaps the first
+  HMX job of the next weight. This is the same idea as the two-half epilogue of the gate+up op (RUN 16). The math per
+  element is unchanged.
+- Per op (`PROFILE=3`, 6 rounds, 15 ops per ubatch): `MUL_MAT_NX` 2.913 -> 2.644 ms (-0.269 ms, -9.2%), lower in 6 of 6
+  paired rounds; HMX busy 52.0% -> 58.2%; HMX inner gap 21.8% -> 10.1% of the class wall (1.346M -> 0.565M cycles). The
+  first job now waits longer for the DMA / quantize (lead 21.8% -> 25.4%, unchanged work, a larger share of a shorter op).
+  `MUL_MAT_AT` (down) and `MUL_MAT` (o-proj) are unchanged within noise.
+- End to end, 120-sample alternation (12 rounds x 10 samples, int best-speed): median 10299.1 vs 10233.7 t/s (+0.64%), mean
+  z 4.0, 11 of 12 round pairs, median-difference CI +39..+130 t/s. Rounds 1-2 were contaminated (health pp128 2445 / 2443,
+  below 70% of 4040) and hold the baseline outliers; without them (rounds 3-12) 10297.6 vs 10251.3 (+0.45%, z 4.3, 9 of 10
+  pairs). In the combined-tree session (below) the same change reads +0.42% (CI -25..+93). fp16 does not use this path
+  (-0.13% in the same test, within noise).
+- Gates (bit-identical): static compile matrix 31 objects / 0 errors on 8 cells; 5-output gate SAME on all five on fp16
+  and on the int arm; 20-chunk logits `fc /b` no differences on fp16 (md5 0e36db18db77650597d4c4088025835f) and int with
+  `NORM_Q8=1` (md5 b76ef14e158447c224903a9807a704e2); `INT_MM=0` PPL 134.3955 +/- 6.77407; int best-speed KLD 0.006692,
+  top-p 96.647%, PPL 132.5813; full coverage KLD 0.006942, top-p 96.569%, PPL 132.1043.
+- Caveat: the whole `PROFILE=3` op sum did NOT drop (head 48.734 ms vs 49.371 ms, paired median +0.617 ms). The -0.269 ms
+  of the NX class is outweighed by about +0.7 ms in classes this change does not touch (MUL_MAT +0.19, FLASH_ATTN +0.15,
+  norms +0.3). That is run order / drift in a profile run (a known 0.5-1 ms whole-op spread), not a property of the patch,
+  but the data cannot separate the two: the class-level gain is the evidence, the op sum is not. The end-to-end gain
+  (+0.45% to +0.64%) matches the class gain (-0.27 ms of a ~50 ms batch = 0.54%).
+- One alternation attempt that ran 12 rounds from a single batch file stalled for 55 minutes on one cell with no output and
+  was cut; no result from it is used, and the stall was not reproduced (52 bounded cells later ran without a hang).
+
 ## Optimization steps
 
 Numbers per step are medians of 6-8 interleaved `llama-bench` pp512 rounds on 10.92.138.99. That device was later found throttled on battery, so only the relative change between adjacent builds is meaningful. The final table above is from 10.92.137.16.

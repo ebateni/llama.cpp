@@ -4775,12 +4775,17 @@ static int hmx_mm_nx_2d_int8_f32(struct htp_ops_context * octx, const struct htp
 
     dma_queue * weight_dma = ctx->dma[0];
 
-    #define I8F_PUSH(step, buf) do {                                                                         \
-        const int    _c    = (step);                                                                         \
+    // Flat step stream: step s = chunk c of weight wi, steps run weight after weight. The weight record DMA, the double buffers (raw, obuf, colmul, coladd)
+    // and the job slots all alternate by s % 2, so the HMX never drains at a weight boundary: the epilogue of the last chunk of a weight overlaps the first job
+    // of the next weight exactly like the epilogue of chunk c - 1 overlaps job c inside a weight. The math per element is unchanged.
+    struct i8f_wst { const struct htp_tensor * w; float * dst_ptr; size_t n, int8_off; int dst_stride, dst_cols; uint32_t cnt; } wst[4];
+    #define I8F_STEP(s_, wi_, c_) do { uint32_t _r = (uint32_t) (s_); (wi_) = 0; while (_r >= wst[(wi_)].cnt) { _r -= wst[(wi_)].cnt; ++(wi_); } (c_) = _r; } while (0)
+    #define I8F_PUSH_S(s_, buf) do {                                                                         \
+        uint32_t _wi, _c; I8F_STEP((s_), _wi, _c);                                                           \
         const size_t _nc   = (size_t) _c * nc;                                                               \
-        const size_t _cols = hex_smin(n - _nc, nc);                                                          \
+        const size_t _cols = hex_smin(wst[_wi].n - _nc, nc);                                                 \
         const size_t _bytes = (_cols / 64) * rec_bytes;                                                      \
-        dma_queue_push(weight_dma, dma_make_data((buf), w->data + int8_off + (_nc / 64) * rec_bytes),        \
+        dma_queue_push(weight_dma, dma_make_data((buf), wst[_wi].w->data + wst[_wi].int8_off + (_nc / 64) * rec_bytes), \
                        _bytes, _bytes, _bytes, 1);                                                           \
     } while (0)
 
@@ -4836,24 +4841,45 @@ static int hmx_mm_nx_2d_int8_f32(struct htp_ops_context * octx, const struct htp
         const size_t   rows_s  = hex_smin(n_rows, (size_t) rt_hi * 32) - row_lo;
         const size_t   act_off = (size_t) rt_lo * n_k_tiles * HMX_INT8_CROUTON_A;
 
-        // fused NX: weights share the activation quantization above, then run one after another reusing the same buffers
+        // fused NX: weights share the activation quantization above and run as ONE flat stream of chunk steps (see I8F_STEP)
+        uint32_t n_steps = 0;
         for (uint32_t wi = 0; wi < n_weights; ++wi) {
-        const struct htp_tensor * restrict w   = octx->src[wi];
-        const struct htp_tensor * restrict dst = octx->dsts[wi];
-        const size_t   n        = w->ne[1];
-        const int      dst_stride = (int) (dst->nb[1] / sizeof(float));
-        const int      dst_cols   = (int) dst->ne[0];
-        const size_t   int8_off = w->type == HTP_TYPE_F16 ? hex_align_up((size_t) k * n * 2, 128) : hex_align_up((size_t) (k / 32) * 18 * hex_align_up(n, 32), 128);
-        const int      n_chunk_cnt = hmx_ceil_div(n, nc);
-        float * const  dst_ptr  = (float *) dst->data + (mr + row_lo) * dst_stride;
+            const struct htp_tensor * restrict w   = octx->src[wi];
+            const struct htp_tensor * restrict dst = octx->dsts[wi];
+            wst[wi].w          = w;
+            wst[wi].n          = w->ne[1];
+            wst[wi].dst_stride = (int) (dst->nb[1] / sizeof(float));
+            wst[wi].dst_cols   = (int) dst->ne[0];
+            wst[wi].int8_off   = w->type == HTP_TYPE_F16 ? hex_align_up((size_t) k * wst[wi].n * 2, 128) : hex_align_up((size_t) (k / 32) * 18 * hex_align_up(wst[wi].n, 32), 128);
+            wst[wi].cnt        = (uint32_t) hmx_ceil_div(wst[wi].n, nc);
+            wst[wi].dst_ptr    = (float *) dst->data + (mr + row_lo) * wst[wi].dst_stride;
+            n_steps           += wst[wi].cnt;
+        }
 
-        I8F_PUSH(0, raw[0]);
-        if (n_chunk_cnt > 1) { I8F_PUSH(1, raw[1]); }
+        // epilogue of step e_ (int32 tiles -> f32 destination), on the HVX worker pool
+        #define I8F_EPI(e_) do {                                                                                                  \
+            uint32_t _we, _ce; I8F_STEP((e_), _we, _ce);                                                                          \
+            const size_t   _ncc_p   = (size_t) _ce * nc;                                                                          \
+            const uint32_t _ncols_p = (uint32_t) hex_smin(wst[_we].n - _ncc_p, nc);                                               \
+            const int      _eb      = (int) ((e_) % 2);                                                                           \
+            int8_f32_state_t st = { ctx->trace, wst[_we].dst_ptr, obuf[_eb],                                                      \
+                                    a16 ? obuf2[_eb] : NULL, colmul[_eb], a_scale + row_lo, a16 ? a_scale_2 + row_lo : NULL,     \
+                                    kparams->bias2 ? coladd[_eb] : NULL,                                                          \
+                                    n_rt_s, _ncols_p / 32, (uint32_t) wst[_we].dst_stride, (uint32_t) wst[_we].dst_cols, (uint32_t) _ncc_p, 0, \
+                                    (uint32_t) rows_s, (kparams->int8_split & 2) ? (float *) (base + o_stage) : NULL };           \
+            const int nth = (int) hex_smin((uint32_t) n_threads, st.n_rt * 16);                                                   \
+            if (nth <= 1) { int8_f32_out_worker_fn(1, 0, &st); } else { worker_pool_run_func(ctx->worker_pool, int8_f32_out_worker_fn, &st, nth); } \
+        } while (0)
 
-        for (int c = 0; c < n_chunk_cnt; ++c) {
-            const size_t ncc = (size_t) c * nc;
-            const size_t n_cols = hex_smin(n - ncc, nc);
-            const int    ob = c % 2;
+        I8F_PUSH_S(0, raw[0]);
+        if (n_steps > 1) { I8F_PUSH_S(1, raw[1]); }
+
+        for (uint32_t sidx = 0; sidx < n_steps; ++sidx) {
+            uint32_t wi, c; I8F_STEP(sidx, wi, c);
+            const size_t n_w    = wst[wi].n;
+            const size_t ncc    = (size_t) c * nc;
+            const size_t n_cols = hex_smin(n_w - ncc, nc);
+            const int    ob     = (int) (sidx % 2);
             uint8_t * curr_raw = (uint8_t *) dma_queue_pop(weight_dma).dst;
 
             {
@@ -4877,52 +4903,31 @@ static int hmx_mm_nx_2d_int8_f32(struct htp_ops_context * octx, const struct htp
                 hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_int8_job1_fn, &job_slots[ob * 2 + 1]));
             }
 
-            // overlap: HMX job c is running; quantize slice c of the second sub-block on workers 1..n-1 (weight DMA owner
+            // overlap: HMX job is running; quantize slice c of the second sub-block on workers 1..n-1 (weight DMA owner
             // stays out). One slice per chunk of the first weight, so every pair is done before sub-block 1 starts.
             if (split && sub == 0 && wi == 0) {
                 const uint32_t P = (n_rt - rt_split) * 16;
-                const uint32_t pa = (uint32_t) (((uint64_t) P * c) / n_chunk_cnt), pb = (uint32_t) (((uint64_t) P * (c + 1)) / n_chunk_cnt);
+                const uint32_t pa = (uint32_t) (((uint64_t) P * c) / wst[0].cnt), pb = (uint32_t) (((uint64_t) P * (c + 1)) / wst[0].cnt);
                 if (pb > pa) { I8F_QUANT(mr, n_rows, n_rt, rt_split * 16 + pa, pb - pa, 1); }
             }
 
-            if (c > 0) {
-                hmx_queue_pop(ctx->hmx_queue);                       // retire job c-1 (pass 1)
-                if (a16) { hmx_queue_pop(ctx->hmx_queue); }          // retire job c-1 (pass 2)
-                if (c + 1 < n_chunk_cnt) { I8F_PUSH(c + 1, raw[(c - 1) % 2]); }
-            }
-
-            if (c > 0) {
-                const size_t ncc_p = (size_t) (c - 1) * nc;
-                const uint32_t ncols_p = (uint32_t) hex_smin(n - ncc_p, nc);
-                int8_f32_state_t st = { ctx->trace, dst_ptr, obuf[(c - 1) % 2],
-                                        a16 ? obuf2[(c - 1) % 2] : NULL, colmul[(c - 1) % 2], a_scale + row_lo, a16 ? a_scale_2 + row_lo : NULL,
-                                        kparams->bias2 ? coladd[(c - 1) % 2] : NULL,
-                                        n_rt_s, ncols_p / 32, (uint32_t) dst_stride, (uint32_t) dst_cols, (uint32_t) ncc_p, 0,
-                                        (uint32_t) rows_s, (kparams->int8_split & 2) ? (float *) (base + o_stage) : NULL };
-                const int nth = (int) hex_smin((uint32_t) n_threads, st.n_rt * 16);
-                if (nth <= 1) { int8_f32_out_worker_fn(1, 0, &st); } else { worker_pool_run_func(ctx->worker_pool, int8_f32_out_worker_fn, &st, nth); }
+            if (sidx > 0) {
+                hmx_queue_pop(ctx->hmx_queue);                       // retire job s-1 (pass 1)
+                if (a16) { hmx_queue_pop(ctx->hmx_queue); }          // retire job s-1 (pass 2)
+                if (sidx + 1 < n_steps) { I8F_PUSH_S(sidx + 1, raw[(sidx + 1) % 2]); }   // raw[(s-1)%2] is free now (also across a weight boundary)
+                I8F_EPI(sidx - 1);
             }
         }
 
         hmx_queue_pop(ctx->hmx_queue);
         if (a16) { hmx_queue_pop(ctx->hmx_queue); }
-        {
-            const int    c_last = n_chunk_cnt - 1;
-            const size_t ncc_p  = (size_t) c_last * nc;
-            const uint32_t ncols_p = (uint32_t) hex_smin(n - ncc_p, nc);
-            int8_f32_state_t st = { ctx->trace, dst_ptr, obuf[c_last % 2],
-                                    a16 ? obuf2[c_last % 2] : NULL, colmul[c_last % 2], a_scale + row_lo, a16 ? a_scale_2 + row_lo : NULL,
-                                    kparams->bias2 ? coladd[c_last % 2] : NULL,
-                                    n_rt_s, ncols_p / 32, (uint32_t) dst_stride, (uint32_t) dst_cols, (uint32_t) ncc_p, 0,
-                                    (uint32_t) rows_s, (kparams->int8_split & 2) ? (float *) (base + o_stage) : NULL };
-            const int nth = (int) hex_smin((uint32_t) n_threads, st.n_rt * 16);
-            if (nth <= 1) { int8_f32_out_worker_fn(1, 0, &st); } else { worker_pool_run_func(ctx->worker_pool, int8_f32_out_worker_fn, &st, nth); }
-        }
-        }   // wi
+        I8F_EPI(n_steps - 1);
+        #undef I8F_EPI
         }   // sub
     }
     #undef I8F_QUANT
-    #undef I8F_PUSH
+    #undef I8F_PUSH_S
+    #undef I8F_STEP
 
     return HTP_STATUS_OK;
 }
