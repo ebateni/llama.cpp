@@ -151,8 +151,7 @@ static size_t opt_mbuf_total  = 0;                        // total buffer space 
 
 static int    opt_mm_select  = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
 static int    opt_fa_select  = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
-static int    opt_fa_head_split = 1; // 1 = partition flash_attn by KV heads in multicore (default on), 0 = token-based (original)
-static int    opt_fa_split      = 1; // 1 = split HMX flash_attn KV heads across gcd(n_kv, N) teams in multicore (default on), 0 = off
+static int    opt_fa_split   = 1; // 1 = head-split + team-split when n_kv_heads < N_cores (default), 0 = off
 static int    opt_gdn_select = 2; // 2 = HMX -> HVX, 1 = HVX, 0 = CPU (unsupported)
 static int    opt_ar_select  = 2; // 2 = fused ALLREDUCE+ADD (default), 1 = unfused ALLREDUCE, 0 = fallback to CPY+FENCE
 static int    opt_ar_scatter = 1; // 1 = reduce-scatter the fused ALLREDUCE+ADD (default), 0 = full reduction
@@ -3551,15 +3550,17 @@ static bool ggml_hexagon_precompute_flash_attn_params(
     kparams->max_bias = max_bias;
     kparams->logit_softcap = logit_softcap;
 
-    kparams->head_split = (opt_fa_head_split != 0) ? 1 : 0;
+    kparams->head_split = (opt_fa_split != 0) ? 1 : 0;
     kparams->flags      = 0;
     kparams->G = G;
 
-    // Size Br for the per-device share of Q-blocks
+    // team-split only when a team has >1 member (n_kv_heads < N_cores)
     uint32_t fa_teams = 1, fa_team_size = 1;
     if (opt_fa_split && sess->mdev.count > 1) {
-        kparams->flags |= HTP_FA_FLAG_TEAM_SPLIT;
         htp_fa_mdev_teams(n_kv_heads, sess->mdev.count, kparams->head_split != 0, &fa_teams, &fa_team_size);
+        if (fa_team_size > 1) {
+            kparams->flags |= HTP_FA_FLAG_TEAM_SPLIT;
+        }
     }
 
     const uint32_t n_head = q->ne[2];
@@ -8384,8 +8385,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     const char * str_nhmx     = getenv("GGML_HEXAGON_NHMX");
     const char * str_mm_select = getenv("GGML_HEXAGON_MM_SELECT");
     const char * str_fa_select = getenv("GGML_HEXAGON_FA_SELECT");
-    const char * str_fa_head_split = getenv("GGML_HEXAGON_FA_HEAD_SPLIT");
-    const char * str_fa_split      = getenv("GGML_HEXAGON_FA_SPLIT");
+    const char * str_fa_split  = getenv("GGML_HEXAGON_FA_SPLIT");
     const char * str_gdn_select = getenv("GGML_HEXAGON_GDN_SELECT");
     const char * str_ar_select = getenv("GGML_HEXAGON_AR_SELECT");
     const char * str_ar_scatter = getenv("GGML_HEXAGON_AR_SCATTER");
@@ -8450,8 +8450,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_nhmx      = str_nhmx     ? atoi(str_nhmx)                         : opt_nhmx;
     opt_mm_select = str_mm_select ? atoi(str_mm_select)                   : opt_mm_select;
     opt_fa_select = str_fa_select ? atoi(str_fa_select)                   : opt_fa_select;
-    opt_fa_head_split = str_fa_head_split ? atoi(str_fa_head_split)       : opt_fa_head_split;
-    opt_fa_split      = str_fa_split      ? atoi(str_fa_split)            : opt_fa_split;
+    opt_fa_split  = str_fa_split  ? atoi(str_fa_split)                   : opt_fa_split;
     opt_gdn_select    = str_gdn_select    ? atoi(str_gdn_select)          : opt_gdn_select;
     opt_ar_select     = str_ar_select     ? atoi(str_ar_select)           : opt_ar_select;
     opt_ar_scatter    = str_ar_scatter    ? atoi(str_ar_scatter)          : opt_ar_scatter;
