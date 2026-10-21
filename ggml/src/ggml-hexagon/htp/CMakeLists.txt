@@ -20,7 +20,7 @@ add_library(${HTP_LIB} SHARED
     work-queue.c
     dma-queue.c
     hmx-queue.c
-    htp-dcache.c
+    htp-tensor.c
     matmul-ops.c
     flash-attn-ops.c
     gated-delta-net-ops.c
@@ -33,7 +33,6 @@ add_library(${HTP_LIB} SHARED
     set-rows-ops.c
     get-rows-ops.c
     cpy-ops.c
-    gather-rows.c
     repeat-ops.c
     ssm-conv.c
     cumsum-ops.c
@@ -45,8 +44,8 @@ add_library(${HTP_LIB} SHARED
     argsort-ops.c
     im2col-ops.c
     roll-ops.c
-    pool-ops.c
     allreduce-ops.c
+    hmx-int-kernels.S
 )
 
 target_compile_definitions(${HTP_LIB} PRIVATE

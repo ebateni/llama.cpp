@@ -252,4 +252,25 @@ static inline HVX_Vector hvx_vec_exp2_f16(HVX_Vector x_v) {
     return Q6_V_vmux_QVV(q_underflow, zero_v, y);
 }
 
+#if __HVX_ARCH__ >= 79
+// exp2 for fp16 with native hf arithmetic (opt5000 conv5, FA_EXP_V2 / SIG16_V2). Here: k = round(x), fr = x - k in [-0.5, 0.5], 2^fr by a degree-3 fp16 polynomial (fused hf multiply-add, max relative error 5.6e-4 over x in [-24, 0]), then the exponent add; same underflow flush.
+// hvx_vec_exp2_f16 above feeds its Horner chain through qf16 with a wrongly encoded leading coefficient (0x5082 is the fp16 value 36.06, not ~1.5e-4), which gives up to 79% relative error for fractional parts in (0.12, 0.5).
+static inline HVX_Vector hvx_vec_exp2_f16_v2(HVX_Vector x_v) {
+    const HVX_Vector zero_v = Q6_V_vzero();
+    x_v = Q6_Vhf_vmax_VhfVhf(Q6_Vh_vsplat_R(0xce00), x_v);                    // >= -24
+    HVX_Vector k_v = Q6_Vh_equals_Vhf(Q6_Vhf_vsub_VhfVhf(x_v, Q6_Vh_vsplat_R(0x3800)));
+    HVX_Vector fr  = Q6_Vhf_vsub_VhfVhf(x_v, Q6_Vhf_equals_Vh(k_v));
+    HVX_Vector y   = Q6_Vhf_vmpyacc_VhfVhfVhf(Q6_Vh_vsplat_R(0x33c3), Q6_Vh_vsplat_R(0x2b0d), fr);
+    y              = Q6_Vhf_vmpyacc_VhfVhfVhf(Q6_Vh_vsplat_R(0x398c), y, fr);
+    y              = Q6_Vhf_vmpyacc_VhfVhfVhf(Q6_Vh_vsplat_R(0x3c00), y, fr);
+    HVX_Vector y_exp           = Q6_Vuh_vlsr_VuhR(Q6_Vh_vasl_VhR(y, 1), 11);
+    y_exp                      = Q6_Vh_vadd_VhVh(k_v, y_exp);
+    HVX_VectorPred q_underflow = Q6_Q_vcmp_gt_VhVh(zero_v, y_exp);
+    y                          = Q6_Vh_vaslacc_VhVhR(y, k_v, 10);
+    return Q6_V_vmux_QVV(q_underflow, zero_v, y);
+}
+#else
+static inline HVX_Vector hvx_vec_exp2_f16_v2(HVX_Vector x_v) { return hvx_vec_exp2_f16(x_v); }
+#endif
+
 #endif /* HVX_EXP_H */

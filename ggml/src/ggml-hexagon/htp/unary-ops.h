@@ -15,6 +15,7 @@ struct htp_unary_kernel_params {
     uint32_t  vtcm_src0_size_per_thread;
     uint32_t  vtcm_src1_size_per_thread;
     uint32_t  vtcm_dst_size_per_thread;
+    uint32_t  vtcm_tile_size_per_thread;
 
     uint32_t  vtcm_src0_size;
     uint32_t  vtcm_src1_size;
@@ -46,6 +47,7 @@ static inline bool htp_op_is_unary(uint32_t opcode) {
         case HTP_OP_NORM:
         case HTP_OP_RMS_NORM:
         case HTP_OP_RMS_NORM_MUL:
+        case HTP_OP_RMS_NORM_SCALE:
         case HTP_OP_SCALE:
         case HTP_OP_SQR:
         case HTP_OP_SQRT:
@@ -54,8 +56,6 @@ static inline bool htp_op_is_unary(uint32_t opcode) {
         case HTP_OP_UNARY_SIGMOID:
         case HTP_OP_UNARY_SILU:
         case HTP_OP_UNARY_GELU:
-        case HTP_OP_UNARY_GELU_QUICK:
-        case HTP_OP_UNARY_GELU_ERF:
         case HTP_OP_UNARY_SOFTPLUS:
         case HTP_OP_UNARY_TANH:
         case HTP_OP_UNARY_ABS:
@@ -64,7 +64,6 @@ static inline bool htp_op_is_unary(uint32_t opcode) {
         case HTP_OP_UNARY_STEP:
         case HTP_OP_L2_NORM:
         case HTP_OP_TRI:
-        case HTP_OP_HADAMARD:
             return true;
         default:
             return false;
@@ -93,11 +92,11 @@ static inline void htp_unary_vtcm_layout_build(
     size_t vtcm_size,
     size_t elem_size,
     uint32_t * out_col_tile,
-    uint32_t * out_vtcm_row_per_thread
+    uint32_t * out_vtcm_row_per_thread,
+    uint32_t   row_cap  // 0 = no cap; else the most rows per block (host only; GGML_HEXAGON_ELT_SMALL bit 1)
 ) {
-    const size_t dst_elem_size      = (op == HTP_OP_HADAMARD) ? sizeof(float) : elem_size;
     const size_t src0_data_row_size = ne00 * elem_size;
-    const size_t dst_data_row_size  = ne10 * dst_elem_size;
+    const size_t dst_data_row_size  = ne10 * elem_size;
 
     const size_t src0_row_size_aligned = hex_round_up(src0_data_row_size, 128);
     const size_t dst_row_size_aligned  = hex_round_up(dst_data_row_size,  128);
@@ -131,10 +130,14 @@ static inline void htp_unary_vtcm_layout_build(
         vtcm_size_per_row   = 2 * (src0_row_size_aligned + dst_row_size_aligned);
         vtcm_row_per_thread = vtcm_size / (n_threads * vtcm_size_per_row);
     }
+    // row_cap (GGML_HEXAGON_ELT_SMALL bit 1): at most row_cap rows per block. With one block per thread the row-block loop
+    // has nothing to overlap; with a cap it prefetches the next block's input (2 slots) while the current one computes.
+    if (row_cap != 0 && vtcm_row_per_thread > row_cap) {
+        vtcm_row_per_thread = row_cap;
+    }
 
     const bool is_reduction = (op == HTP_OP_NORM || op == HTP_OP_RMS_NORM ||
-                               op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_L2_NORM ||
-                               op == HTP_OP_HADAMARD);
+                               op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_SCALE || op == HTP_OP_L2_NORM);
     // The tiled fallback path below only has F32 task functions (unary_task_f32_tiled_*);
     // F16 has no tiled kernels, so it must stay on the row-block path like reduction ops.
     // NOTE: if F16 ends up with vtcm_row_per_thread == 0 here (row too large for the VTCM

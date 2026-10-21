@@ -33,6 +33,8 @@ struct htp_opnode {
     std::vector<const ggml_tensor *> inputs;
     std::vector<const ggml_tensor *> outputs;
     std::string                      name;
+    uint32_t                         extra_flags { 0 };   // HTP_OPFLAGS_* ORed into the op descriptor by add_op (e.g. HTP_OPFLAGS_GDN_GATE_FOLD)
+    bool                             dma_clean { false }; // GGML_HEXAGON_DMA_CLEAN: this batch carries HTP_OPFLAGS_DMA_CLEAN (set in graph_compute)
 
     int n_active_src(const ggml_tensor * t) const {
         if (!t) return 0;
@@ -47,19 +49,13 @@ struct htp_opnode {
     void init(ggml_tensor * node) {
         this->node = node;
         if (this->node) {
-            if (this->node->op == GGML_OP_MUL_MAT &&
-                ggml_get_op_params_i32(this->node, 1) == GGML_HINT_SRC0_IS_HADAMARD) {
-                this->name = "MUL_MAT_HADAMARD";
-                this->inputs.push_back(this->node->src[1]);
-            } else {
-                this->name = ggml_op_desc(this->node);
+            this->name = ggml_op_desc(this->node);
 
-                // Build inputs (preserving optional nullptrs)
-                int n_inputs = n_active_src(this->node);
-                this->inputs.resize(n_inputs, nullptr);
-                for (int i = 0; i < n_inputs; i++) {
-                    this->inputs[i] = this->node->src[i];
-                }
+            // Build inputs (preserving optional nullptrs)
+            int n_inputs = n_active_src(this->node);
+            this->inputs.resize(n_inputs, nullptr);
+            for (int i = 0; i < n_inputs; i++) {
+                this->inputs[i] = this->node->src[i];
             }
 
             // Build outputs
@@ -130,10 +126,6 @@ struct htp_opnode {
     bool stackable() const {
         switch (this->op()) {
             case GGML_OP_MUL_MAT:
-                if (ggml_get_op_params_i32(this->node, 1) == GGML_HINT_SRC0_IS_HADAMARD) {
-                    return false;
-                }
-                return ggml_is_quantized(this->src0()->type);
             case GGML_OP_MUL_MAT_ID:
                 return ggml_is_quantized(this->src0()->type);
             default:
@@ -266,7 +258,7 @@ struct htp_opformat {
     }
 
     const char * tensor_buff_name(const struct ggml_tensor * t) {
-        if (t && t->buffer) {
+        if (t && t->buffer && ggml_backend_buffer_get_type(t->buffer)) {   // null buft: hexagon-owned buffers (profiler only)
             return ggml_backend_buffer_name(t->buffer);
         }
         return "NONE";
@@ -336,12 +328,12 @@ struct htp_opformat {
             const auto * kparams = (const struct htp_mm_kernel_params *) node.kernel_params;
             const char * path = "unknown";
             int32_t type = kparams->kernel_type;
-            if (type == HTP_MM_KERNEL_HMX_2D || type == HTP_MM_KERNEL_HMX_BATCHED) {
-                path = (kparams->tile_size > 0) ? "hmx-tiled" : "hmx-flat";
+            if (type == HTP_MM_KERNEL_HMX_2D || type == HTP_MM_KERNEL_HMX_F16_BATCHED ||
+                type == HTP_MM_KERNEL_HMX_INT8 || type == HTP_MM_KERNEL_HMX_INT4) {
+                path = (type == HTP_MM_KERNEL_HMX_INT8) ? "hmx-int8" :
+                       (type == HTP_MM_KERNEL_HMX_INT4) ? "hmx-int4" : "hmx-tiled";
             } else if (type == HTP_MM_KERNEL_HVX_F16_F16_VTCM || type == HTP_MM_KERNEL_HVX_F32_F32_VTCM ||
-                       type == HTP_MM_KERNEL_HVX_BF16_F32_VTCM) {
-                path = "hvx-flat";
-            } else if (type == HTP_MM_KERNEL_HVX_QUANT_ROW || type == HTP_MM_KERNEL_HVX_QUANT_BLOCK) {
+                       type == HTP_MM_KERNEL_HVX_QUANT_ROW    || type == HTP_MM_KERNEL_HVX_QUANT_BLOCK) {
                 path = "hvx-tiled";
             }
             snprintf(str, max_size, "%s vtcm %d", path, (int) kparams->vtcm_size);
@@ -364,17 +356,24 @@ struct htp_opformat {
             snprintf(str, max_size, "seq 0x%x", (uint32_t) node.node->op_params[0]);
         } else if (node.opcode == HTP_OP_ALLREDUCE && node.node) {
             snprintf(str, max_size, "seq 0x%x -> 0x%x", (uint32_t) node.node->op_params[0], (uint32_t) node.node->op_params[1]);
-        } else if (node.opcode == HTP_OP_SSM_CONV) {
+        } else if (node.opcode == HTP_OP_SSM_CONV || node.opcode == HTP_OP_SSM_CONV_SILU) {
             const auto * kparams = (const struct htp_ssm_conv_kernel_params *) node.kernel_params;
             snprintf(str, max_size, "%s vtcm %d", kparams->n_t == 1 ? "decode" : "prefill", (int) kparams->vtcm_size);
+        } else if (node.opcode == HTP_OP_SSM_CONV_CHAIN) {
+            const auto * kparams = (const struct htp_ssm_conv_chain_kernel_params *) node.kernel_params;
+            snprintf(str, max_size, "%s tile %u tb %u qk %u bal %u vtcm %u", kparams->n_t == 1 ? "decode" : "prefill",
+                     (unsigned int) kparams->d_inner_tile, (unsigned int) kparams->n_tb,
+                     (unsigned int) kparams->qk_head_dim, (unsigned int) kparams->balanced,
+                     (unsigned int) kparams->vtcm_size);
         } else if (node.opcode == HTP_OP_SOFTMAX) {
             const auto * kparams = (const struct htp_softmax_kernel_params *) node.kernel_params;
             snprintf(str, max_size, "k%d nth %d vtcm %d", (int) kparams->kernel_id, (int) kparams->n_threads, (int) kparams->vtcm_size);
         } else if (node.opcode == HTP_OP_GATED_DELTA_NET) {
             const auto * kparams = (const struct htp_gdn_kernel_params *) node.kernel_params;
             const char * path = (kparams->kernel_type == HTP_GDN_KERNEL_HMX_CHUNKED) ? "hmx-chunked" : "hvx-recurrent";
-            snprintf(str, max_size, "%s-%s vtcm %u", path, kparams->kda ? "kda" : "scalar",
-                     (unsigned int) (kparams->vtcm_size ? kparams->vtcm_size : kparams->vtcm_per_thread * kparams->n_threads));
+            snprintf(str, max_size, "%s-%s vtcm %u colsplit %u", path, kparams->kda ? "kda" : "scalar",
+                     (unsigned int) (kparams->vtcm_size ? kparams->vtcm_size : kparams->vtcm_per_thread * kparams->n_threads),
+                     (unsigned int) htp_gdn_col_split_log2(kparams->fix));
         } else if (node.opcode == HTP_OP_MUL || node.opcode == HTP_OP_ADD || node.opcode == HTP_OP_ADD_ID ||
                    node.opcode == HTP_OP_SUB || node.opcode == HTP_OP_DIV) {
             const auto * kparams = (const struct htp_binary_kernel_params *) node.kernel_params;

@@ -30,6 +30,15 @@ static inline void htp_fence_read(const void * fence_ptr, uint32_t * seq, uint32
     *status = atomic_load(&fence[1]);
 }
 
+// Poll of a PEER's fence slot (one 128-byte line this core never writes): invalidate without write-back (dcinva) instead of clean+invalidate.
+static inline void htp_fence_poll(const void * fence_ptr, uint32_t * seq, uint32_t * status) {
+    const atomic_uint * fence = (const atomic_uint *) fence_ptr;
+    Q6_dcinva_A((void *) fence);
+    asm volatile ("syncht" : : : "memory");
+    *seq = atomic_load(&fence[0]);
+    *status = atomic_load(&fence[1]);
+}
+
 static inline void htp_mdev_group_barrier(struct htp_ops_context * octx) {
     struct htp_context * ctx = octx->ctx;
     if (ctx->mdev.count <= 1) {

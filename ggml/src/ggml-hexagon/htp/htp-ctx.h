@@ -3,7 +3,6 @@
 
 #include "dma-queue.h"
 #include "hmx-queue.h"
-#include "htp-dcache.h"
 #include "htp-ops.h"
 #include "hex-profile.h"
 #include "work-queue.h"
@@ -19,7 +18,9 @@
 #define HTP_MAX_NTHREADS 10
 #endif
 
-#define HTP_MAX_MMAPS 64
+#define HTP_MAX_MMAPS        64
+#define HTP_MAX_DIRTY_RANGES 64
+#define HTP_MAX_DMA_CLEAN    64
 
 // Memory mapping
 struct htp_mmap {
@@ -27,6 +28,11 @@ struct htp_mmap {
     uint64_t base;
     uint32_t fd;
     uint32_t flags;
+};
+
+struct htp_dirty_range {
+    uint32_t start;
+    uint32_t end;
 };
 
 // Scratchpad state
@@ -47,6 +53,7 @@ struct htp_mdev_group {
 };
 
 struct htp_context;
+struct htp_lane;
 
 // Context while processing an Op
 // TODO: fold this into the main context
@@ -98,12 +105,19 @@ struct htp_context {
 
     uint8_t *              vtcm_base;
     size_t                 vtcm_size;
+    size_t                 vtcm_size_full;  // VTCM as allocated; vtcm_size is the budget (reduced while a VrAr batch pins resident rows)
     uint32_t               vtcm_rctx;
     atomic_bool            vtcm_valid;
     atomic_bool            vtcm_needs_release;
 
     uint64_t               max_vmem;
     struct htp_dirty_range dirty_ranges[HTP_MAX_DIRTY_RANGES];
+    // output ranges of this batch that were written only by DMA and not by a cached store since (htp-tensor.c)
+    struct htp_dirty_range dma_clean[HTP_MAX_DMA_CLEAN];
+    uint32_t               dma_clean_next;
+    // MM early weight DMA (HTP_OPFLAGS_MM_EARLY_W, matmul-ops.c htp_mm_early_weight_dma): chunk 0 of the first weight was pushed on dma[0]
+    // at op entry; the kernel's first pipeline run consumes it (and clears the flag) instead of pushing it again
+    bool                   mm_early_pending;
 
     // Persistent DDR scratchpad for MUL_MAT_ID mappings
     void *                 ddr_spad_base;
@@ -116,6 +130,8 @@ struct htp_context {
     void *                 main_stack;
     atomic_bool            killed;
     size_t                 footprint;
+    // HVX lane B (GGML_HEXAGON_LANE_OPS experiment, Phase 1): NULL when lanes are off (default)
+    struct htp_lane *      lane;
 };
 
 static inline bool htp_ops_context_set_n_threads(struct htp_ops_context * octx, uint32_t n_threads) {
@@ -139,6 +155,7 @@ static inline void htp_ops_context_set_status(struct htp_ops_context * octx, int
     }
 }
 
+void htp_mm_early_weight_dma(struct htp_ops_context * octx);
 int op_matmul(struct htp_ops_context * octx);
 int op_matmul_id(struct htp_ops_context * octx);
 int op_matmul_nx(struct htp_ops_context * octx);
@@ -160,6 +177,7 @@ int op_repeat(struct htp_ops_context * octx);
 int op_argsort(struct htp_ops_context * octx);
 int op_top_k(struct htp_ops_context * octx);
 int op_ssm_conv(struct htp_ops_context * octx);
+int op_ssm_conv_chain(struct htp_ops_context * octx);
 int op_cumsum(struct htp_ops_context * octx);
 int op_fill(struct htp_ops_context * octx);
 int op_concat(struct htp_ops_context * octx);
@@ -168,10 +186,10 @@ int op_solve_tri(struct htp_ops_context * octx);
 int op_gated_delta_net(struct htp_ops_context * octx);
 int op_pad(struct htp_ops_context * octx);
 int op_im2col(struct htp_ops_context * octx);
-int op_im2col_3d(struct htp_ops_context * octx);
-int op_pool_2d(struct htp_ops_context * octx);
-int op_pool_1d(struct htp_ops_context * octx);
 int op_allreduce(struct htp_ops_context * octx);
 int op_roll(struct htp_ops_context * octx);
+int op_gdn_gate(struct htp_ops_context * octx);
+int op_gate_mul(struct htp_ops_context * octx);
+int op_rms_norm_mul_silu(struct htp_ops_context * octx);
 
 #endif /* HTP_CTX_H */

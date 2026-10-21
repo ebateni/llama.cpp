@@ -10,14 +10,24 @@ struct htp_iface_pmu_conf {
     uint32 events[8];
 };
 
+struct htp_iface_hmx_bench_cfg {
+    uint32 variant;
+    uint32 n_row;
+    uint32 n_col;
+    uint32 n_dot;
+    uint32 n_iters;
+    uint32 n_writers;
+};
+
 interface htp_iface : remote_handle64 {
-    AEEResult start(in uint32 sess_id, in uint64 dsp_queue_id, in uint32 n_hvx, in uint32 n_hmx, in uint64 max_vmem, in uint32 power_mode);
+    AEEResult start(in uint32 sess_id, in uint64 dsp_queue_id, in uint32 n_hvx, in uint32 n_hmx, in uint64 max_vmem);
     AEEResult stop();
     AEEResult mmap(in uint32 fd, in uint64 size);
     AEEResult munmap(in uint32 fd);
     AEEResult profiler(in uint32 mode, in htp_iface_pmu_conf pmu);
     AEEResult etm(in uint32 enable);
     AEEResult hwinfo(rout uint32 n_threads, rout uint32 n_hvx, rout uint32 n_hmx, rout uint64 vtcm_size);
+    AEEResult hmx_bench(in htp_iface_hmx_bench_cfg cfg, rout uint64 cycles, rout uint64 usec, rout uint64 writer_bytes);
 };
 
 #endif /* HTP_IDL */

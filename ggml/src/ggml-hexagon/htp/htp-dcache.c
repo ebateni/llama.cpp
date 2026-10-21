@@ -74,14 +74,22 @@ static void l2flush_multi_worker(unsigned int n, unsigned int i, void * data) {
 }
 
 static void merge_dirty_ranges(struct htp_context * ctx) {
+    // Only the few active ranges take part (a 64 x 64 scan with restarts cost ~3-6 us per op, every op).
+    uint32_t act[HTP_MAX_DIRTY_RANGES];
+    uint32_t n_act = 0;
     for (uint32_t i = 0; i < HTP_MAX_DIRTY_RANGES; i++) {
-        struct htp_dirty_range * r = &ctx->dirty_ranges[i];
+        if (ctx->dirty_ranges[i].start) {
+            act[n_act++] = i;
+        }
+    }
+    for (uint32_t a = 0; a < n_act; a++) {
+        struct htp_dirty_range * r = &ctx->dirty_ranges[act[a]];
         if (!r->start) continue;
 
-        for (uint32_t j = 0; j < HTP_MAX_DIRTY_RANGES;) {
-            struct htp_dirty_range * s = &ctx->dirty_ranges[j];
-            if (i == j || !s->start || r->end < s->start || s->end < r->start) {
-                j++;
+        for (uint32_t b = 0; b < n_act;) {
+            struct htp_dirty_range * s = &ctx->dirty_ranges[act[b]];
+            if (a == b || !s->start || r->end < s->start || s->end < r->start) {
+                b++;
                 continue;
             }
 
@@ -89,12 +97,12 @@ static void merge_dirty_ranges(struct htp_context * ctx) {
             r->end   = MAX(r->end, s->end);
             s->start = 0;
             s->end   = 0;
-            j = 0;
+            b = 0;
         }
     }
 }
 
-void htp_dcache_mark_dirty_tensors(struct htp_context * ctx, const struct htp_tensor * const * tensors, uint32_t n) {
+void htp_tensor_dirty_all(struct htp_context * ctx, const struct htp_tensor * const * tensors, uint32_t n) {
     const struct htp_tensor * pending[HTP_OP_MAX_OUTPUTS];
     uint32_t n_pending = 0;
 
@@ -301,7 +309,7 @@ static void flush_dirty_ranges(struct htp_context * ctx, const struct htp_dirty_
     }
 }
 
-void htp_dcache_flush_dirty_ranges(struct htp_context * ctx) {
+void htp_flush_dirty_ranges(struct htp_context * ctx) {
     struct htp_dirty_range ranges[HTP_MAX_DIRTY_RANGES];
     uint32_t n_ranges = 0;
     uint64_t total_dirty = 0;
@@ -328,7 +336,95 @@ void htp_dcache_flush_dirty_ranges(struct htp_context * ctx) {
     memset(ctx->dirty_ranges, 0, sizeof(ctx->dirty_ranges));
 }
 
-void htp_dcache_flush_dirty_tensors(struct htp_context * ctx, const struct htp_tensor * const * tensors, uint32_t n) {
+// DMA-clean table (GGML_HEXAGON_DMA_CLEAN, htp_op_is_dma_only in main.c). A DMA-only writer records its output ranges; a cached store to a range drops the entries it touches. A DMA-only reader does not flush an input that one entry covers: the DDR copy is current and DMA reads bypass the cache, so no dirty line can hide a newer value.
+// Entries are exact tensor ranges; tensors are 128-byte aligned (get_alignment), so no two tensors share a line. The table is cleared at the start of each batch, which begins with a full cache clean (process_opbatch).
+void htp_dma_clean_reset(struct htp_context * ctx) {
+    memset(ctx->dma_clean, 0, sizeof(ctx->dma_clean));
+    ctx->dma_clean_next = 0;
+}
+
+static inline bool htp_tensor_range(const struct htp_tensor * t, uint32_t * start, uint32_t * end) {
+    if (!t || !t->size || (t->flags & (HTP_TENSOR_WEIGHT | HTP_TENSOR_FENCE))) {
+        return false;
+    }
+    *start = (uint32_t) t->data;
+    *end   = *start + t->size;
+    return true;
+}
+
+void htp_dma_clean_note_outputs(struct htp_context * ctx, const struct htp_tensor * const * tensors, uint32_t n,
+                                bool dma_only) {
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t s = 0, e = 0;
+        if (!htp_tensor_range(tensors[i], &s, &e)) {
+            continue;
+        }
+        if (dma_only) {
+            struct htp_dirty_range * r = &ctx->dma_clean[ctx->dma_clean_next];
+            r->start = s;
+            r->end   = e;
+            ctx->dma_clean_next = (ctx->dma_clean_next + 1) % HTP_MAX_DMA_CLEAN;
+            continue;
+        }
+        for (uint32_t j = 0; j < HTP_MAX_DMA_CLEAN; j++) {
+            struct htp_dirty_range * r = &ctx->dma_clean[j];
+            if (r->start && r->start < e && s < r->end) {
+                r->start = 0;
+                r->end   = 0;
+            }
+        }
+    }
+}
+
+static inline bool is_tensor_dma_clean(const struct htp_context * ctx, const struct htp_tensor * t) {
+    uint32_t t_start = t->data;
+    uint32_t t_end   = t_start + t->size;
+
+    for (uint32_t i = 0; i < HTP_MAX_DMA_CLEAN; i++) {
+        const struct htp_dirty_range * r = &ctx->dma_clean[i];
+        if (r->start && r->start <= t_start && t_end <= r->end) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// A DMA-only writer writes its outputs straight to DDR: dirty cache lines over them would be written back later and
+// overwrite the new data. Flush the dirty ranges that overlap the outputs first (normally none: consumers flush them).
+void htp_flush_dirty_overlapping(struct htp_context * ctx, const struct htp_tensor * const * tensors, uint32_t n) {
+    struct htp_dirty_range ranges[HTP_MAX_DIRTY_RANGES];
+    uint32_t n_ranges = 0;
+    uint64_t total_dirty = 0;
+
+    for (uint32_t j = 0; j < HTP_MAX_DIRTY_RANGES; j++) {
+        struct htp_dirty_range * r = &ctx->dirty_ranges[j];
+        if (!r->start) {
+            continue;
+        }
+        for (uint32_t i = 0; i < n; i++) {
+            uint32_t s = 0, e = 0;
+            if (htp_tensor_range(tensors[i], &s, &e) && r->start < e && s < r->end) {
+                ranges[n_ranges++] = *r;
+                total_dirty += r->end - r->start;
+                r->start = 0;
+                r->end   = 0;
+                break;
+            }
+        }
+    }
+
+    if (n_ranges == 0) {
+        return;
+    }
+    if (total_dirty > HEX_L2_FLUSH_ALL_THRESHOLD) {
+        flush_all_dcache(ctx);
+        return;
+    }
+    flush_dirty_ranges(ctx, ranges, n_ranges, total_dirty);
+}
+
+void htp_tensor_flush_all(struct htp_context * ctx, const struct htp_tensor * const * tensors, uint32_t n,
+                          bool skip_dma_clean) {
     const struct htp_tensor * dirty_tensors[HTP_OP_MAX_INPUTS];
     struct htp_dirty_range ranges[HTP_OP_MAX_INPUTS];
     uint32_t n_dirty = 0;
@@ -336,7 +432,7 @@ void htp_dcache_flush_dirty_tensors(struct htp_context * ctx, const struct htp_t
 
     for (uint32_t i = 0; i < n; i++) {
         const struct htp_tensor * t = tensors[i];
-        if (is_tensor_dirty(ctx, t)) {
+        if (is_tensor_dirty(ctx, t) && !(skip_dma_clean && is_tensor_dma_clean(ctx, t))) {
             dirty_tensors[n_dirty++] = t;
             ranges[n_dirty - 1].start = t->data;
             ranges[n_dirty - 1].end   = t->data + t->size;
