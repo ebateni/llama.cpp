@@ -1,0 +1,78 @@
+===== RUN IDENTITY =====
+timestamp=2026-10-21T10:43:16,181983623-04:00
+host=ebateni-linux
+user=ebateni
+working_directory=/local/mnt2/workspace2/llama.cpp_Seca
+
+===== EXACT SCRIPT INVOCATION =====
+command=./llama.cpp-build-and-test.sh --split row --no-build --no-deploy 
+
+===== GIT =====
+branch=commit=commit_short=describe=
+===== RESOLVED MATRIX CONFIGURATION =====
+ADB_SERIAL=1b531bdd
+ADB_SERVER_SOCKET=''
+PLATFORM=linux
+PDU_OFFLINE_WAIT=240
+CORES=1\,4
+SPLITS=row
+UBATCH=1024
+BATCH=''
+MODELS=gemma-4-E4B_q4_0-it:4\ gemma-4-E2B_q4_0-it:4\ gemma-4-26B_q4_0-it:4\ gemma-4-12b-it-qat-q4_0:4
+REPS=5
+HEX_PROFILE=0
+PP_DEPTH=0
+TG_DEPTH=1024
+PP_TOKENS=1024
+CTX=4096
+AB_VAR=GGML_HEXAGON_FA_SPLIT
+AB=0\,1
+DO_BUILD=0
+DO_DEPLOY=0
+REBOOT_BEFORE_TEST=0
+DO_CLEAN=0
+DO_BENCH=1
+DO_IQ=1
+DO_COOKIE=1
+DO_NEEDLE=1
+DO_PP=1
+DO_TG=1
+COLLECT_MEMORY=0
+MEMORY_INTERVAL=1
+MEMORY_PROCESS_MAP=1
+PKG_HOST=/pkg-snapdragon
+PKG_DEV=/data/local/tmp/pkg-bat
+MODELS_DEV=/data/local/tmp/models
+PROMPT_DEV=/data/local/tmp/prompt_1k.txt
+OUTDIR=/local/mnt2/workspace2/llama.cpp_Seca/20261021-104316
+
+===== EFFECTIVE TEST ENVIRONMENT =====
+AB=0,1
+AB_VAR=GGML_HEXAGON_FA_SPLIT
+ADB_SERIAL=1b531bdd
+CORES=1,4
+MODELS=gemma-4-E4B_q4_0-it:4 gemma-4-E2B_q4_0-it:4 gemma-4-26B_q4_0-it:4 gemma-4-12b-it-qat-q4_0:4
+
+===== ADB COMMAND =====
+ADB=adb\ -s\ 1b531bdd 
+
+===== DEVICE IDENTITY =====
+hostname=gen5
+serial=
+kernel=Linux gen5 6.6.136-rt74-debug #1 SMP PREEMPT_RT Thu Aug 13 10:34:39 UTC 2026 aarch64 GNU/Linux
+uptime=62841.01 1116368.21
+
+===== INSTALLED DEVICE DRIVER ENVIRONMENT =====
+48:LD_LIBRARY_PATH=$LIB
+55:GGML_HEXAGON_ARCH=81
+56:GGML_HEXAGON_VERBOSE=0
+57:GGML_HEXAGON_USE_HMX=1
+58:GGML_HEXAGON_MBUF=2048
+59:GGML_HEXAGON_NHMX=1
+60:GGML_META_COMM_ISOLATION=1
+61:GGML_META_COMM_SEPARATE=1
+62:LLAMA_KV_ALLOC_AFFINITY=1
+63:CDSP_LIBRARY_PATH="$LIB${CDSP_PATH_SEP}/vendor/dsp/cdsp0"
+64:CDSP1_LIBRARY_PATH="$LIB${CDSP_PATH_SEP}/vendor/dsp/cdsp1"
+65:CDSP2_LIBRARY_PATH="$LIB${CDSP_PATH_SEP}/vendor/dsp/cdsp2"
+66:CDSP3_LIBRARY_PATH="$LIB${CDSP_PATH_SEP}/vendor/dsp/cdsp3"
