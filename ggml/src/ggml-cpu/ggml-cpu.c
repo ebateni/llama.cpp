@@ -3940,3 +3940,9 @@ void ggml_cpu_init(void) {
 
     ggml_critical_section_end();
 }
+
+int ggml_cpu_argmax_f32(int n, const float * x) {
+    int s = 0;
+    ggml_vec_argmax_f32(n, &s, x);
+    return s;
+}

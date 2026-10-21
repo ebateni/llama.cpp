@@ -1656,11 +1656,45 @@ inline static void ggml_vec_norm_inv_f32(const int n, float * s, const float * x
 }
 
 inline static void ggml_vec_argmax_f32(const int n, int * s, const float * x) {
+#if defined(__ARM_NEON)
+    if (n >= 16) {
+        float32x4_t max0 = vdupq_n_f32(-INFINITY);
+        float32x4_t max1 = max0;
+        float32x4_t max2 = max0;
+        float32x4_t max3 = max0;
+        int i = 0;
+        for (; i + 16 <= n; i += 16) {
+            max0 = vmaxq_f32(max0, vld1q_f32(x + i + 0));
+            max1 = vmaxq_f32(max1, vld1q_f32(x + i + 4));
+            max2 = vmaxq_f32(max2, vld1q_f32(x + i + 8));
+            max3 = vmaxq_f32(max3, vld1q_f32(x + i + 12));
+        }
+        max0 = vmaxq_f32(vmaxq_f32(max0, max1), vmaxq_f32(max2, max3));
+#if defined(__aarch64__)
+        float global_max = vmaxvq_f32(max0);
+#else
+        float32x2_t max_p = vpmax_f32(vget_low_f32(max0), vget_high_f32(max0));
+        max_p = vpmax_f32(max_p, max_p);
+        float global_max = vget_lane_f32(max_p, 0);
+#endif
+        for (; i < n; ++i) {
+            if (x[i] > global_max) global_max = x[i];
+        }
+        for (int j = 0; j < n; ++j) {
+            if (x[j] >= global_max) {
+                *s = j;
+                return;
+            }
+        }
+    }
+#endif
     float max = -INFINITY;
     int idx = 0;
     for (int i = 0; i < n; ++i) {
-        max = MAX(max, x[i]);
-        if (max == x[i]) { idx = i; }
+        if (x[i] > max) {
+            max = x[i];
+            idx = i;
+        }
     }
     *s = idx;
 }

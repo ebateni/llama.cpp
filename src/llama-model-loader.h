@@ -16,6 +16,8 @@
 #include <stdexcept>
 #include <unordered_map>
 
+using llama_buf_map = std::unordered_map<uint32_t, ggml_backend_buffer_t>;
+
 // lists of buffer types used for each layer
 using buft_list_t = std::vector<std::pair<ggml_backend_dev_t, ggml_backend_buffer_type_t>>;
 
@@ -122,6 +124,8 @@ struct llama_model_loader {
     llama_mmaps mappings;
 
     std::map<std::string, llama_tensor_weight, weight_name_comparer> weights_map;
+    // model tensor name -> GGUF tensor name whose data it is loaded from (see set_tensor_alias)
+    std::map<std::string, std::string> tensor_aliases;
     std::unordered_map<std::string, llama_model_kv_override> kv_overrides;
     const llama_model_tensor_buft_override * tensor_buft_overrides;
 
@@ -222,6 +226,12 @@ struct llama_model_loader {
 
     const llama_tensor_weight & require_weight(const char * name) const;
 
+    // Alias: model tensor `name` keeps its own name and storage but loads data from GGUF tensor `gguf_name`. Call before create_tensor(name).
+    void set_tensor_alias(const char * name, const char * gguf_name);
+
+    // GGUF tensor that backs model tensor `name` (identity if the tensor is not aliased)
+    const char * tensor_source_name(const char * name) const;
+
     struct ggml_tensor * get_tensor_meta(const char * name) const;
 
     struct ggml_tensor * require_tensor_meta(const std::string & name) const;
@@ -240,16 +250,7 @@ struct llama_model_loader {
 
     void init_mappings(bool prefetch = true, llama_mlocks * mlock_mmaps = nullptr);
 
-    // byte range within a mapped file
-    struct mapping_range {
-        size_t first; // inclusive
-        size_t last;  // exclusive
-    };
-
-    // sorted, non-overlapping ranges of file 'idx' that back the tensors of 'ctx'
-    // ranges owned by other contexts are excluded, so that a buffer wrapping them won't pin
-    // data that this context never reads (lazy tensors, -cmoe tensors, ...)
-    std::vector<mapping_range> get_mapping_ranges(uint32_t idx, ggml_context * ctx) const;
+    void get_mapping_range(size_t * first, size_t * last, void ** addr, int idx, ggml_context * ctx) const;
 
     // release a weight's mmap pages
     void unmap_weight(const llama_tensor_weight & w) const;
@@ -261,7 +262,7 @@ struct llama_model_loader {
     // Returns false if cancelled by progress_callback
     bool load_all_data(
             struct ggml_context * ctx,
-            std::vector<ggml_backend_buffer_t> & bufs,
+            llama_buf_map & bufs,
             llama_mlocks * lmlocks,
             llama_progress_callback progress_callback,
             void * progress_callback_user_data);

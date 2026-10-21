@@ -1,5 +1,11 @@
 #include "models.h"
 #include "llama-memory-recurrent.h"
+#include <cstdio>
+#include <cstdlib>
+#include <map>
+#include <string>
+
+static void s150_dump_op_hist(ggml_cgraph * gf); // speed150 dry dump, defined below
 
 void llama_model_qwen35::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
@@ -12,6 +18,9 @@ void llama_model_qwen35::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
     ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
 
+    // LLAMA_LX_SPLIT bit 0 (lossy fork): balanced GDN head split, see llama-model.cpp (llama_meta_device_get_split_state)
+    hparams.ssm_n_group_dup = (llama_lx_split_bits() & 1u) ? 1 : 0;
+
     // Mark recurrent layers (linear attention layers). MTP layers are dense
     // attention-only and must be flagged non-recurrent.
     if (!ml.get_key_or_arr(LLM_KV_ATTENTION_RECURRENT_LAYERS, hparams.is_recr_impl, hparams.n_layer_all, false)) {
@@ -19,6 +28,19 @@ void llama_model_qwen35::load_arch_hparams(llama_model_loader & ml) {
         ml.get_key(LLM_KV_FULL_ATTENTION_INTERVAL, full_attn_interval, false);
         for (uint32_t i = 0; i < hparams.n_layer_all; ++i) {
             hparams.is_recr_impl[i] = (i < hparams.n_layer()) && ((i + 1) % full_attn_interval != 0);
+        }
+    }
+
+    // LLAMA_LX_SPLIT bit 1 (lossy fork): pair-aligned attention split, see llama-model.cpp. Every non-recurrent layer (incl. the nextn
+    // layer) runs with 2x KV heads, one per query pair, so the local GQA ratio stays 2 on every device.
+    hparams.attn_kv_pair = (llama_lx_split_bits() & 2u) != 0;
+    if (hparams.attn_kv_pair) {
+        for (uint32_t il = 0; il < hparams.n_layer_all; ++il) {
+            if (hparams.is_recr(il)) {
+                continue;
+            }
+            GGML_ASSERT(hparams.n_head(il) == 4 * hparams.n_head_kv(il) && "LX attn pair: qwen35 needs 4 query heads per KV group");
+            hparams.n_head_kv_arr[il] *= 2;
         }
     }
 
@@ -49,7 +71,16 @@ void llama_model_qwen35::load_arch_tensors(llama_model_loader & ml) {
 
     // if output is NULL, init from the input tok embed
     if (output == NULL) {
-        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, TENSOR_DUPLICATED);
+        if (split_mode() == LLAMA_SPLIT_MODE_TENSOR && get_split_state_ud.n_devices > 1) {
+            // Tied lm_head: token_embd.weight is MIRRORED, so every HTP session would stream the full vocab. Alias output.weight so it splits on vocab rows.
+            // n_devices() is 1 under TENSOR split (one Meta device); the physical count is in get_split_state_ud.
+            ml.set_tensor_alias(tn(LLM_TENSOR_OUTPUT, "weight").str().c_str(),
+                                tn(LLM_TENSOR_TOKEN_EMBD, "weight").str().c_str());
+            output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), { n_embd, n_vocab }, TENSOR_DUPLICATED);
+            tied_output_split = true;
+        } else {
+            output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, TENSOR_DUPLICATED);
+        }
     }
 
     auto load_block_trunk = [&](int il, int flags) {
@@ -58,7 +89,7 @@ void llama_model_qwen35::load_arch_tensors(llama_model_loader & ml) {
         // Calculate dimensions from hyperparameters
         const int64_t head_k_dim = hparams.ssm_d_state;
         const int64_t head_v_dim = hparams.ssm_d_state;
-        const int64_t n_k_heads  = hparams.ssm_n_group;
+        const int64_t n_k_heads  = hparams.ssm_n_group_eff();
         const int64_t n_v_heads  = hparams.ssm_dt_rank;
         const int64_t key_dim    = head_k_dim * n_k_heads;
         const int64_t value_dim  = head_v_dim * n_v_heads;
@@ -69,7 +100,7 @@ void llama_model_qwen35::load_arch_tensors(llama_model_loader & ml) {
 
         if (!hparams.is_recr(il)) {
             // Attention layers
-            create_tensor_qkv(layer, il, n_embd, n_embd_head_k * n_head * 2, n_embd_k_gqa, n_embd_v_gqa, flags);
+            create_tensor_qkv(layer, il, n_embd, n_embd_head_k * n_head * 2, hparams.n_embd_k_gqa(il), hparams.n_embd_v_gqa(il), flags);
             layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", il), { n_embd_head_k * n_head, n_embd }, flags);
 
             // Q/K normalization for attention layers
@@ -101,7 +132,7 @@ void llama_model_qwen35::load_arch_tensors(llama_model_loader & ml) {
         layer.attn_norm      = create_tensor(tn(LLM_TENSOR_ATTN_NORM,      "weight", il), { n_embd }, mtp_flags);
         layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", il), { n_embd }, mtp_flags);
 
-        create_tensor_qkv(layer, il, n_embd, n_embd_head_k * n_head * 2, n_embd_k_gqa, n_embd_v_gqa, mtp_flags);
+        create_tensor_qkv(layer, il, n_embd, n_embd_head_k * n_head * 2, hparams.n_embd_k_gqa(il), hparams.n_embd_v_gqa(il), mtp_flags);
         layer.wo          = create_tensor(tn(LLM_TENSOR_ATTN_OUT,    "weight", il), { n_embd_head_k * n_head, n_embd }, mtp_flags);
         layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", il), { n_embd_head_k }, mtp_flags);
         layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", il), { n_embd_head_k }, mtp_flags);
@@ -139,6 +170,9 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
+    // LLAMA_LX_SPLIT (lossy fork): the 17-head GDN layout is exact only under the 3-device split (llama-model.cpp); on one device the global K list would be read with the baseline mapping and give wrong results.
+    // model.n_devices() counts llama_device entries (1 for the meta device), so the simple-device count comes from the split userdata
+    GGML_ASSERT(hparams.ssm_n_group_dup == 0 || model.get_split_state_ud.n_devices == 3);
 
     int sections[4];
     std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
@@ -154,6 +188,12 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
 
     ggml_tensor * inp_pos     = build_inp_pos();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+    bool rows_trimmed = false;
+    bool attn_rows_done = false;
+    // GGML_QWEN35_LAST_LAYER_TRIM_ATTN=0 keeps the full-row gate/out-projection/all-reduce of the last (full attention) layer
+    const bool last_layer_trim_attn = !getenv("GGML_QWEN35_LAST_LAYER_TRIM_ATTN") || atoi(getenv("GGML_QWEN35_LAST_LAYER_TRIM_ATTN")) != 0;
+    const bool last_layer_trim = !getenv("GGML_QWEN35_LAST_LAYER_TRIM") || atoi(getenv("GGML_QWEN35_LAST_LAYER_TRIM")) != 0;
 
     // MTP/NextN layers are loaded as extra decoder blocks but not executed in the main pass.
     for (int il = 0; il < n_layer; ++il) {
@@ -172,12 +212,20 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
             cur = build_layer_attn_linear(inp->get_recr(), cur, il);
         } else {
             // Full attention layer
-            cur = build_layer_attn(inp->get_attn(), cur, inp_pos, sections, il);
+            const bool attn_rows = last_layer_trim_attn && last_layer_trim && il == n_layer - 1 && inp_out_ids &&
+                                   !cparams.embeddings_nextn && !cparams.embeddings_nextn_masked;
+            cur = build_layer_attn(inp->get_attn(), cur, inp_pos, sections, il, attn_rows ? inp_out_ids : nullptr);
+            attn_rows_done = attn_rows;
         }
 
-        if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
-            cur   = ggml_get_rows(ctx0, cur,   inp_out_ids);
+        // Last layer: only the rows that produce an output (inp_out_ids) are needed after the attention core, so the output projection, the residual add and the whole FFN run on those rows instead of every token of the ubatch.
+        // Without nextn embeddings (h_nextn is read for every token only then) this is the standard llama.cpp last-layer trim. GGML_QWEN35_LAST_LAYER_TRIM=0 restores the full-row last layer.
+        if (il == n_layer - 1 && inp_out_ids && (cparams.embeddings_nextn_masked || (!cparams.embeddings_nextn && last_layer_trim))) {
+            if (!attn_rows_done) {
+                cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+            }
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            rows_trimmed = true;
         }
 
         // Residual connection
@@ -212,28 +260,21 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
 
-    if (crop_after_nextn(inp_out_ids)) {
+    if (!cparams.embeddings_nextn_masked && inp_out_ids && !rows_trimmed) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    if (model.cls_out) {
-        ggml_tensor * embd = build_lora_mm(model.cls_out, cur);
-        if (model.cls_out_b) {
-            embd = ggml_add(ctx0, embd, model.cls_out_b);
-        }
-        cb(embd, "result_embd_proj", -1);
-        res->t_embd = embd;
-        ggml_build_forward_expand(gf, embd);
-    }
-
-    // LM head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    // LM head (LLAMA_VOCAB_TRIM: only the kept rows, see llama_model_vocab_trim_n)
+    cur = model.output_trim ? ggml_mul_mat(ctx0, model.output_trim, cur) : build_lora_mm(model.output, cur, model.output_s);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
+
+    ggml_build_forward_expand(gf, cur);
+    s150_dump_op_hist(gf);
 }
 
 std::pair<ggml_tensor *, ggml_tensor *> llama_model_qwen35::graph::build_qkvz(
@@ -252,12 +293,62 @@ std::pair<ggml_tensor *, ggml_tensor *> llama_model_qwen35::graph::build_qkvz(
     return { qkv_mixed, z };
 }
 
+// speed150 graph switches (default off; read per graph build). See analysis/speed150/impl/ImplFusion.md.
+static bool s150_flag(const char * name) {
+    const char * v = std::getenv(name);
+    return v != nullptr && v[0] == '1';
+}
+
+// speed150 dry dump (LLAMA_S150_OP_HIST=1): histogram of the compute nodes of the first qwen35 graph built (stderr, printed once).
+// Views, reshapes, permutes, transposes and no-ops are not counted. Used for the op-count table in analysis/speed150/impl/ImplFusion.md.
+static void s150_dump_op_hist(ggml_cgraph * gf) {
+    static bool done = false;
+    if (done || !s150_flag("LLAMA_S150_OP_HIST")) {
+        return;
+    }
+    done = true;
+
+    std::map<std::string, int> hist;
+    int n_compute = 0;
+    const int n_nodes = ggml_graph_n_nodes(gf);
+    for (int i = 0; i < n_nodes; ++i) {
+        const ggml_tensor * n = ggml_graph_nodes(gf)[i];
+        switch (n->op) {
+            case GGML_OP_NONE:
+            case GGML_OP_RESHAPE:
+            case GGML_OP_VIEW:
+            case GGML_OP_PERMUTE:
+            case GGML_OP_TRANSPOSE:
+                continue;
+            default:
+                break;
+        }
+        std::string name = ggml_op_name(n->op);
+        if (n->op == GGML_OP_UNARY) {
+            name = ggml_unary_op_name(ggml_get_unary_op(n));
+        } else if (n->op == GGML_OP_GLU) {
+            name = ggml_glu_op_name(ggml_get_glu_op(n));
+        }
+        hist[name]++;
+        n_compute++;
+    }
+
+    fprintf(stderr, "s150-op-hist: n_nodes=%d compute=%d\n", n_nodes, n_compute);
+    for (const auto & kv : hist) {
+        fprintf(stderr, "s150-op-hist: %-28s %d\n", kv.first.c_str(), kv.second);
+    }
+}
+
 ggml_tensor * llama_model_qwen35::graph::build_norm_gated(
         ggml_tensor * input,
         ggml_tensor * weights,
         ggml_tensor * gate,
         int           layer) {
     ggml_tensor * normalized = build_norm(input, weights, nullptr, LLM_NORM_RMS, layer);
+    if (s150_flag("LLAMA_S150_GDN_SWIGLU")) {
+        // speed150: silu(gate) * normalized as one GLU op (SWIGLU = silu(x0) * x1); same product as SILU+MUL
+        return ggml_swiglu_split(ctx0, gate, normalized);
+    }
     ggml_tensor * gated_silu = ggml_silu(ctx0, gate);
 
     return ggml_mul(ctx0, normalized, gated_silu);
@@ -268,8 +359,11 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn(
         ggml_tensor *             cur,
         ggml_tensor *             inp_pos,
         int *                     sections,
-        int                       il) {
+        int                       il,
+        ggml_tensor *             out_ids) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
+    // per-layer KV heads: the LX attention pair split doubles them on attention layers (load_arch_hparams); the layer-0 member is wrong here
+    const int64_t n_head_kv = hparams.n_head_kv(il);
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
     // Order: joint QG projection, QG split, Q norm, KV projection, K norm, RoPE, attention
@@ -283,6 +377,13 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn(
     cb(Qcur_full, "Qcur_full", il);
     cb(Kcur, "Kcur", il);
     cb(Vcur, "Vcur", il);
+    // LLAMA_S150_GDN_ORDER=1 (+ GGML_HEXAGON_FUSE_S150): enqueue the three projections back to back (same activation,
+    // Q4_0 weights) so GGML_HEXAGON_FUSE_MUL_MAT_NX merges them into one MUL_MAT_NX; the default DFS order puts the Q norm between Q and K.
+    if (s150_flag("LLAMA_S150_GDN_ORDER") && s150_flag("GGML_HEXAGON_FUSE_S150")) {
+        ggml_build_forward_expand(gf, Qcur_full);
+        ggml_build_forward_expand(gf, Kcur);
+        ggml_build_forward_expand(gf, Vcur);
+    }
 
     ggml_tensor * Qcur = ggml_view_3d(ctx0, Qcur_full, n_embd_head, n_head, n_tokens,
         ggml_element_size(Qcur_full) * n_embd_head * 2,
@@ -302,10 +403,22 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn(
         ggml_element_size(Qcur_full) * n_embd_head * 2,
         ggml_element_size(Qcur_full) * n_embd_head * 2 * n_head,
         ggml_element_size(Qcur_full) * n_embd_head);
-    gate = ggml_cont_2d(ctx0, gate, n_embd_head * n_head, n_tokens);
+    // AE-09 (GGML_HEXAGON_ELT_SMALL bit 2): the SIGMOID reads the strided gate view directly, so no CONT copy is made. The
+    // SIGMOID output is contiguous [D, H, T] and is reshaped back to [D*H, T] for the MUL below. Values are identical.
+    const bool gate_strided = (elt_small_bits & 4) != 0;
+    if (!gate_strided) {
+        gate = ggml_cont_2d(ctx0, gate, n_embd_head * n_head, n_tokens);
+    }
     cb(gate, "gate_reshaped", il);
 
     Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+
+    // LLAMA_P4K_ROPE_ADJ=1 (default off): expand both norms before either RoPE, so that the two ROPE nodes are adjacent in enqueue order and GGML_HEXAGON_FUSE_ROPE_NX (try_fuse_rope_nx) can merge them.
+    // The default postorder DFS resolves Qcur (norm and RoPE) before it visits Kcur's norm, which then sits between the two ropes. Only the node order changes; the RoPE math is the same.
+    if (rope_adj) {
+        ggml_build_forward_expand(gf, Qcur);
+        ggml_build_forward_expand(gf, Kcur);
+    }
 
     // Apply MRoPE
     Qcur = ggml_rope_multi(
@@ -332,10 +445,28 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn(
                 Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
     cb(cur, "attn_pregate", il);
 
+    bool gate_2d = false;
+    if (out_ids) {
+        // last layer: only the output rows continue. K/V (cache write) and the attention itself stay on every row; the gate,
+        // the output projection and the all-reduce after it run on the output rows.
+        cur = ggml_get_rows(ctx0, cur, out_ids);
+        ggml_tensor * q_rows = ggml_get_rows(ctx0, Qcur_full, out_ids);   // [2 * D * H, n_out]
+        gate = ggml_cont_2d(ctx0, ggml_view_3d(ctx0, q_rows, n_embd_head, n_head, out_ids->ne[0],
+                    ggml_element_size(q_rows) * n_embd_head * 2, ggml_element_size(q_rows) * n_embd_head * 2 * n_head,
+                    ggml_element_size(q_rows) * n_embd_head), n_embd_head * n_head, out_ids->ne[0]);
+        gate_2d = true;
+        cb(cur, "attn_pregate_rows", il);
+    }
+
     ggml_tensor * gate_sigmoid = ggml_sigmoid(ctx0, gate);
+    if (gate_strided && !gate_2d) {
+        gate_sigmoid = ggml_reshape_2d(ctx0, gate_sigmoid, n_embd_head * n_head, n_tokens);
+    }
     cb(gate_sigmoid, "gate_sigmoid", il);
 
-    cur = ggml_mul(ctx0, cur, gate_sigmoid);
+    // in place: the gated output reuses the attention buffer, so the allocator cannot place it over the gate input (which
+    // GGML_HEXAGON_GATE_MUL refuses on overlap). Values are identical.
+    cur = ggml_mul_inplace(ctx0, cur, gate_sigmoid);
     cb(cur, "attn_gated", il);
 
     cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
@@ -353,7 +484,7 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
     const int64_t d_inner      = hparams.ssm_d_inner;
     const int64_t n_seqs       = ubatch.n_seqs;
     const int64_t head_k_dim   = hparams.ssm_d_state;
-    const int64_t num_k_heads  = hparams.ssm_n_group;
+    const int64_t num_k_heads  = hparams.ssm_n_group_eff();
     const int64_t num_v_heads  = hparams.ssm_dt_rank;
     const int64_t head_v_dim   = d_inner / num_v_heads;
     const int64_t n_seq_tokens = ubatch.n_seq_tokens;
@@ -367,18 +498,50 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
     ggml_tensor * qkv_mixed = qkvz.first;
     ggml_tensor * z         = qkvz.second;
 
-    ggml_tensor * beta = build_lora_mm(model.layers[il].ssm_beta, cur, model.layers[il].ssm_beta_s);
-    beta = ggml_reshape_4d(ctx0, beta, 1, num_v_heads, n_seq_tokens, n_seqs);
+    // speed150 (LLAMA_S150_GDN_ORDER=1): enqueue the qkv and z projections back to back, so GGML_HEXAGON_FUSE_S150 can merge them into one MUL_MAT_NX (both N % 32 == 0) ORDER alone must not change the graph: without GGML_HEXAGON_FUSE_S150 (the NX N % 32 guard) beta could merge into an NX pair.
+    // See analysis/speed150/impl/ImplFusion.md section 3.
+    const bool s150_order = s150_flag("LLAMA_S150_GDN_ORDER") && s150_flag("GGML_HEXAGON_FUSE_S150");
+    if (s150_order) {
+        ggml_build_forward_expand(gf, qkv_mixed);
+        ggml_build_forward_expand(gf, z);
+    }
+
+    ggml_tensor * beta_mm = build_lora_mm(model.layers[il].ssm_beta, cur, model.layers[il].ssm_beta_s);
+    // AE-06 (GGML_HEXAGON_ELT_SMALL bit 0): above 32 tokens the SIGMOID runs on the [H, 1, T, S] layout (one row per head vector, not one row per element) and is emitted right after the GDN gate MUL below, where GGML_HEXAGON_FUSE_S150 folds it into GDN_GATE.
+    // Emitted before alpha's MUL_MAT (the old order) it broke the MUL_MAT_NX group of qkv+z+beta+alpha. Up to 32 tokens keep the 4-D [1, H, T, S] form. Values are identical.
+    const int32_t elt_small = elt_small_bits;
+    const bool beta_rows = (elt_small & 1) != 0 && n_seq_tokens * n_seqs > 32;
+    ggml_tensor * beta_sig = nullptr;
+    ggml_tensor * beta;
+    if (beta_rows) {
+        beta_sig = ggml_sigmoid(ctx0, ggml_reshape_4d(ctx0, beta_mm, num_v_heads, 1, n_seq_tokens, n_seqs));
+        cb(beta_sig, "beta_sigmoid", il);
+        beta = ggml_reshape_4d(ctx0, beta_sig, 1, num_v_heads, n_seq_tokens, n_seqs);
+    } else {
+        beta = ggml_reshape_4d(ctx0, beta_mm, 1, num_v_heads, n_seq_tokens, n_seqs);
+    }
+    if (s150_order) {
+        // speed150: beta's MUL_MAT before the alpha/gate chain, so that SOFTPLUS -> MUL(A) -> SIGMOID(beta)
+        // becomes adjacent in enqueue order (GGML_HEXAGON_FUSE_S150 GDN_GATE fusion)
+        ggml_build_forward_expand(gf, beta_mm);
+    }
     cb(beta, "beta", il);
 
-    beta = ggml_sigmoid(ctx0, beta);
-    cb(beta, "beta_sigmoid", il);
+    if (!beta_rows) {
+        beta = ggml_sigmoid(ctx0, beta);
+        cb(beta, "beta_sigmoid", il);
+    }
 
     ggml_tensor * alpha = build_lora_mm(model.layers[il].ssm_alpha, cur, model.layers[il].ssm_alpha_s);
     alpha = ggml_reshape_3d(ctx0, alpha, num_v_heads, n_seq_tokens, n_seqs);
     cb(alpha, "alpha", il);
 
     ggml_tensor * alpha_biased   = ggml_add(ctx0, alpha, model.layers[il].ssm_dt);
+    // MM-02 (GGML_HEXAGON_NX_ALPHABETA, prefill ubatches only: n_tokens >= 64, same threshold as ggml-hexagon.cpp GGML_HEXAGON_MM_PREFILL_MIN_ROWS): alpha's MUL_MAT and its bias ADD go right behind beta's MUL_MAT. Decode and draft ubatches keep the original graph order.
+    // ggml_build_forward_expand is lazy: without this they are emitted after the conv/state ops, and the switch cannot merge qkv, z, beta and alpha into one MUL_MAT_NX with the ADD fused into its last weight (ggml-hexagon.cpp try_fuse_nx_bias).
+    if (s150_order && ubatch.n_tokens >= 64 && s150_flag("GGML_HEXAGON_NX_ALPHABETA")) {
+        ggml_build_forward_expand(gf, alpha_biased);
+    }
     ggml_tensor * alpha_softplus = ggml_softplus(ctx0, alpha_biased);
     cb(alpha_softplus, "a_softplus", il);
 
@@ -386,17 +549,23 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
     cb(gate, "gate", il);
 
     gate = ggml_reshape_4d(ctx0, gate, 1, num_v_heads, n_seq_tokens, n_seqs);
+    if (beta_sig) {
+        // the beta SIGMOID right behind the gate MUL (AE-06 below): GDN_GATE absorbs it (ggml-hexagon try_fuse_gdn_gate_sigmoid)
+        ggml_build_forward_expand(gf, gate);
+        ggml_build_forward_expand(gf, beta_sig);
+    }
 
     ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
     ggml_tensor * ssm_states_all  = mctx_cur->get_s_l(il);
 
     ggml_tensor * conv_kernel      = model.layers[il].ssm_conv1d;
     const int64_t conv_kernel_size = conv_kernel->ne[0];
-    const int64_t conv_channels    = d_inner + 2 * hparams.ssm_n_group * hparams.ssm_d_state;
+    const int64_t conv_channels    = d_inner + 2 * hparams.ssm_n_group_eff() * hparams.ssm_d_state;
 
-    ggml_tensor * conv_input = build_conv_state(inp, conv_states_all, qkv_mixed, conv_kernel_size, conv_channels, il);
+    ggml_tensor * conv_input = build_conv_state(inp, conv_states_all, qkv_mixed, conv_kernel_size, conv_channels, il, true, (elt_small & 16) != 0);
 
-    ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs);
+    // AE-16 (GGML_HEXAGON_ELT_SMALL bit 4): fresh single-sequence SSM clears carry the zero-state marker (llama-graph.cpp build_rs).
+    ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs, ggml_get_rows, (elt_small & 16) != 0, true);
     state = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim, num_v_heads, n_seqs);
     cb(state, "state_predelta", il);
 
@@ -447,6 +616,7 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
 
     // if head keys and value keys are different, repeat to force tensors into matching shapes
     // note: need explicit repeat only if we are not using the fused GDN.
+    GGML_ASSERT(hparams.ssm_n_group_dup == 0 || (cparams.fused_gdn_ar && cparams.fused_gdn_ch));
     if (num_k_heads != num_v_heads && (!cparams.fused_gdn_ar || !cparams.fused_gdn_ch)) {
         GGML_ASSERT(num_v_heads % num_k_heads == 0);
         q_conv = ggml_repeat_4d(ctx0, q_conv, head_k_dim, num_v_heads, n_seq_tokens, n_seqs);
@@ -570,6 +740,7 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     cb(cur, "mtp_eh_proj", il);
 
     ggml_tensor * inpSA = cur;
+    const int64_t n_head_kv = hparams.n_head_kv(il); // per layer, as in build_layer_attn
 
     cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
     cb(cur, "mtp_attn_norm", il);
@@ -653,6 +824,9 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     cb(cur, "mtp_shared_head_norm", -1);
 
+    if (model.output_trim && !layer.nextn.shared_head_head) {
+        throw std::runtime_error("LLAMA_VOCAB_TRIM: MTP draft heads need the full vocabulary (no shared head)");
+    }
     ggml_tensor * head_w = layer.nextn.shared_head_head ? layer.nextn.shared_head_head : model.output;
     ggml_tensor * head_s = layer.nextn.shared_head_head ? layer.nextn.shared_head_head_s : model.output_s;
     GGML_ASSERT(head_w && "QWEN35 MTP: missing LM head (nextn.shared_head_head or model.output)");

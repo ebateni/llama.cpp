@@ -36,6 +36,7 @@ extern "C" {
 
     GGML_BACKEND_API void    ggml_numa_init(enum ggml_numa_strategy numa); // call once for better performance on NUMA systems
     GGML_BACKEND_API bool    ggml_is_numa(void); // true if init detected that system has >1 NUMA node
+    GGML_BACKEND_API int     ggml_cpu_argmax_f32(int n, const float * x); // index of the first maximum of x[0..n) (NEON when available)
 
     GGML_BACKEND_API struct ggml_tensor * ggml_new_i32(struct ggml_context * ctx, int32_t value);
     GGML_BACKEND_API struct ggml_tensor * ggml_new_f32(struct ggml_context * ctx, float value);

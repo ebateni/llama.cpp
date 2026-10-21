@@ -206,6 +206,16 @@ struct llama_hparams {
     uint32_t ssm_d_state = 0;
     uint32_t ssm_dt_rank = 0;
     uint32_t ssm_n_group = 0;
+    // LLAMA_LX_SPLIT bit 0 (lossy fork, qwen35 recurrent layers): one extra copy of K head 5 in the GDN qkv/conv/r-cache
+    // channel layout, so the three devices get 11/11/10 V heads with the K heads they need (llama-model.cpp meta split)
+    uint32_t ssm_n_group_dup = 0;
+
+    // LLAMA_LX_SPLIT bit 1 (lossy fork, qwen35 non-recurrent layers): pair-aligned attention split. llama-model.cpp (llama_meta_device_get_split_state) owns the split.
+    // Query heads go to the devices in whole pairs; each pair has one KV head (n_head_kv is 2x the file's count, the K/V rows are duplicated per pair by windows/AttnSplit/convert_attnpair.py).
+    bool attn_kv_pair = false;
+
+    // K heads of the GDN layout including the extra copy
+    uint32_t ssm_n_group_eff() const { return ssm_n_group + ssm_n_group_dup; }
 
     // for MiniMax-Text-01 linear attention
     uint32_t n_embd_head_la = 0;
@@ -542,5 +552,8 @@ struct llama_hparams {
 
     bool use_mrope() const;
 };
+
+// LLAMA_LX_SPLIT bitmask (lossy fork; 0 = production split). Parsed once from the environment.
+uint32_t llama_lx_split_bits();
 
 static_assert(std::is_trivially_copyable<llama_hparams>::value, "llama_hparams must be trivially copyable");

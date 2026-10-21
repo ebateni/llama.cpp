@@ -744,6 +744,10 @@ struct llama_model {
     struct ggml_tensor * output_s    = nullptr;
     struct ggml_tensor * output_in_s = nullptr;
 
+    // LLAMA_VOCAB_TRIM: lm_head rows of the kept token ids (gathered at load), see llama_model_vocab_trim_n()
+    struct ggml_tensor *  output_trim = nullptr;
+    std::vector<int32_t>  vocab_trim_ids;
+
     // NextN/MTP model-level projections
     struct ggml_tensor * nextn_proj_pre  = nullptr;
     struct ggml_tensor * nextn_proj_post = nullptr;
@@ -853,6 +857,9 @@ struct llama_model {
 
     // statically allocated context for assigning
     struct llama_meta_device_get_split_state_userdata get_split_state_ud;
+
+    // set by the arch loader when output.weight is a split-able alias of a tied token_embd.weight
+    bool tied_output_split = false;
 
     int64_t t_load_us  = 0;
     int64_t t_start_us = 0;

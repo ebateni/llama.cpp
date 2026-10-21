@@ -122,6 +122,7 @@ struct llama_context {
     void set_embeddings_layer_inp(uint32_t lid, bool enable);
     void set_nextn_layer_offset(int32_t offset);
     void set_causal_attn(bool value);
+    void set_rs_snap_range(int32_t d0, int32_t n);
     void set_warmup(bool value);
 
     void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
@@ -239,6 +240,9 @@ private:
     // map the output row index `i` to batch index
     int64_t output_resolve_row(int32_t i) const;
 
+    // row width of the logits buffer: the vocabulary, or the kept rows with LLAMA_VOCAB_TRIM
+    int64_t n_logits_row() const;
+
     // async-copy enabled layer-input tensors (per cparams.output_layer_inp)
     // from backend into host-side embd_layer_inp buffers
     bool extract_layer_inputs(const llm_graph_result * res, size_t token_offset, size_t n_tokens);
@@ -259,6 +263,9 @@ public:
     // reserve a graph with a dummy ubatch of the specified size
     ggml_cgraph * graph_reserve(
         uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false, size_t * sizes = nullptr);
+    // graph_reserve for one topology: plain_topo builds the plain topology (slot 0 of the layout slots, see llama-context.cpp)
+    ggml_cgraph * graph_reserve_impl(
+        uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only, size_t * sizes, bool plain_topo);
 
     bool set_sampler(llama_seq_id seq_id, llama_sampler * sampler);
 
@@ -428,6 +435,17 @@ private:
     // env: LLAMA_GRAPH_REUSE_DISABLE
     bool graph_reuse_disable = false;
 
+    // env: LLAMA_CYCLE_TIMING=1|2 (dt_level); host segments of the current decode (filled only when dt_level > 0)
+    int32_t dt_level = 0;
+
+    struct {
+        int64_t gb_us = 0; // graph build, incl. sched reset
+        int64_t ga_us = 0; // graph alloc
+        int64_t si_us = 0; // set_inputs
+        int64_t gc_us = 0; // graph compute submit (async backends: device wait is outside this segment)
+        int32_t n_ub     = 0;
+        int32_t n_reused = 0;
+    } dt_seg;
     // true after the prism.hadamard coverage check passes on a reserved graph
     bool hadamard_verified = false;
 

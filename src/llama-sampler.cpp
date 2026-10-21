@@ -936,6 +936,9 @@ llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_conte
             cur[i] = llama_token_data{sampled_ids[i], sampled_logits[i], 0.0f};
         }
     } else {
+        if (llama_model_vocab_trim_n(llama_get_model(ctx)) > 0) {
+            throw std::runtime_error("LLAMA_VOCAB_TRIM: llama_sampler_sample needs the full-vocabulary logits");
+        }
         const auto * logits = llama_get_logits_ith(ctx, idx);
         GGML_ASSERT(logits != nullptr);
         cur.resize(n_vocab);

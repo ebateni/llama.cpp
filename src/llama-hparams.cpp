@@ -4,6 +4,15 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdlib>
+
+uint32_t llama_lx_split_bits() {
+    static const uint32_t bits = [] {
+        const char * v = std::getenv("LLAMA_LX_SPLIT");
+        return v ? (uint32_t) std::strtoul(v, nullptr, 0) : 0u;
+    }();
+    return bits;
+}
 
 void llama_hparams::set_swa_pattern(uint32_t n_pattern, bool dense_first) {
     if (dense_first) {
@@ -226,7 +235,7 @@ uint32_t llama_hparams::n_embd_r() const {
     // TODO: maybe support other convolution strides than 1
     // NOTE: since the first column of the conv_state is shifted out each time, it's not actually needed
     // Corresponds to Mamba's conv_states size
-    const uint32_t n_conv = (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * (ssm_d_inner + 2*ssm_n_group*ssm_d_state);
+    const uint32_t n_conv = (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * (ssm_d_inner + 2*ssm_n_group_eff()*ssm_d_state);
 
     // PLE conv history needs its own row: Meta splits cache_r_l by head, so a history packed behind the first is unaddressable
     // it lives in cache_ple_r_l instead, mirrored like the rest of the PLE module

@@ -74,9 +74,6 @@ static inline ggml_tensor * llama_mul_mat_hadamard(
     return res;
 }
 
-// Prefetch the host pages needed to gather these rows.
-void llama_prefetch_rows(const ggml_tensor * tensor, const int32_t * rows, size_t n_rows);
-
 struct time_meas {
     time_meas(int64_t & t_acc, bool disable = false);
     ~time_meas();
@@ -108,3 +105,6 @@ std::string llama_format_tensor_shape(const std::vector<int64_t> & ne);
 std::string llama_format_tensor_shape(const struct ggml_tensor * t);
 
 std::string gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i);
+
+// advisory prefetch of selected rows; a no-op on this branch
+void llama_prefetch_rows(const struct ggml_tensor * tensor, const int32_t * rows, size_t n_rows);

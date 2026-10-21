@@ -73,6 +73,16 @@ GGML_API bool ggml_gallocr_alloc_graph(ggml_gallocr_t galloc, struct ggml_cgraph
 
 GGML_API size_t ggml_gallocr_get_buffer_size(ggml_gallocr_t galloc, int buffer_id);
 
+// diagnostics (GGML_SCHED_TRACE): full reserves so far, and a hash of the positional tensor layout that a later
+// ggml_gallocr_alloc_graph call reuses
+GGML_API size_t   ggml_gallocr_debug_n_reserve(ggml_gallocr_t galloc);
+GGML_API uint64_t ggml_gallocr_debug_layout_hash(ggml_gallocr_t galloc);
+
+// Layout slots: one gallocr keeps the positional assignments of one reserve per slot; the slots share the buffers. Slot 0 is active at creation.
+// A graph of another topology class then does not replace the layout that other graphs inherit (ggml_gallocr_alloc_graph reuses the positions of the last reserve while the node count and the tensor sizes fit).
+#define GGML_GALLOCR_LAYOUT_SLOTS 2
+GGML_API void ggml_gallocr_set_layout_slot(ggml_gallocr_t galloc, int slot);
+
 // Utils
 // Create a buffer and allocate all the tensors in a ggml_context
 

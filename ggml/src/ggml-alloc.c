@@ -493,6 +493,16 @@ struct ggml_gallocr {
 
     struct leaf_alloc * leaf_allocs; // [n_leafs]
     int n_leafs;
+    size_t n_reserve; // full reserves so far (GGML_SCHED_TRACE diagnostics only)
+
+    // layout slots (ggml_gallocr_set_layout_slot): assignments of the inactive slots; the active slot's entries are NULL
+    int active_slot;
+    struct {
+        struct node_alloc * node_allocs;
+        int                 n_nodes;
+        struct leaf_alloc * leaf_allocs;
+        int                 n_leafs;
+    } slots[GGML_GALLOCR_LAYOUT_SLOTS];
 };
 
 ggml_gallocr_t ggml_gallocr_new_n(ggml_backend_buffer_type_t * bufts, int n_bufs) {
@@ -576,6 +586,10 @@ void ggml_gallocr_free(ggml_gallocr_t galloc) {
     free(galloc->buf_tallocs);
     free(galloc->node_allocs);
     free(galloc->leaf_allocs);
+    for (int s = 0; s < GGML_GALLOCR_LAYOUT_SLOTS; s++) {
+        free(galloc->slots[s].node_allocs); // NULL for the active slot
+        free(galloc->slots[s].leaf_allocs);
+    }
     free(galloc);
 }
 
@@ -824,6 +838,9 @@ static void ggml_gallocr_alloc_graph_impl(ggml_gallocr_t galloc, struct ggml_cgr
 
 static bool ggml_gallocr_reserve_n_impl(
         ggml_gallocr_t galloc, struct ggml_cgraph * graph, const int * node_buffer_ids, const int * leaf_buffer_ids, bool no_alloc) {
+    if (!no_alloc) {
+        galloc->n_reserve++;
+    }
     size_t min_hash_size = graph->n_nodes + graph->n_leafs;
     // add 25% margin to avoid hash collisions
     min_hash_size += min_hash_size / 4;
@@ -1095,6 +1112,62 @@ bool ggml_gallocr_alloc_graph(ggml_gallocr_t galloc, struct ggml_cgraph * graph)
     }
 
     return true;
+}
+
+static uint64_t ggml_gallocr_hash_word(uint64_t h, uint64_t v) {
+    return (h ^ v) * 0x100000001b3ULL; // FNV-1a step on 64-bit words
+}
+
+static uint64_t ggml_gallocr_hash_talloc(uint64_t h, const struct tensor_alloc * a) {
+    h = ggml_gallocr_hash_word(h, (uint64_t) (int64_t) a->buffer_id);
+    h = ggml_gallocr_hash_word(h, (uint64_t) (int64_t) a->addr.chunk);
+    h = ggml_gallocr_hash_word(h, (uint64_t) a->addr.offset);
+    h = ggml_gallocr_hash_word(h, (uint64_t) a->size_max);
+    return h;
+}
+
+size_t ggml_gallocr_debug_n_reserve(ggml_gallocr_t galloc) {
+    return galloc->n_reserve;
+}
+
+uint64_t ggml_gallocr_debug_layout_hash(ggml_gallocr_t galloc) {
+    uint64_t h = 1469598103934665603ULL;
+    h = ggml_gallocr_hash_word(h, (uint64_t) galloc->n_nodes);
+    h = ggml_gallocr_hash_word(h, (uint64_t) galloc->n_leafs);
+    for (int i = 0; i < galloc->n_nodes; i++) {
+        h = ggml_gallocr_hash_talloc(h, &galloc->node_allocs[i].dst);
+        for (int j = 0; j < GGML_MAX_SRC; j++) {
+            h = ggml_gallocr_hash_talloc(h, &galloc->node_allocs[i].src[j]);
+        }
+    }
+    for (int i = 0; i < galloc->n_leafs; i++) {
+        h = ggml_gallocr_hash_talloc(h, &galloc->leaf_allocs[i].leaf);
+    }
+    return h;
+}
+
+void ggml_gallocr_set_layout_slot(ggml_gallocr_t galloc, int slot) {
+    GGML_ASSERT(slot >= 0 && slot < GGML_GALLOCR_LAYOUT_SLOTS);
+    if (slot == galloc->active_slot) {
+        return;
+    }
+    // park the active assignments in their slot, then take the requested slot's (empty if it was never reserved)
+    galloc->slots[galloc->active_slot].node_allocs = galloc->node_allocs;
+    galloc->slots[galloc->active_slot].n_nodes     = galloc->n_nodes;
+    galloc->slots[galloc->active_slot].leaf_allocs = galloc->leaf_allocs;
+    galloc->slots[galloc->active_slot].n_leafs     = galloc->n_leafs;
+
+    galloc->node_allocs = galloc->slots[slot].node_allocs;
+    galloc->n_nodes     = galloc->slots[slot].n_nodes;
+    galloc->leaf_allocs = galloc->slots[slot].leaf_allocs;
+    galloc->n_leafs     = galloc->slots[slot].n_leafs;
+
+    galloc->slots[slot].node_allocs = NULL;
+    galloc->slots[slot].n_nodes     = 0;
+    galloc->slots[slot].leaf_allocs = NULL;
+    galloc->slots[slot].n_leafs     = 0;
+
+    galloc->active_slot = slot;
 }
 
 size_t ggml_gallocr_get_buffer_size(ggml_gallocr_t galloc, int buffer_id) {

@@ -2669,6 +2669,37 @@ struct ggml_tensor * ggml_concat(
     return result;
 }
 
+// ggml_concat_win
+
+struct ggml_tensor * ggml_concat_win(
+    struct ggml_context * ctx,
+    struct ggml_tensor  * a,
+    struct ggml_tensor  * b,
+    struct ggml_tensor  * offs) {
+    GGML_ASSERT(a->type == b->type);
+    GGML_ASSERT(a->type == GGML_TYPE_F32);
+    GGML_ASSERT(offs->type == GGML_TYPE_I32);
+    GGML_ASSERT(offs->ne[0] == a->ne[2] && offs->ne[1] == 1 && offs->ne[2] == 1 && offs->ne[3] == 1);
+    GGML_ASSERT(b->ne[1] == a->ne[1] && b->ne[2] == a->ne[2] && b->ne[3] == a->ne[3]);
+
+    int64_t ne[GGML_MAX_DIMS];
+    for (int d = 0; d < GGML_MAX_DIMS; ++d) {
+        ne[d] = a->ne[d];
+    }
+    ne[0] += b->ne[0];
+
+    struct ggml_tensor * result = ggml_new_tensor(ctx, a->type, GGML_MAX_DIMS, ne);
+
+    ggml_set_op_params_i32(result, 0, 0);
+
+    result->op     = GGML_OP_CONCAT;
+    result->src[0] = a;
+    result->src[1] = b;
+    result->src[2] = offs;
+
+    return result;
+}
+
 // ggml_abs
 
 struct ggml_tensor * ggml_abs(
@@ -6406,7 +6437,7 @@ struct ggml_tensor * ggml_gated_delta_net(
     GGML_ASSERT(v->type == GGML_TYPE_F32);
     GGML_ASSERT(g->type == GGML_TYPE_F32);
     GGML_ASSERT(beta->type == GGML_TYPE_F32);
-    GGML_ASSERT(state->type == GGML_TYPE_F32);
+    GGML_ASSERT(state->type == GGML_TYPE_F32 || state->type == GGML_TYPE_F16);
 
     const int64_t S_v      = v->ne[0];
     const int64_t H        = v->ne[1];
@@ -6438,6 +6469,20 @@ struct ggml_tensor * ggml_gated_delta_net(
     result->src[5] = state;
 
     return result;
+}
+
+// ggml_gated_delta_net_set_snap_range
+
+void ggml_gated_delta_net_set_snap_range(struct ggml_tensor * t, int32_t d0, int32_t n) {
+    GGML_ASSERT(t->op == GGML_OP_GATED_DELTA_NET);
+    GGML_ASSERT(d0 >= 0);
+    GGML_ASSERT(n >= 0);
+    if (n > 0) {
+        const int32_t K = ggml_get_op_params_i32(t, 0);
+        GGML_ASSERT(d0 + n - 1 <= K - 1);
+    }
+    ggml_set_op_params_i32(t, 3, d0);
+    ggml_set_op_params_i32(t, 4, n);
 }
 
 // ggml_lightning_indexer

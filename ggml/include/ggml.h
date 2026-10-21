@@ -1110,6 +1110,14 @@ extern "C" {
             struct ggml_tensor  * b,
             int                   dim);
 
+    // concat a and b along dim 0; offs (I32 [a->ne[2]]) adds offs[i2] elements to the read position of plane i2 of a
+    // used by the recurrent conv ring (LLAMA_RS_CONV_RING), see analysis/speed150/impl/ImplConvRing.md
+    GGML_API struct ggml_tensor * ggml_concat_win(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * offs);
+
     GGML_API struct ggml_tensor * ggml_abs(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
@@ -2664,6 +2672,13 @@ extern "C" {
             struct ggml_tensor  * beta,
             struct ggml_tensor  * state,
             int64_t               K);
+
+    // interval snapshot writes: the op writes snapshot slots s in [d0, d0+n) intersected with [1, K-1], plus slot 0 (final state, always written).
+    // n == 0 keeps the default: all slots 1..K-1. Stored in op_params[3] (d0) and op_params[4] (n); op_params[0] = K is unchanged. The HTP kernel reads the same slots.
+    GGML_API void ggml_gated_delta_net_set_snap_range(
+            struct ggml_tensor * t,
+            int32_t              d0,
+            int32_t              n);
 
     // DSA lightning indexer
     //

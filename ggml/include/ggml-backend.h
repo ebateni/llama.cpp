@@ -210,6 +210,12 @@ extern "C" {
     typedef void * (*ggml_backend_comm_init_t)(ggml_backend_t * backends, size_t n_backends);
     typedef void   (*ggml_backend_comm_free_t)(void * comm_ctx);
     typedef bool   (*ggml_backend_comm_allreduce_tensor_t)(void * comm_ctx, struct ggml_tensor ** tensors);
+    // Gap-fused residual add (optional, see ggml-backend-meta.cpp): partials[i] are the partial sums of one tensor-parallel boundary, residuals[i] the other operand of the residual ADD consuming them, dsts[i] that ADD's output (one per backend).
+    // Returns true only if ALLREDUCE+ADD was enqueued on every backend; the backends then skip those ADD nodes. Returns false with nothing enqueued. dry_run: validate only (the same answer, nothing enqueued, no state changed).
+    typedef bool   (*ggml_backend_comm_allreduce_add_tensor_t)(void * comm_ctx, struct ggml_tensor ** partials, struct ggml_tensor ** residuals, struct ggml_tensor ** dsts, bool dry_run);
+    // MC05: the same boundary plus the RMS_NORM behind the residual ADD and its MUL (norm weight). dry_run as above.
+    // The backend skips all three nodes. owner_only (RS-ROW, GGML_HEXAGON_RS_ROW): each backend writes only its own rows of the residual dst; the other rows keep their previous contents, so the caller guarantees that no other node reads them.
+    typedef bool   (*ggml_backend_comm_allreduce_add_rms_tensor_t)(void * comm_ctx, struct ggml_tensor ** partials, struct ggml_tensor ** residuals, struct ggml_tensor ** dsts, struct ggml_tensor ** rms_nodes, struct ggml_tensor ** mul_nodes, bool owner_only, bool dry_run);
 
     // Split buffer type for tensor parallelism (old)
     typedef ggml_backend_buffer_type_t   (*ggml_backend_split_buffer_type_t)(int main_device, const float * tensor_split);
@@ -368,6 +374,10 @@ extern "C" {
     // This in effect deallocates all tensors that were previously allocated and leaves them with dangling pointers.
     // The correct way to use this API is to discard the deallocated tensors and create new ones.
     GGML_API void                 ggml_backend_sched_reset(ggml_backend_sched_t sched);
+
+    // Layout slots (see ggml_gallocr_set_layout_slot): selects the slot of the next graph split, reserve and allocation.
+    // Call after ggml_backend_sched_reset and before the allocation of that graph.
+    GGML_API void                 ggml_backend_sched_set_layout_slot(ggml_backend_sched_t sched, int slot);
 
     // Set a callback to be called for each resulting node during graph compute
     GGML_API void                 ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data);

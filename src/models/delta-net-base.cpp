@@ -3,6 +3,8 @@
 #include "llama-impl.h"
 #include "llama-memory-recurrent.h"
 
+#include <cstdlib>
+
 // utility to get one slice from the third dimension
 // input dim:  [x, y, c, b]
 // output dim: [x, y, 1, b]
@@ -384,7 +386,9 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
     const int64_t H_v = v->ne[1];
 
     GGML_ASSERT(S_k == S_v);
-    GGML_ASSERT(H_v % H_k == 0);
+    // LLAMA_LX_SPLIT (lossy fork): the global K list has 17 heads (K5 copy) against 32 V heads, so the ratio is not an integer here.
+    // Each device holds its own K heads and the device kernel maps local V head i to local K head (i mod n_k), which is exact for the per-device layout (llama-model.cpp, llama_meta_device_get_split_state).
+    GGML_ASSERT(H_v % H_k == 0 || hparams.ssm_n_group_dup > 0);
 
     GGML_ASSERT(q->ne[0] == S_k && q->ne[1] == H_k && q->ne[2] == n_tokens && q->ne[3] == n_seqs);
     GGML_ASSERT(k->ne[0] == S_k && k->ne[1] == H_k && k->ne[2] == n_tokens && k->ne[3] == n_seqs);
@@ -443,13 +447,21 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
     return build_delta_net_chunking(q, k, v, g, b, s, il);
 }
 
+// LLAMA_P4K_CONV_FUSE=1 (default off): conv-tail reorder in build_conv_state, read per graph build
+static bool p4k_conv_fuse_enabled() {
+    const char * v = std::getenv("LLAMA_P4K_CONV_FUSE");
+    return v != nullptr && v[0] == '1';
+}
+
 ggml_tensor * llm_build_delta_net_base::build_conv_state(
         llm_graph_input_rs * inp,
         ggml_tensor *        conv_states_all,
         ggml_tensor *        qkv_mixed,
         int64_t              conv_kernel_size,
         int64_t              conv_channels,
-        int                  il) {
+        int                  il,
+        bool                 inplace_ok,
+        bool                 mark_zero_state) {
     const auto * mctx_cur = inp->mctx;
 
     const auto kv_head  = mctx_cur->get_head();
@@ -457,12 +469,57 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
 
     const int64_t n_seqs = ubatch.n_seqs;
 
-    ggml_tensor * conv_states = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs);
+    if (mctx_cur->conv_ring()) {
+        // conv ring (LLAMA_RS_CONV_RING, ImplConvRing.md): each cell keeps its last (km-1+K) conv columns; the window of the rolled-back state is read at inp->s_conv_off, and the last columns are written back once per layer typed rows only change the GDN snapshot planes; the conv buffer always holds every window
+
+        const int64_t K         = (int64_t) cparams.n_rs_seq + 1;
+        const int64_t win_cols  = conv_kernel_size - 1;
+        const int64_t ring_cols = win_cols + K;
+
+        // LLAMA_RS_INPLACE_STATE: a cell read in place (inp->rs_inplace) is read from its cache row kv_head, not from a copy.
+        // Conv in-place is valid in ring mode too: the per-sequence window offset (s_conv_off) is applied inside CONCAT, not by the row view, and the persist CPY below writes row kv_head only after CONCAT has read it.
+        const bool inplace = inplace_ok && inp->rs_inplace;
+
+        ggml_tensor * rows = build_rs(conv_states_all, inp->s_copy_cell_main, inp->s_copy_cell_extra,
+                (int32_t) (ring_cols * conv_channels), (int32_t) n_seqs,
+                mctx_cur->get_n_rs(), kv_head, mem_size, mctx_cur->get_rs_z(), ggml_get_rows, inplace);
+
+        ggml_tensor * rows3 = ggml_reshape_3d(ctx0, rows, ring_cols, conv_channels, n_seqs);
+        ggml_tensor * win   = ggml_view_3d(ctx0, rows3, win_cols, conv_channels, n_seqs, rows3->nb[1], rows3->nb[2], 0);
+
+        ggml_tensor * qkv_t      = ggml_transpose(ctx0, qkv_mixed);
+        ggml_tensor * conv_input = ggml_concat_win(ctx0, win, qkv_t, inp->s_conv_off);
+        cb(conv_input, "conv_input", il);
+
+        // the last min(3+n_tok, ring_cols) columns become the cell's new conv buffer (one copy per layer)
+        const int64_t n_cols = conv_input->ne[0];
+        const int64_t n_keep = std::min<int64_t>(n_cols, ring_cols);
+
+        if (n_cols == ring_cols) {
+            // full row (M == K): conv_input has the cell row layout, so this is a plain 2D row write with the cache strides
+            ggml_tensor * keep_src = ggml_reshape_2d(ctx0, conv_input, ring_cols*conv_channels, n_seqs);
+            ggml_tensor * keep_dst = ggml_view_2d(ctx0, conv_states_all, ring_cols*conv_channels, n_seqs,
+                    conv_states_all->nb[1], kv_head*conv_states_all->nb[1]);
+            ggml_build_forward_expand(gf, ggml_cpy(ctx0, keep_src, keep_dst));
+        } else {
+            ggml_tensor * keep_src = ggml_view_3d(ctx0, conv_input, n_keep, conv_channels, n_seqs,
+                    conv_input->nb[1], conv_input->nb[2], (n_cols - n_keep)*conv_input->nb[0]);
+            ggml_tensor * keep_dst = ggml_view_3d(ctx0, conv_states_all, n_keep, conv_channels, n_seqs,
+                    ggml_row_size(conv_states_all->type, ring_cols), conv_states_all->nb[1],
+                    kv_head*conv_states_all->nb[1]);
+            ggml_build_forward_expand(gf, ggml_cpy(ctx0, keep_src, keep_dst));
+        }
+
+        return conv_input;
+    }
+
+    ggml_tensor * conv_states = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs, ggml_get_rows, mark_zero_state, inplace_ok);
     cb(conv_states, "conv_states", il);
 
     conv_states = ggml_reshape_3d(ctx0, conv_states, conv_kernel_size - 1, conv_channels, n_seqs);
     cb(conv_states, "conv_states_reshaped", il);
 
+    ggml_tensor * qkv_mixed_orig = qkv_mixed; // channel-major: [conv_channels, n_seq_tokens, n_seqs]
     qkv_mixed = ggml_transpose(ctx0, qkv_mixed);
     cb(qkv_mixed, "qkv_mixed_transposed", il);
 
@@ -473,7 +530,36 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
 
     const size_t row_size  = ggml_row_size(conv_states_all->type, row_count);
 
-    if (cparams.n_rs_seq == 0) {
+    // With >= conv_kernel_size - 1 tokens, the state tail is read from qkv_mixed. conv_input then has
+    // SSM_CONV as its only consumer, and this CPY goes before CONCAT so CONCAT stays adjacent to SSM_CONV.
+    const bool conv_tail_from_qkv = cparams.n_rs_seq == 0 && p4k_conv_fuse_enabled() &&
+            qkv_mixed_orig->ne[1] >= conv_kernel_size - 1;
+
+    if (conv_tail_from_qkv) {
+        // conv_states is read by CONCAT, so its GET_ROWS must come before the state write
+        ggml_build_forward_expand(gf, conv_states);
+        // The fused CONCAT+SSM_CONV op writes SSM_CONV's output while it still reads conv_states and qkv_mixed_orig. Without this, SSM_CONV's dst aliased conv_states (1-core prefill: wrong, run-to-run varying PPL).
+        // ggml-alloc never frees or reuses a graph output, so marking both inputs keeps the output from being placed over them.
+        ggml_set_output(conv_states);
+        ggml_set_output(qkv_mixed_orig);
+
+        const int64_t qkv_idx = qkv_mixed_orig->ne[1] - (conv_kernel_size - 1);
+
+        ggml_tensor * tail_pretrans = ggml_view_3d(ctx0, qkv_mixed_orig,
+                conv_channels, conv_kernel_size - 1, n_seqs,
+                qkv_mixed_orig->nb[1], qkv_mixed_orig->nb[2],
+                qkv_idx * qkv_mixed_orig->nb[1]);
+        ggml_tensor * conv_state_last = ggml_transpose(ctx0, tail_pretrans);
+        cb(conv_state_last, "conv_state_last", il);
+
+        ggml_tensor * conv_state_update =
+            ggml_view_2d(ctx0, conv_states_all,
+                    row_count, n_seqs, conv_states_all->nb[1],
+                    kv_head * row_size);
+        cb(conv_state_update, "conv_state_update", il);
+
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, conv_state_last, conv_state_update));
+    } else if (cparams.n_rs_seq == 0) {
         const int64_t s_idx  = conv_input->ne[0] - conv_states->ne[0];
         const int64_t s_slot = 0;
 
@@ -497,10 +583,21 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
         //   the same ubatch, which `split_equal()` guarantees via its n_keep_tail argument
 
         const int64_t K = (int64_t) cparams.n_rs_seq + 1;
+        // tokens in this ubatch: the GDN snapshot planes cover min(n_tok, K) distances (build_recurrent_attn)
+        const int64_t n_tok = conv_input->ne[0] - conv_states->ne[0];
 
         for (int64_t t = 1; t <= K; ++t) {
             const int64_t s_idx  = std::max<int64_t>(0, conv_input->ne[0] - conv_states->ne[0] - K + t);
             const int64_t s_slot = K - t;
+            // typed rows: write only slot 0 and the requested window [d0, d0+n); n == 0 writes all slots
+            if (cparams.rs_snap_n != 0 && s_slot != 0 &&
+                    (s_slot < cparams.rs_snap_d0 || s_slot >= cparams.rs_snap_d0 + cparams.rs_snap_n)) {
+                continue;
+            }
+            // untyped: slots at or beyond n_tok are not written, matching the GDN snapshot planes (min(n_tok, K))
+            if (cparams.rs_snap_n == 0 && s_slot >= n_tok) {
+                continue;
+            }
 
             ggml_tensor * conv_state_last =
                 ggml_view_3d(ctx0, conv_input,
@@ -562,6 +659,7 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
 
     // state s is 4D [S_v, S_v, H_v, n_seqs]; K snapshot slots are written into the output.
     ggml_tensor * gdn_out = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, K);
+    ggml_gated_delta_net_set_snap_range(gdn_out, cparams.rs_snap_d0, cparams.rs_snap_n);
     if (n_seq_tokens > 1) {
         res->add_fused_node({LLM_FUSED_OP_GDN_CH, gdn_out, il});
     } else {
@@ -585,19 +683,38 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
     const int64_t n_written = std::min<int64_t>(n_seq_tokens, K);
 
     // write the produced snapshots into the recurrent cache (snapshot slot i -> rollback group i)
-    ggml_tensor * src = ggml_view_3d(ctx0, gdn_out,
-        D, n_seqs, n_written,
-        ggml_row_size(gdn_out->type, D),
-        ggml_row_size(gdn_out->type, state_size_per_snap),
-        ggml_row_size(gdn_out->type, attn_score_elems));
+    // copy the planes [p0, p1) of the snapshot region into the cache cells (plane p -> cell p*mem_size + kv_head)
+    auto copy_planes = [&](int64_t p0, int64_t p1) {
+        ggml_tensor * src = ggml_view_3d(ctx0, gdn_out,
+            D, n_seqs, p1 - p0,
+            ggml_row_size(gdn_out->type, D),
+            ggml_row_size(gdn_out->type, state_size_per_snap),
+            ggml_row_size(gdn_out->type, attn_score_elems) + p0 * ggml_row_size(gdn_out->type, state_size_per_snap));
 
-    ggml_tensor * dst = ggml_view_3d(ctx0, ssm_states_all,
-        D, n_seqs, n_written,
-        ssm_states_all->nb[1],
-        (size_t) mem_size * row_size,
-        (size_t) kv_head * row_size);
+        ggml_tensor * dst = ggml_view_3d(ctx0, ssm_states_all,
+            D, n_seqs, p1 - p0,
+            ssm_states_all->nb[1],
+            (size_t) mem_size * row_size,
+            (size_t) (p0 * mem_size + kv_head) * row_size);
 
-    ggml_build_forward_expand(gf, ggml_cpy(ctx0, src, dst));
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, src, dst));
+    };
+
+    if (cparams.rs_snap_n == 0) {
+        copy_planes(0, n_written);
+    } else {
+        // typed rows: plane 0 (final state) and the window [d0, d0+n); the other planes keep their old contents
+        const int64_t d0 = cparams.rs_snap_d0;
+        const int64_t d1 = std::min<int64_t>(d0 + cparams.rs_snap_n, n_written);
+        if (d0 <= 1) {
+            copy_planes(0, d1);
+        } else {
+            copy_planes(0, 1);
+            if (d0 < d1) {
+                copy_planes(d0, d1);
+            }
+        }
+    }
 
     return output;
 }

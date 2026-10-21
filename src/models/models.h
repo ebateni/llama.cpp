@@ -84,7 +84,9 @@ struct llm_build_delta_net_base : public llm_graph_context {
             ggml_tensor *        qkv_mixed,
             int64_t              conv_kernel_size,
             int64_t              conv_channels,
-            int                  il);
+            int                  il,
+            bool                 inplace_ok = false,
+            bool                 mark_zero_state = false);
 
     // run delta-net attention and write the new recurrent state(s) back to ssm_states_all
     // s: (head_v_dim, head_v_dim, num_v_heads, n_seqs); returns output: (head_v_dim, num_v_heads, n_seq_tokens, n_seqs)
@@ -2488,7 +2490,8 @@ struct llama_model_qwen35 : public llama_model_base {
                     ggml_tensor * cur,
                     ggml_tensor * inp_pos,
                             int * sections,
-                            int   il);
+                            int   il,
+                    ggml_tensor * out_ids = nullptr); // last layer: gate/out-proj only on these rows (returns n_outputs rows)
 
         ggml_tensor * build_layer_attn_linear(
              llm_graph_input_rs * inp,

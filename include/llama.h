@@ -597,6 +597,10 @@ extern "C" {
     LLAMA_API enum llama_rope_type       llama_model_rope_type(const struct llama_model * model);
 
     LLAMA_API int32_t llama_model_n_ctx_train  (const struct llama_model * model);
+
+    // when enabled, every logits row has llama_model_vocab_trim_n() entries: entry k is the logit of token ids[k].
+    LLAMA_API int32_t         llama_model_vocab_trim_n  (const struct llama_model * model);
+    LLAMA_API const int32_t * llama_model_vocab_trim_ids(const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd       (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd_inp   (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd_out   (const struct llama_model * model);
@@ -1112,6 +1116,10 @@ extern "C" {
     // Set whether to use causal attention or not
     // If set to true, the model will only attend to the past tokens
     LLAMA_API void llama_set_causal_attn(struct llama_context * ctx, bool causal_attn);
+
+    // Snapshot range (d0, n) for the NEXT llama_decode() call only (typed / forced-tail batches). The range is reset to (0, 0) after llama_decode().
+    // Rollback distances in {0} U [d0, d0+n) get their recurrent snapshots written; n == 0 writes all (default).
+    LLAMA_API void llama_set_rs_snap_range(struct llama_context * ctx, int32_t d0, int32_t n);
 
     // Returns whether the context is currently using causal attention
     LLAMA_API bool llama_get_causal_attn(const struct llama_context * ctx);

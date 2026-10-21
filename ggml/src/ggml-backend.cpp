@@ -923,6 +923,13 @@ struct ggml_backend_sched_split {
     struct ggml_cgraph graph;
 };
 
+struct ggml_backend_sched_slot_ids {
+    int * node_backend_ids;
+    int * leaf_backend_ids;
+    int * prev_node_backend_ids;
+    int * prev_leaf_backend_ids;
+};
+
 struct ggml_backend_sched {
     bool is_reset; // true if the scheduler has been reset since the last graph split
     bool is_alloc;
@@ -943,6 +950,10 @@ struct ggml_backend_sched {
 
     int * prev_node_backend_ids; // [graph_size]
     int * prev_leaf_backend_ids; // [graph_size]
+
+    // layout slots (ggml_backend_sched_set_layout_slot): id arrays of the inactive slots; the active slot's are the fields above
+    int layout_slot;
+    struct ggml_backend_sched_slot_ids slot_ids[GGML_GALLOCR_LAYOUT_SLOTS];
 
     // copy of the graph with modified inputs
     struct ggml_cgraph graph;
@@ -1984,6 +1995,14 @@ ggml_backend_sched_t ggml_backend_sched_new(
     sched->leaf_backend_ids = (int *) calloc(nodes_size, sizeof(sched->leaf_backend_ids[0]));
     sched->prev_node_backend_ids = (int *) calloc(nodes_size, sizeof(sched->prev_node_backend_ids[0]));
     sched->prev_leaf_backend_ids = (int *) calloc(nodes_size, sizeof(sched->prev_leaf_backend_ids[0]));
+    sched->layout_slot = 0;
+    sched->slot_ids[0] = {};
+    for (int s = 1; s < GGML_GALLOCR_LAYOUT_SLOTS; s++) {
+        sched->slot_ids[s].node_backend_ids      = (int *) calloc(nodes_size, sizeof(int));
+        sched->slot_ids[s].leaf_backend_ids      = (int *) calloc(nodes_size, sizeof(int));
+        sched->slot_ids[s].prev_node_backend_ids = (int *) calloc(nodes_size, sizeof(int));
+        sched->slot_ids[s].prev_leaf_backend_ids = (int *) calloc(nodes_size, sizeof(int));
+    }
 
     sched->graph_size      = 0;
     sched->prev_graph_size = 0;
@@ -2041,6 +2060,15 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
     free(sched->leaf_backend_ids);
     free(sched->prev_node_backend_ids);
     free(sched->prev_leaf_backend_ids);
+    for (int s = 0; s < GGML_GALLOCR_LAYOUT_SLOTS; s++) {
+        if (s == sched->layout_slot) {
+            continue;
+        }
+        free(sched->slot_ids[s].node_backend_ids);
+        free(sched->slot_ids[s].leaf_backend_ids);
+        free(sched->slot_ids[s].prev_node_backend_ids);
+        free(sched->slot_ids[s].prev_leaf_backend_ids);
+    }
     free(sched->context_buffer);
     free(sched->graph.nodes);
     free(sched->graph.leafs);
@@ -2057,6 +2085,24 @@ void ggml_backend_sched_reset(ggml_backend_sched_t sched) {
         sched->is_reset = true;
     }
     sched->is_alloc = false;
+}
+
+void ggml_backend_sched_set_layout_slot(ggml_backend_sched_t sched, int slot) {
+    GGML_ASSERT(sched);
+    GGML_ASSERT(slot >= 0 && slot < GGML_GALLOCR_LAYOUT_SLOTS);
+    GGML_ASSERT(!sched->is_alloc); // the assignments of an allocated graph stay with that graph
+    if (slot == sched->layout_slot) {
+        return;
+    }
+    // park the active id arrays with their slot, then take the requested slot's
+    sched->slot_ids[sched->layout_slot] = { sched->node_backend_ids, sched->leaf_backend_ids, sched->prev_node_backend_ids, sched->prev_leaf_backend_ids };
+    sched->node_backend_ids      = sched->slot_ids[slot].node_backend_ids;
+    sched->leaf_backend_ids      = sched->slot_ids[slot].leaf_backend_ids;
+    sched->prev_node_backend_ids = sched->slot_ids[slot].prev_node_backend_ids;
+    sched->prev_leaf_backend_ids = sched->slot_ids[slot].prev_leaf_backend_ids;
+    sched->slot_ids[slot] = {}; // the active slot's arrays live in the fields above; the entry is cleared, never read
+    ggml_gallocr_set_layout_slot(sched->galloc, slot);
+    sched->layout_slot = slot;
 }
 
 void ggml_backend_sched_reserve_size(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph, size_t * sizes) {

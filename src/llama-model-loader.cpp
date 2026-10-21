@@ -13,7 +13,6 @@
 #include <cstring>
 #include <future>
 #include <regex>
-#include <unordered_set>
 
 static const size_t kiB = 1024;
 static const size_t MiB = 1024*kiB;
@@ -862,6 +861,15 @@ const llama_model_loader::llama_tensor_weight & llama_model_loader::require_weig
     return *weight;
 }
 
+void llama_model_loader::set_tensor_alias(const char * name, const char * gguf_name) {
+    tensor_aliases.emplace(name, gguf_name);
+}
+
+const char * llama_model_loader::tensor_source_name(const char * name) const {
+    const auto it = tensor_aliases.find(name);
+    return it != tensor_aliases.end() ? it->second.c_str() : name;
+}
+
 struct ggml_tensor * llama_model_loader::get_tensor_meta(const char * name) const {
     const auto * weight = get_weight(name);
     if (!weight) {
@@ -1295,7 +1303,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
             return nullptr;
         }
         ggml_type type = GGML_TYPE_F32;
-        const int64_t tid = gguf_find_tensor(metadata, tn.str().c_str());
+        const int64_t tid = gguf_find_tensor(metadata, tensor_source_name(tn.str().c_str()));
         if (tid != -1) {
             type = gguf_get_tensor_type(metadata, tid);
         }
@@ -1335,14 +1343,14 @@ struct ggml_tensor * llama_model_loader::create_tensor(
     }
 
     LLAMA_LOG_DEBUG("%s: loading tensor %s\n", __func__, tn.str().c_str());
-    const struct ggml_tensor * cur = check_tensor_dims(tn.str(), ne, !(flags & TENSOR_NOT_REQUIRED), flags & TENSOR_ALLOW_RESHAPE);
+    const struct ggml_tensor * cur = check_tensor_dims(tensor_source_name(tn.str().c_str()), ne, !(flags & TENSOR_NOT_REQUIRED), flags & TENSOR_ALLOW_RESHAPE);
     if (cur == NULL) {
         return NULL;
     }
 
     if (flags & TENSOR_READ_LAZY) {
         // the decision must not depend on the load mode, or the memory-fit pass (no_alloc, no mmap)
-        is_lazy = lazy.add(tn.str(), cur, no_alloc ? nullptr : &require_weight(tn.str().c_str()));
+        is_lazy = lazy.add(tn.str(), cur, no_alloc ? nullptr : &require_weight(tensor_source_name(tn.str().c_str())));
     }
 
     ggml_tensor t_meta = *cur;
@@ -1379,7 +1387,8 @@ struct ggml_tensor * llama_model_loader::create_tensor(
     const bool duplicated = flags & TENSOR_DUPLICATED;
 
     struct ggml_tensor * tensor = ggml_dup_tensor(ctx, &t_meta);
-    ggml_set_name(tensor, ggml_get_name(&t_meta));
+    // an aliased tensor is named after its model tensor, not its GGUF source
+    ggml_set_name(tensor, tn.str().c_str());
 
     if (duplicated) {
         size_data += ggml_nbytes(&t_meta);
@@ -1447,80 +1456,19 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
     }
 }
 
-using mapping_ranges = std::vector<llama_model_loader::mapping_range>;
+void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void ** addr, int idx, ggml_context * ctx) const {
+    GGML_ASSERT(!mappings.empty());
+    const auto & mapping = mappings.at(idx);
 
-// merge a list of [first, last) ranges into a sorted, non-overlapping list
-static mapping_ranges merge_ranges(mapping_ranges ranges) {
-    std::sort(ranges.begin(), ranges.end(), [](const auto & a, const auto & b) { return a.first < b.first; });
-
-    mapping_ranges res;
-    for (const auto & range : ranges) {
-        if (!res.empty() && range.first <= res.back().last) {
-            res.back().last = std::max(res.back().last, range.last);
-        } else {
-            res.push_back(range);
-        }
-    }
-
-    return res;
-}
-
-// subtract the sorted, non-overlapping ranges 'sub' from 'a'
-static mapping_ranges sub_ranges(const mapping_ranges & a, const mapping_ranges & sub) {
-    mapping_ranges res;
-
-    for (const auto & x : a) {
-        size_t cur = x.first;
-        for (const auto & y : sub) {
-            if (y.last <= cur || y.first >= x.last) {
-                continue;
-            }
-            if (y.first > cur) {
-                res.push_back({ cur, y.first });
-            }
-            cur = std::max(cur, y.last);
-        }
-        if (cur < x.last) {
-            res.push_back({ cur, x.last });
-        }
-    }
-
-    return res;
-}
-
-std::vector<llama_model_loader::mapping_range> llama_model_loader::get_mapping_ranges(uint32_t idx, ggml_context * ctx) const {
-    GGML_ASSERT(idx < mappings.size());
-
-    // data of this context, and data of the other contexts that share the same file
-    // a weight that is mapped in several contexts (e.g. the token embedding) is not foreign data
-    std::unordered_set<const llama_tensor_weight *> own;
-    mapping_ranges own_ranges;
-    mapping_ranges other;
-
+    // first = mapping->size(); last = 0; addr = mapping->addr();
     for (ggml_tensor * tensor = ggml_get_first_tensor(ctx); tensor; tensor = ggml_get_next_tensor(ctx, tensor)) {
-        const auto * weight = get_weight(ggml_get_name(tensor));
+        const auto * weight = get_weight(tensor_source_name(ggml_get_name(tensor)));
         if (!weight || weight->idx != idx) {
             continue;
         }
-        own.insert(weight);
-        own_ranges.push_back({ weight->offs, weight->offs + ggml_nbytes(tensor) });
+        *first = std::min(*first, weight->offs);
+        *last  = std::max(*last,  weight->offs + ggml_nbytes(tensor));
     }
-
-    for (const auto & it : ctx_map) {
-        if (!it.second || it.second.get() == ctx) {
-            continue;
-        }
-
-        for (ggml_tensor * tensor = ggml_get_first_tensor(it.second.get()); tensor; tensor = ggml_get_next_tensor(it.second.get(), tensor)) {
-            const auto * weight = get_weight(ggml_get_name(tensor));
-            if (!weight || weight->idx != idx || own.count(weight)) {
-                continue;
-            }
-            other.push_back({ weight->offs, weight->offs + ggml_nbytes(tensor) });
-        }
-    }
-
-    return sub_ranges(merge_ranges(std::move(own_ranges)), merge_ranges(std::move(other)));
 }
 
 void llama_model_loader::unmap_weight(const llama_tensor_weight & w) const {
@@ -1552,7 +1500,7 @@ const void * llama_model_loader::load_data_range(const llama_tensor_weight & w, 
 
 bool llama_model_loader::load_all_data(
         struct ggml_context * ctx,
-        std::vector<ggml_backend_buffer_t> & bufs,
+        llama_buf_map & bufs,
         llama_mlocks * lmlocks,
         llama_progress_callback progress_callback,
         void * progress_callback_user_data) {
@@ -1576,7 +1524,8 @@ bool llama_model_loader::load_all_data(
     }
 
     // Buffer size: balance between memory usage and I/O efficiency
-    const size_t buffer_size = alignment != 1 ? LLAMA_DIRECT_IO_BUFFER_SIZE + 2 * alignment : 1 * 1024 * 1024;
+    // 64MB works well for NVMe drives
+    const size_t buffer_size = alignment != 1 ? 64 * 1024 * 1024 + 2 * alignment : 1 * 1024 * 1024;
 
     std::vector<ggml_backend_buffer_t> host_buffers;
     std::vector<ggml_backend_event_t> events;
@@ -1588,7 +1537,7 @@ bool llama_model_loader::load_all_data(
         }
         // When not using mmaped io use async uploads from pinned memory to GPU memory.
         // First determine if the backend supports the necessary features for async uploads.
-        auto * buf = bufs.empty() ? nullptr : bufs[0];
+        auto * buf = bufs.count(0) ? bufs.at(0) : nullptr;
         if (!buf) {
             LLAMA_LOG_DEBUG("%s: no buffer found for async uploads\n", func);
             return nullptr;
@@ -1659,7 +1608,7 @@ bool llama_model_loader::load_all_data(
     if (upload_backend) {
         LLAMA_LOG_DEBUG("%s: using async uploads for device %s, buffer type %s, backend %s\n", __func__,
             ggml_backend_dev_name(ggml_backend_get_device(upload_backend)),
-            ggml_backend_buft_name(ggml_backend_buffer_get_type(bufs[0])),
+            ggml_backend_buft_name(ggml_backend_buffer_get_type(bufs.at(0))),
             ggml_backend_name(upload_backend));
     }
 
@@ -1682,7 +1631,7 @@ bool llama_model_loader::load_all_data(
     }
 
     for (struct ggml_tensor * cur : tensors) {
-        const auto * weight = get_weight(ggml_get_name(cur));
+        const auto * weight = get_weight(tensor_source_name(ggml_get_name(cur)));
         if (weight == nullptr) {
             // this can happen with split experts models
             continue;
@@ -1700,17 +1649,11 @@ bool llama_model_loader::load_all_data(
 
         if (from_mapping) {
             const auto & mapping = mappings.at(weight->idx);
-            uint8_t * data = (uint8_t *) mapping->addr() + weight->offs;
-
-            // the tensors of a file can be spread across several buffers - find the one containing this tensor's data
             ggml_backend_buffer_t buf_mmap = nullptr;
-            for (const auto & buf : bufs) {
-                const uint8_t * base = (const uint8_t *) ggml_backend_buffer_get_base(buf);
-                if (base && base <= data && data + n_size <= base + ggml_backend_buffer_get_size(buf)) {
-                    buf_mmap = buf;
-                    break;
-                }
+            if (bufs.count(weight->idx)) {
+                buf_mmap = bufs.at(weight->idx);
             }
+            uint8_t * data = (uint8_t *) mapping->addr() + weight->offs;
 
             if (check_tensors) {
                 validation_result.emplace_back(std::async(std::launch::async, [cur, data, n_size] {

@@ -489,6 +489,385 @@ static struct ggml_tensor * ggml_backend_meta_buffer_simple_tensor(const struct 
     return it->second[index];
 }
 
+// --------------------------------------------------------------------------------------------------------------------- LX: segment-aware split propagation (LLAMA_LX_SPLIT, lossy fork). All other tensors keep the baseline path, where every segment has the same share per device, so the single-segment override is exact there. The LX rules keep each segment with its own per-device sizes, and init_tensor takes the device-local view offsets and strides from the segment starts (ggml_backend_meta_lx_view_layout).
+// --------------------------------------------------------------------------------------------------------------------- A tensor takes the LX path when one of its sources has several segments whose per-device shares differ: the qwen35 recurrent layout with 17 K/Q heads (K5 copy) and 16 + 16 V heads (llama-model.cpp, llama_meta_device_get_split_state).
+
+static int64_t ggml_backend_meta_lx_seg_total(const ggml_backend_meta_split_state & ss, uint32_t s, size_t n_bufs) {
+    int64_t t = 0;
+    for (size_t j = 0; j < n_bufs; j++) {
+        t += ss.ne[s*n_bufs + j];
+    }
+    return t * ss.nr[s];
+}
+
+// true when some segment has a per-device share different from the share of segment 0
+static bool ggml_backend_meta_lx_nonuniform(const ggml_backend_meta_split_state & ss, size_t n_bufs) {
+    if (ss.axis < 0 || ss.axis >= GGML_MAX_DIMS || ss.n_segments <= 1) {
+        return false;
+    }
+    const int64_t t0 = ggml_backend_meta_lx_seg_total(ss, 0, n_bufs);
+    for (uint32_t s = 1; s < ss.n_segments; s++) {
+        const int64_t ts = ggml_backend_meta_lx_seg_total(ss, s, n_bufs);
+        for (size_t j = 0; j < n_bufs; j++) {
+            if (ss.ne[s*n_bufs + j] * t0 != ss.ne[j] * ts) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static bool ggml_backend_meta_lx_equal(const ggml_backend_meta_split_state & a, const ggml_backend_meta_split_state & b, size_t n_bufs) {
+    if (a.axis != b.axis || a.n_segments != b.n_segments) {
+        return false;
+    }
+    for (uint32_t s = 0; s < a.n_segments; s++) {
+        if (a.nr[s] != b.nr[s]) {
+            return false;
+        }
+        for (size_t j = 0; j < n_bufs; j++) {
+            if (a.ne[s*n_bufs + j] != b.ne[s*n_bufs + j]) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// elementwise, unary, bias, gather and concat ops: the output keeps the segments of its LX sources
+static ggml_backend_meta_split_state ggml_backend_meta_lx_copy(
+        const ggml_tensor * tensor, const ggml_backend_meta_split_state * src_ss, size_t n_bufs) {
+    const ggml_backend_meta_split_state * first = nullptr;
+    for (size_t i = 0; i < GGML_MAX_SRC; i++) {
+        if (tensor->src[i] == nullptr || tensor->src[i] == tensor || src_ss[i].axis < 0 || src_ss[i].axis >= GGML_MAX_DIMS) {
+            continue;
+        }
+        if (first == nullptr) {
+            first = &src_ss[i];
+        } else {
+            GGML_ASSERT(ggml_backend_meta_lx_equal(*first, src_ss[i], n_bufs) && "LX: sources with different segment layouts");
+        }
+    }
+    GGML_ASSERT(first != nullptr);
+    return *first;
+}
+
+// reshape / cont: the split axis A of the source (size N, flat stride P of the dims below it) moves to the destination dim B
+// with dst_ne[B] * Q == N * P, Q being the flat stride of B. Per-device sizes scale by P / Q (merges multiply, splits divide).
+static ggml_backend_meta_split_state ggml_backend_meta_lx_reshape(
+        const ggml_backend_meta_split_state & src, const int64_t * src_ne, const int64_t * dst_ne, size_t n_bufs) {
+    int64_t P = 1;
+    for (int d = 0; d < src.axis; d++) {
+        P *= src_ne[d];
+    }
+    const int64_t NP = src_ne[src.axis] * P;
+    int     best    = -1;
+    int64_t best_ne = 0;
+    int64_t best_Q  = 1;
+    int64_t Q       = 1;
+    for (int b = 0; b < GGML_MAX_DIMS; b++) {
+        if (dst_ne[b] * Q == NP && dst_ne[b] > best_ne) { // prefer the non-singleton match
+            best    = b;
+            best_ne = dst_ne[b];
+            best_Q  = Q;
+        }
+        Q *= dst_ne[b];
+    }
+    GGML_ASSERT(best >= 0 && "LX reshape: split axis has no destination dim");
+    ggml_backend_meta_split_state ret = src;
+    ret.axis = (ggml_backend_meta_split_axis) best;
+    for (uint32_t s = 0; s < src.n_segments; s++) {
+        for (size_t j = 0; j < n_bufs; j++) {
+            const int64_t num = src.ne[s*n_bufs + j] * P;
+            GGML_ASSERT(num % best_Q == 0 && "LX reshape: segment size not divisible");
+            ret.ne[s*n_bufs + j] = num / best_Q;
+        }
+    }
+    return ret;
+}
+
+// byte offset off of a tensor with byte strides nb -> element indices c[d] along each dim
+static void ggml_backend_meta_lx_coords(const size_t * nb, size_t off, int64_t * c) {
+    for (int d = GGML_MAX_DIMS - 1; d >= 0; d--) {
+        c[d] = nb[d] == 0 ? 0 : (int64_t) (off / nb[d]);
+        off  = nb[d] == 0 ? off : off % nb[d];
+    }
+    GGML_ASSERT(off == 0 && "LX view: offset is not on the element grid");
+}
+
+// the chain of a view along the source split axis A: dims (size > 1, in order) whose stride is the stride of A times the A-extent of the dims below them, up to the source extent. The view then reads a window of the dims below in each block of `block` A-units; the blocks are the split dim and span covers all of them.
+// A stride of a whole source row (the source extent) ends the chain: the outer dims are rows of the source. The outermost chain dim is the split dim of the view; block is the A-extent per index of that dim and span the A-extent the view covers. Returns -1 if the view has no such chain. One strided dim may end the chain: a stride that is a multiple of the A stride, larger than the A-extent below it and smaller than the source extent (the conv ring write-back reads the first n_keep of the ring_cols columns of every channel).
+static int ggml_backend_meta_lx_view_chain(const ggml_tensor * tensor, int A, int64_t & block, int64_t & span) {
+    const ggml_tensor * src = tensor->src[0];
+    const int64_t NA = src->ne[A];
+    int     vd    = -1;
+    int64_t inner = 1;
+    block = 1;
+    for (int d = 0; d < GGML_MAX_DIMS; d++) {
+        if (tensor->ne[d] == 1) {
+            continue;
+        }
+        if (inner >= NA) {
+            break;
+        }
+        if (tensor->nb[d] == src->nb[A] * (size_t) inner) {
+            vd    = d;
+            block = inner;
+            inner *= tensor->ne[d];
+            continue;
+        }
+        const size_t stride = tensor->nb[d];
+        if (stride % src->nb[A] == 0 && (int64_t) (stride / src->nb[A]) > inner && (int64_t) (stride / src->nb[A]) < NA) {
+            vd    = d;
+            block = (int64_t) (stride / src->nb[A]);
+        }
+        break;
+    }
+    span = vd < 0 ? 0 : tensor->ne[vd] * block;
+    return span <= NA ? vd : -1;
+}
+
+// GDN state block [S_v, S_v, H, S] of the GDN result (after the attention rows): the heads are the v-head segments
+static bool ggml_backend_meta_lx_is_gdn_state(const ggml_tensor * tensor) {
+    return tensor->src[0] != nullptr && tensor->src[0]->op == GGML_OP_GATED_DELTA_NET && tensor->view_offs > 0 &&
+        tensor->ne[0] == tensor->ne[1];
+}
+
+// GDN snapshot planes: a GATED_DELTA_NET with K snapshots appends K state planes of S_v*S_v*H_v values after its attention
+// rows. A plane view is one whole plane (ne[0] = S_v*S_v*H_v, F32 elements).
+static bool ggml_backend_meta_lx_is_gdn_plane(const ggml_tensor * tensor) {
+    const ggml_tensor * gdn = tensor->src[0];
+    if (gdn == nullptr || gdn->op != GGML_OP_GATED_DELTA_NET || tensor->view_offs == 0 || tensor->nb[0] != sizeof(float)) {
+        return false;
+    }
+    const ggml_tensor * v = gdn->src[2];
+    return tensor->ne[0] == v->ne[0] * v->ne[0] * v->ne[1];
+}
+
+static ggml_backend_meta_split_state ggml_backend_meta_lx_view(
+        const ggml_tensor * tensor, const ggml_backend_meta_split_state & src, size_t n_bufs) {
+    const ggml_tensor * src0 = tensor->src[0];
+    bool same_strides = true;
+    for (int d = 0; d < GGML_MAX_DIMS; d++) {
+        if (tensor->ne[d] == 1 && src0->ne[d] == 1) {
+            continue;
+        }
+        if (tensor->nb[d] != src0->nb[d]) {
+            same_strides = false;
+            break;
+        }
+    }
+    if (same_strides && tensor->ne[src.axis] == src0->ne[src.axis]) {
+        return src; // same layout (cache rows, time windows): the segments carry over
+    }
+    if (ggml_backend_meta_lx_is_gdn_state(tensor)) {
+        const int64_t S_v = tensor->ne[0];
+        ggml_backend_meta_split_state ret = src;
+        ret.axis = GGML_BACKEND_SPLIT_AXIS_2;
+        for (uint32_t s = 0; s < src.n_segments; s++) {
+            for (size_t j = 0; j < n_bufs; j++) {
+                GGML_ASSERT(src.ne[s*n_bufs + j] % S_v == 0 && "LX gdn state: segment not a whole number of heads");
+                ret.ne[s*n_bufs + j] = src.ne[s*n_bufs + j] / S_v;
+            }
+        }
+        return ret;
+    }
+    if (ggml_backend_meta_lx_is_gdn_plane(tensor)) {
+        // head blocks of a snapshot plane: S_v*S_v values per head, on the head segments of the output (its columns, S_v each)
+        const int64_t S_v = src0->src[2]->ne[0];
+        ggml_backend_meta_split_state ret = src;
+        ret.axis = GGML_BACKEND_SPLIT_AXIS_0;
+        for (uint32_t s = 0; s < src.n_segments; s++) {
+            for (size_t j = 0; j < n_bufs; j++) {
+                ret.ne[s*n_bufs + j] = src.ne[s*n_bufs + j] * S_v;
+            }
+        }
+        return ret;
+    }
+    int64_t block = 1;
+    int64_t span  = 0;
+    const int vd = ggml_backend_meta_lx_view_chain(tensor, src.axis, block, span);
+    GGML_ASSERT(vd >= 0 && "LX view: view does not map onto the source split axis");
+    int64_t c[GGML_MAX_DIMS];
+    ggml_backend_meta_lx_coords(src0->nb, tensor->view_offs - src0->view_offs, c);
+    const int64_t a0 = c[src.axis];
+    ggml_backend_meta_split_state ret = src;
+    ret.axis       = (ggml_backend_meta_split_axis) vd;
+    ret.n_segments = 0;
+    int64_t G       = 0;
+    int64_t covered = 0;
+    for (uint32_t s = 0; s < src.n_segments; s++) {
+        const int64_t Ts    = ggml_backend_meta_lx_seg_total(src, s, n_bufs);
+        const int64_t start = G;
+        G += Ts;
+        if (start + Ts <= a0 || start >= a0 + span) {
+            continue;
+        }
+        GGML_ASSERT(start >= a0 && start + Ts <= a0 + span && "LX view: a segment is cut by the view");
+        GGML_ASSERT(src.nr[s] == 1 && "LX view: repeated segment");
+        const uint32_t k = ret.n_segments++;
+        ret.nr[k] = 1;
+        for (size_t j = 0; j < n_bufs; j++) {
+            const int64_t ne = src.ne[s*n_bufs + j];
+            GGML_ASSERT(ne % block == 0);
+            ret.ne[k*n_bufs + j] = ne / block;
+        }
+        covered += Ts;
+    }
+    GGML_ASSERT(covered == span && "LX view: the view does not cover whole segments");
+    GGML_ASSERT(covered / block == tensor->ne[vd] && "LX view: split size mismatch");
+    return ret;
+}
+
+// GATED_DELTA_NET: the output rows hold S_v values per head and token (and per state row), so its segments are the v-head
+// segments times S_v. q and k are local K/Q head lists; the kernel maps local V head i to local K head i mod n_k.
+static ggml_backend_meta_split_state ggml_backend_meta_lx_gdn(
+        const ggml_tensor * tensor, const ggml_backend_meta_split_state * src_ss, size_t n_bufs) {
+    for (size_t i = 0; i < 5; i++) {
+        GGML_ASSERT(src_ss[i].axis == GGML_BACKEND_SPLIT_AXIS_1 && "LX gated_delta_net: q, k, v, gate and beta split on heads");
+    }
+    GGML_ASSERT((src_ss[5].axis == GGML_BACKEND_SPLIT_AXIS_0 || src_ss[5].axis == GGML_BACKEND_SPLIT_AXIS_1 ||
+        src_ss[5].axis == GGML_BACKEND_SPLIT_AXIS_2) && "LX gated_delta_net: state split");
+    const int64_t S_v = tensor->src[2]->ne[0];
+    ggml_backend_meta_split_state ret = src_ss[2];
+    ret.axis = GGML_BACKEND_SPLIT_AXIS_0;
+    for (uint32_t s = 0; s < ret.n_segments; s++) {
+        for (size_t j = 0; j < n_bufs; j++) {
+            ret.ne[s*n_bufs + j] = src_ss[2].ne[s*n_bufs + j] * S_v;
+        }
+    }
+    return ret;
+}
+
+// mul_mat: output rows follow the weight rows (weight split on axis 1), or PARTIAL sums over the weight input axis
+static ggml_backend_meta_split_state ggml_backend_meta_lx_mul_mat(
+        const ggml_tensor * tensor, const ggml_backend_meta_split_state * src_ss, size_t n_bufs, bool assume_sync) {
+    if (src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_1 && src_ss[1].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED) {
+        ggml_backend_meta_split_state ret = src_ss[0];
+        ret.axis = GGML_BACKEND_SPLIT_AXIS_0;
+        return ret;
+    }
+    if (src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_0 && src_ss[1].axis == GGML_BACKEND_SPLIT_AXIS_0) {
+        GGML_ASSERT(ggml_backend_meta_lx_equal(src_ss[0], src_ss[1], n_bufs) && "LX mul_mat: weight and input segments differ");
+        return {assume_sync ? GGML_BACKEND_SPLIT_AXIS_MIRRORED : GGML_BACKEND_SPLIT_AXIS_PARTIAL, {0}, {1}, 1};
+    }
+    GGML_ABORT("LX split: unsupported mul_mat split states: node=%s src0=%s axis=%d src1=%s axis=%d",
+        tensor->name, tensor->src[0]->name, (int) src_ss[0].axis, tensor->src[1]->name, (int) src_ss[1].axis);
+}
+
+// segment-aware rule of one op for an LX tensor (no single-segment override)
+static ggml_backend_meta_split_state ggml_backend_meta_lx_calculate(
+        const ggml_tensor * tensor, const ggml_backend_meta_split_state * src_ss, size_t n_bufs, bool assume_sync) {
+    ggml_backend_meta_split_state ret = {GGML_BACKEND_SPLIT_AXIS_UNKNOWN, {0}, {1}, 1};
+    switch (tensor->op) {
+        case GGML_OP_MUL_MAT: {
+            ret = ggml_backend_meta_lx_mul_mat(tensor, src_ss, n_bufs, assume_sync);
+        } break;
+        case GGML_OP_ADD:
+        case GGML_OP_ADD_ID:
+        case GGML_OP_SUB:
+        case GGML_OP_MUL:
+        case GGML_OP_DIV:
+        case GGML_OP_SQR:
+        case GGML_OP_SQRT:
+        case GGML_OP_SCALE:
+        case GGML_OP_UNARY:
+        case GGML_OP_GLU:
+        case GGML_OP_GET_ROWS:
+        case GGML_OP_CONCAT: {
+            ret = ggml_backend_meta_lx_copy(tensor, src_ss, n_bufs);
+        } break;
+        case GGML_OP_RMS_NORM:
+        case GGML_OP_L2_NORM: {
+            GGML_ASSERT(src_ss[0].axis != GGML_BACKEND_SPLIT_AXIS_0 && "LX per-row norm over the split axis");
+            ret = src_ss[0];
+        } break;
+        case GGML_OP_RESHAPE:
+        case GGML_OP_CONT: {
+            ret = ggml_backend_meta_lx_reshape(src_ss[0], tensor->src[0]->ne, tensor->ne, n_bufs);
+        } break;
+        case GGML_OP_CPY: {
+            ret = ggml_backend_meta_lx_reshape(src_ss[0], tensor->src[0]->ne, tensor->ne, n_bufs);
+            GGML_ASSERT(ggml_backend_meta_lx_equal(ret, src_ss[1], n_bufs) && "LX cpy: destination segments differ from source");
+        } break;
+        case GGML_OP_VIEW: {
+            ret = ggml_backend_meta_lx_view(tensor, src_ss[0], n_bufs);
+        } break;
+        case GGML_OP_TRANSPOSE: {
+            GGML_ASSERT((src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_0 || src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_1) && "LX transpose axis");
+            ret = src_ss[0];
+            ret.axis = (ggml_backend_meta_split_axis) (int(src_ss[0].axis) ^ 1);
+        } break;
+        case GGML_OP_SSM_CONV: {
+            GGML_ASSERT(src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_1 && "LX ssm_conv: input split on channels");
+            GGML_ASSERT(ggml_backend_meta_lx_equal(src_ss[0], src_ss[1], n_bufs) && "LX ssm_conv: input and weight segments differ");
+            ret = src_ss[0];
+            ret.axis = GGML_BACKEND_SPLIT_AXIS_0;
+        } break;
+        case GGML_OP_GATED_DELTA_NET: {
+            ret = ggml_backend_meta_lx_gdn(tensor, src_ss, n_bufs);
+        } break;
+        default: {
+            GGML_ABORT("LX split: op %s (node %s) has no segment-aware rule", ggml_op_name(tensor->op), tensor->name);
+        }
+    }
+    if (ret.axis >= 0 && ret.axis < GGML_MAX_DIMS) {
+        int64_t t = 0;
+        for (uint32_t s = 0; s < ret.n_segments; s++) {
+            t += ggml_backend_meta_lx_seg_total(ret, s, n_bufs);
+        }
+        GGML_ASSERT(t == tensor->ne[ret.axis] && "LX split: segment sizes do not add up to the tensor size");
+    }
+    return ret;
+}
+
+// device-local layout of an LX view on device j: the start of the covered segments on device j (plus the other offsets, scaled by the simple source strides), and the strides of the simple source for the dims that map onto source dims.
+// src_node is the immediate source (src[0]; src[1] for CPY) with split state src_ss; view_ss is the split of the view.
+static void ggml_backend_meta_lx_view_layout(
+        const ggml_tensor * tensor, const ggml_tensor * src_node, const ggml_tensor * simple_src,
+        const ggml_backend_meta_split_state & src_ss, const ggml_backend_meta_split_state & view_ss, size_t j, size_t n_bufs,
+        size_t * nb_local, size_t * off_local) {
+    const int  A         = src_ss.axis;
+    const bool gdn_state = ggml_backend_meta_lx_is_gdn_state(tensor);
+    int64_t c[GGML_MAX_DIMS];
+    ggml_backend_meta_lx_coords(src_node->nb, tensor->view_offs - src_node->view_offs, c);
+    // device-local start of the segment that begins at the view's coordinate along A
+    int64_t a_global = 0;
+    int64_t a_local  = 0;
+    for (uint32_t s = 0; a_global < c[A] && s < src_ss.n_segments; s++) {
+        a_global += ggml_backend_meta_lx_seg_total(src_ss, s, n_bufs);
+        a_local  += src_ss.ne[s*n_bufs + j] * src_ss.nr[s];
+    }
+    GGML_ASSERT(a_global == c[A] && "LX view: offset is not at a segment start");
+    // strides: the view dim that carries the split keeps its stride, dims that map onto source dims use the simple source
+    for (int d = 0; d < GGML_MAX_DIMS; d++) {
+        if ((gdn_state && d == 2) || (!gdn_state && d == view_ss.axis)) {
+            nb_local[d] = tensor->nb[d];
+            continue;
+        }
+        bool done = false;
+        for (int k = 0; k < GGML_MAX_DIMS && !done; k++) {
+            if (src_node->nb[k] == tensor->nb[d]) {
+                nb_local[d] = simple_src->nb[k];
+                done = true;
+            }
+        }
+        // strides that are whole multiples of a source stride (the rows of the source, e.g. the token or state-row stride)
+        for (int k = GGML_MAX_DIMS - 1; k >= 0 && !done; k--) {
+            if (src_node->nb[k] > 0 && tensor->nb[d] >= src_node->nb[k] && tensor->nb[d] % src_node->nb[k] == 0) {
+                nb_local[d] = (tensor->nb[d] / src_node->nb[k]) * simple_src->nb[k];
+                done = true;
+            }
+        }
+        GGML_ASSERT(done && "LX view: stride without a source stride");
+    }
+    size_t off = simple_src->view_offs;
+    for (int d = 0; d < GGML_MAX_DIMS; d++) {
+        off += (size_t) (d == A ? a_local : c[d]) * simple_src->nb[d];
+    }
+    *off_local = off;
+}
+
 static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(const struct ggml_tensor * tensor, bool assume_sync);
 
 static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
@@ -704,7 +1083,6 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             return src_ss[0];
         }
         GGML_ABORT("view of permuted tensor not implemented");
-        //return {GGML_BACKEND_SPLIT_AXIS_UNKNOWN, {0}, {1}, 1};
     };
 
     auto handle_permute = [&](const std::vector<ggml_backend_meta_split_state> & src_ss) -> ggml_backend_meta_split_state {
@@ -864,6 +1242,13 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             }
             src_ss[i] = ggml_backend_meta_get_split_state(stc, tensor->src[i], /*assume_sync =*/ true);
             GGML_ASSERT(src_ss[i].axis != GGML_BACKEND_SPLIT_AXIS_UNKNOWN);
+        }
+
+        // LX (lossy fork): a source with non-uniform segment shares takes the segment-aware rules, no single-segment override
+        for (size_t i = 0; i < GGML_MAX_SRC; i++) {
+            if (tensor->src[i] != nullptr && tensor->src[i] != tensor && ggml_backend_meta_lx_nonuniform(src_ss[i], n_bufs)) {
+                return ggml_backend_meta_lx_calculate(tensor, src_ss.data(), n_bufs, assume_sync);
+            }
         }
 
         ggml_backend_meta_split_state split_state;
@@ -1181,17 +1566,6 @@ static bool ggml_backend_meta_is_host_view(const struct ggml_tensor * tensor) {
 }
 
 static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(const struct ggml_tensor * tensor, bool assume_sync) {
-    // [TAG_META_HOST_VIEWS]
-    // TODO: technically, this check should not be needed if the backend scheduler correctly prevents assigning
-    //       such host-buffer views to the meta backend. figure out how to update the scheduler logic to achieve that
-    //       ref: https://github.com/ggml-org/llama.cpp/pull/30217
-    if (!ggml_backend_buffer_is_meta(tensor->buffer)) {
-        GGML_ASSERT(ggml_backend_meta_is_host_view(tensor));
-
-        // the view is not allocated in the meta buffer, it is not split across the sub-devices
-        return { GGML_BACKEND_SPLIT_AXIS_NONE, {0}, {1}, 1 };
-    }
-
     ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) tensor->buffer->context;
     return ggml_backend_meta_get_split_state(buf_ctx->get_simple_tensor_container(tensor), tensor, assume_sync);
 }
@@ -1216,6 +1590,19 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_m
     for (size_t k = 0; k < GGML_MAX_DIMS; k++) {
         ne[k] = tensor->ne[k];
         nb[k] = tensor->nb[k];
+    }
+
+    // LX view (lossy fork): a view of a source with non-uniform segments gets its device-local layout per device below
+    const ggml_tensor * lx_view_src = nullptr;
+    ggml_backend_meta_split_state lx_view_src_ss = {GGML_BACKEND_SPLIT_AXIS_NONE, {0}, {1}, 1};
+    if (tensor->view_src != nullptr && ggml_backend_buffer_is_meta(tensor->view_src->buffer) && split_dim >= 0 && split_dim < GGML_MAX_DIMS) {
+        const ggml_tensor * src_node = tensor->op == GGML_OP_CPY ? tensor->src[1] : tensor->src[0];
+        if (src_node != nullptr && ggml_backend_buffer_is_meta(src_node->buffer)) {
+            lx_view_src_ss = ggml_backend_meta_get_split_state(src_node, /*assume_sync =*/ true);
+            if (ggml_backend_meta_lx_nonuniform(lx_view_src_ss, n_simple_bufs)) {
+                lx_view_src = src_node;
+            }
+        }
     }
 
     std::vector<ggml_tensor *> simple_tensors;
@@ -1251,7 +1638,17 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_m
         t_ij->view_offs = tensor->view_offs;
         if (t_ij->view_src != nullptr && ggml_backend_buffer_is_meta(t_ij->view_src->buffer)) {
             t_ij->view_src = ggml_backend_meta_buffer_simple_tensor(tensor->view_src, j);
-            if (t_ij->view_offs > 0 && split_dim >= 0 && split_dim < GGML_MAX_DIMS) {
+            if (lx_view_src != nullptr) {
+                // LX view (lossy fork): device-local strides and offset follow the segments of the source
+                size_t nb_lx[GGML_MAX_DIMS];
+                size_t off_lx = 0;
+                ggml_backend_meta_lx_view_layout(tensor, lx_view_src, ggml_backend_meta_buffer_simple_tensor(lx_view_src, j),
+                    lx_view_src_ss, split_state, j, n_simple_bufs, nb_lx, &off_lx);
+                for (int i = 0; i < GGML_MAX_DIMS; i++) {
+                    t_ij->nb[i] = nb_lx[i];
+                }
+                t_ij->view_offs = off_lx;
+            } else if (t_ij->view_offs > 0 && split_dim >= 0 && split_dim < GGML_MAX_DIMS) {
                 GGML_ASSERT(tensor->ne[split_dim] != 0);
                 const int split_dim_view_src = ggml_backend_meta_get_split_state(tensor->view_src, /*assume_sync =*/ true).axis;
                 GGML_ASSERT(split_dim_view_src >= 0 && split_dim_view_src < GGML_MAX_DIMS);
@@ -1803,6 +2200,9 @@ static ggml_guid_t ggml_backend_meta_guid() {
     return &guid;
 }
 
+// RS-ROW row threshold: the backend's min-rows query, offered together with the owner-only capability.
+typedef uint32_t (*ggml_backend_comm_rs_row_min_rows_fn)(void);
+
 struct ggml_backend_meta_context {
     struct cgraph_config {
         ggml_cgraph * cgraph_main = nullptr;
@@ -1821,6 +2221,22 @@ struct ggml_backend_meta_context {
             bufs.resize(n_reduce_steps);
         }
     };
+    // Residual-ADD boundary for the gap-fused comm hook: subgraph i+1 starts with the ADD (local index node) that consumes subgraph i's
+    // partial output in src slot s_p, with the residual in src slot s_r.
+    struct ar_add_boundary {
+        bool   ok   = false;
+        size_t node = 0;
+        int    s_p  = 0;
+        int    s_r  = 1;
+        bool   rms      = false; // MC05: the RMS_NORM behind the residual ADD and its MUL are absorbed by the norm gather
+        size_t rms_node = 0;     // local index of the RMS_NORM node in subgraph i+1
+        size_t mul_node = 0;     // local index of the MUL (norm weight) node in subgraph i+1
+        size_t add_node_g = 0;   // global index (cgraph->nodes) of the residual ADD, for the RS-ROW reader scan
+        size_t rms_node_g = 0;   // global index of the RMS_NORM node
+        // RS-ROW (GGML_HEXAGON_RS_ROW): the residual ADD output of this boundary is read only by its own norm gather and by the next
+        // boundary's residual ADD, so the owner rank may write just its own rows. Set at rebuild; enabled per comm call (see below).
+        bool   rs_row = false;
+    };
     std::string                 name;
     std::vector<backend_config> backend_configs;
     ggml_context_ptr            ctx;
@@ -1835,6 +2251,12 @@ struct ggml_backend_meta_context {
 
     void *                               comm_ctx       = nullptr;
     ggml_backend_comm_allreduce_tensor_t comm_allreduce = nullptr;
+    ggml_backend_comm_allreduce_add_tensor_t comm_allreduce_add = nullptr; // optional gap-fused AR+ADD hook (null unless the backend provides it)
+    std::vector<ar_add_boundary>             ar_add;                       // per boundary i (subgraph i -> i+1), filled at rebuild
+    bool                                     rs_row_logged = false;        // RS-ROW candidate count logged once per process
+    ggml_backend_comm_allreduce_add_rms_tensor_t comm_allreduce_add_rms = nullptr; // MC05 norm-gather hook (switch 3); null otherwise
+    ggml_backend_comm_allreduce_add_rms_tensor_t comm_allreduce_add_rms_owner = nullptr; // RS-ROW owner-only capability (GGML_HEXAGON_RS_ROW); null unless enabled
+    uint32_t rs_row_min_rows = 0; // RS-ROW row threshold (GGML_HEXAGON_RS_ROW_MIN_ROWS); 0 = no candidates
 
     ggml_backend_meta_context(ggml_backend_dev_t meta_dev, const char * params) {
         const size_t n_devs = ggml_backend_meta_dev_n_devs(meta_dev);
@@ -1866,6 +2288,28 @@ struct ggml_backend_meta_context {
                 ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(
                     ggml_backend_get_device(simple_backends[0])), "ggml_backend_comm_allreduce_tensor");
             GGML_ASSERT(comm_allreduce != nullptr);
+        }
+        if (comm_ctx != nullptr) {
+            comm_allreduce_add = (ggml_backend_comm_allreduce_add_tensor_t)
+                ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(
+                    ggml_backend_get_device(simple_backends[0])), "ggml_backend_comm_allreduce_add_tensor");
+        }
+        if (comm_ctx != nullptr) {
+            comm_allreduce_add_rms = (ggml_backend_comm_allreduce_add_rms_tensor_t)
+                ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(
+                    ggml_backend_get_device(simple_backends[0])), "ggml_backend_comm_allreduce_add_rms_tensor");
+        }
+        if (comm_ctx != nullptr) {
+            // RS-ROW capability: the backend offers the owner-only residual write only when GGML_HEXAGON_RS_ROW is on; null otherwise.
+            comm_allreduce_add_rms_owner = (ggml_backend_comm_allreduce_add_rms_tensor_t)
+                ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(
+                    ggml_backend_get_device(simple_backends[0])), "ggml_backend_comm_allreduce_add_rms_owner_tensor");
+            if (comm_allreduce_add_rms_owner != nullptr) {
+                auto min_rows_fn = (ggml_backend_comm_rs_row_min_rows_fn)
+                    ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(
+                        ggml_backend_get_device(simple_backends[0])), "ggml_backend_comm_rs_row_min_rows");
+                rs_row_min_rows = min_rows_fn != nullptr ? min_rows_fn() : 0;
+            }
         }
     }
 
@@ -2041,11 +2485,12 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
 
             for (int i = 0; i < cgraph->n_nodes; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
-                if (!ggml_backend_buffer_is_meta(node->buffer)) {
-                    // [TAG_META_HOST_VIEWS]
-                    GGML_ASSERT(ggml_backend_meta_is_host_view(node));
-
-                    // keep the node as is, mapping it to a simple tensor is not possible
+                // Only plain (non-meta) host sources take the shortcut: a meta view source of a CPU-simple meta device is
+                // "host" too, and an in-place view op on it (e.g. SCALE on a cache view) must map to the simple tensors.
+                if (node->view_src != nullptr && node->view_src->op == GGML_OP_NONE && !ggml_backend_buffer_is_meta(node->view_src->buffer) &&
+                        ggml_backend_buffer_is_host(node->view_src->buffer)) {
+                    // FIXME s_copy_main is on the CPU and its view seems to be incorrectly added to the graph nodes.
+                    // For regular usage this doesn't matter since it's a noop but trying to call ggml_backend_meta_buffer_simple_tensor results in a crash.
                     bcj.nodes[i] = node;
                     continue;
                 }
@@ -2316,6 +2761,119 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                 cgraph_ij->uid = ggml_graph_next_uid();
             }
         }
+        // Residual-ADD boundaries for the gap-fused comm hook: subgraph i+1 starts (after view-like nodes) with the ADD that consumes
+        // subgraph i's partial output and a MIRRORED residual, producing a MIRRORED output.
+        backend_ctx->ar_add.assign(n_subgraphs, {});
+        if (backend_ctx->comm_allreduce_add != nullptr && n_backends > 1) {
+            auto base_of = [](const ggml_tensor * t) -> const ggml_tensor * { return t->view_src ? t->view_src : t; };
+            const auto & bc0 = backend_ctx->backend_configs[0];
+            for (size_t i = 0; i + 1 < n_subgraphs; i++) {
+                const size_t i_begin = (size_t) bc0.cgraphs[i + 1].offset;
+                const size_t i_end   = i + 2 < n_subgraphs ? (size_t) bc0.cgraphs[i + 2].offset : (size_t) cgraph->n_nodes;
+                size_t k = i_begin;
+                while (k < i_end && ggml_op_is_empty(cgraph->nodes[k]->op)) {
+                    k++;
+                }
+                if (k >= i_end) {
+                    continue;
+                }
+                const ggml_tensor * p = cgraph->nodes[i_begin - 1];
+                const ggml_tensor * m = cgraph->nodes[k];
+                if (m->op != GGML_OP_ADD || p->view_src != nullptr) {
+                    continue;
+                }
+                int s_p = -1;
+                int n_match = 0;
+                for (int s = 0; s < 2; s++) {
+                    if (m->src[s] != nullptr && base_of(m->src[s]) == p) {
+                        s_p = s;
+                        n_match++;
+                    }
+                }
+                if (n_match != 1 || m->src[1 - s_p] == nullptr) {
+                    continue;
+                }
+                const ggml_tensor * r = m->src[1 - s_p];
+                if (base_of(r) == p ||
+                        ggml_backend_meta_get_split_state(p, false).axis != GGML_BACKEND_SPLIT_AXIS_PARTIAL ||
+                        ggml_backend_meta_get_split_state(r, false).axis != GGML_BACKEND_SPLIT_AXIS_MIRRORED ||
+                        ggml_backend_meta_get_split_state(m, false).axis != GGML_BACKEND_SPLIT_AXIS_MIRRORED ||
+                        m->type != p->type || r->type != p->type ||
+                        !ggml_are_same_shape(m, p) || !ggml_are_same_shape(r, p) || !ggml_are_same_shape(m->src[s_p], p)) {
+                    continue;
+                }
+                backend_ctx->ar_add[i] = { true, k - i_begin, s_p, 1 - s_p, false, 0, 0 };
+                backend_ctx->ar_add[i].add_node_g = k;
+                // MC05: the next two real nodes are RMS_NORM (its only input is the ADD output) and MUL with the norm weight, and the
+                // RMS output has no other consumer. The norm gather of the comm hook replaces both on every backend.
+                size_t k_rms = k + 1;
+                while (k_rms < i_end && ggml_op_is_empty(cgraph->nodes[k_rms]->op)) {
+                    k_rms++;
+                }
+                size_t k_mul = k_rms + 1;
+                while (k_rms < i_end && k_mul < i_end && ggml_op_is_empty(cgraph->nodes[k_mul]->op)) {
+                    k_mul++;
+                }
+                if (k_rms < i_end && k_mul < i_end) {
+                    const ggml_tensor * rms = cgraph->nodes[k_rms];
+                    const ggml_tensor * mul = cgraph->nodes[k_mul];
+                    if (rms->op == GGML_OP_RMS_NORM && rms->src[0] == m && mul->op == GGML_OP_MUL && mul->src[0] == rms &&
+                            mul->src[1] != nullptr && ggml_node_get_use_count(cgraph, (int) k_rms) == 1 &&
+                            rms->type == GGML_TYPE_F32 && mul->type == GGML_TYPE_F32 && mul->src[1]->type == GGML_TYPE_F32 &&
+                            ggml_are_same_shape(mul, m) && ggml_nelements(mul->src[1]) == m->ne[0] &&
+                            ggml_backend_meta_get_split_state(rms, false).axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED &&
+                            ggml_backend_meta_get_split_state(mul, false).axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED &&
+                            ggml_backend_meta_get_split_state(mul->src[1], false).axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED) {
+                        backend_ctx->ar_add[i].rms      = true;
+                        backend_ctx->ar_add[i].rms_node = k_rms - i_begin;
+                        backend_ctx->ar_add[i].mul_node = k_mul - i_begin;
+                        backend_ctx->ar_add[i].rms_node_g = k_rms;
+                    }
+                }
+            }
+            // RS-ROW candidates (GGML_HEXAGON_RS_ROW): boundary i may let each rank write only its own rows of its residual ADD output m when (1) boundary i is fused with its norm gather, (2) boundary i+1 is a gap-fused residual ADD reading m, and (3) no other node reads m, directly or through a view.
+            // Then every reader of the rows a rank leaves stale is a fused, own-row read. Only a backend with the owner-only capability (GGML_HEXAGON_RS_ROW=1) gets candidates; default runs skip this scan.
+            size_t n_rs_row = 0;
+            for (size_t i = 0; backend_ctx->comm_allreduce_add_rms_owner != nullptr && i + 2 < n_subgraphs; i++) {
+                auto & a = backend_ctx->ar_add[i];
+                const auto & b = backend_ctx->ar_add[i + 1];
+                if (!a.ok || !a.rms || !b.ok) {
+                    continue;
+                }
+                const ggml_tensor * m    = cgraph->nodes[a.add_node_g];
+                const ggml_tensor * rms  = cgraph->nodes[a.rms_node_g];
+                const ggml_tensor * add1 = cgraph->nodes[b.add_node_g];
+                // Batch gate (GGML_HEXAGON_RS_ROW_MIN_ROWS): a batch below the row threshold gets no candidates, so neither this scan
+                // nor the owner/dry-run path in graph_compute runs for it; its boundaries keep the RS_ROW=0 full-write path.
+                if (backend_ctx->rs_row_min_rows == 0 ||
+                        m->ne[1] * m->ne[2] * m->ne[3] < (int64_t) backend_ctx->rs_row_min_rows) {
+                    continue;
+                }
+                if ((m->flags & GGML_TENSOR_FLAG_OUTPUT) || base_of(add1->src[b.s_r]) != m) {
+                    continue;
+                }
+                bool readers_ok = true;
+                for (int n = 0; readers_ok && n < cgraph->n_nodes; n++) {
+                    const ggml_tensor * node = cgraph->nodes[n];
+                    if (node == m || node == rms || node == add1) {
+                        continue;
+                    }
+                    for (int s = 0; s < GGML_MAX_SRC; s++) {
+                        if (node->src[s] != nullptr && base_of(node->src[s]) == m) {
+                            readers_ok = false;
+                            break;
+                        }
+                    }
+                }
+                a.rs_row = readers_ok;
+                n_rs_row += readers_ok ? 1 : 0;
+            }
+            if (n_rs_row > 0 && !backend_ctx->rs_row_logged) {
+                backend_ctx->rs_row_logged = true;
+                GGML_LOG_INFO("ggml-meta: RS-ROW candidates: %zu of %zu boundaries (rows >= %u, owner-only residual writes when enabled)\n",
+                              n_rs_row, n_subgraphs > 0 ? n_subgraphs - 1 : (size_t) 0, backend_ctx->rs_row_min_rows);
+            }
+        }
     }
 
     size_t iga = 0; // i graph aux
@@ -2466,6 +3024,86 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
     };
 
 
+    // One gap-fused boundary j (subgraph j -> j+1) on every backend: the last node of subgraph j (the partial output) and the residual
+    // ADD, and the RMS_NORM and MUL nodes, of subgraph j+1 that the hooks take over. Metadata only; nothing is computed here.
+    struct gap_boundary_args {
+        bool                       ok = false;
+        std::vector<ggml_tensor *> residuals;
+        std::vector<ggml_tensor *> dsts;
+        std::vector<ggml_tensor *> rms_nodes;
+        std::vector<ggml_tensor *> mul_nodes;
+    };
+    auto partials_of = [&](size_t j) -> std::vector<ggml_tensor *> {
+        std::vector<ggml_tensor *> partials(n_backends);
+        for (size_t jb = 0; jb < n_backends; jb++) {
+            ggml_cgraph * cg = backend_ctx->backend_configs[jb].cgraphs[j].cgraph_main;
+            partials[jb]     = cg->nodes[cg->n_nodes - 1];
+        }
+        return partials;
+    };
+    auto rms_args_of = [&](size_t j, const std::vector<ggml_tensor *> & partials) -> gap_boundary_args {
+        gap_boundary_args g;
+        g.residuals.assign(n_backends, nullptr);
+        g.dsts.assign(n_backends, nullptr);
+        g.rms_nodes.assign(n_backends, nullptr);
+        g.mul_nodes.assign(n_backends, nullptr);
+        const auto & ar_add = backend_ctx->ar_add[j];
+        g.ok = true;
+        for (size_t jb = 0; jb < n_backends && g.ok; jb++) {
+            ggml_cgraph * cg_next = backend_ctx->backend_configs[jb].cgraphs[j + 1].cgraph_main;
+            ggml_tensor * add_j   = cg_next->nodes[ar_add.node];
+            ggml_tensor * rms_j   = cg_next->nodes[ar_add.rms_node];
+            ggml_tensor * mul_j   = cg_next->nodes[ar_add.mul_node];
+            g.ok = add_j->op == GGML_OP_ADD && add_j->src[ar_add.s_p] != nullptr &&
+                (add_j->src[ar_add.s_p] == partials[jb] || add_j->src[ar_add.s_p]->view_src == partials[jb]) &&
+                add_j->src[ar_add.s_r] != nullptr &&
+                rms_j->op == GGML_OP_RMS_NORM && rms_j->src[0] == add_j &&
+                mul_j->op == GGML_OP_MUL && mul_j->src[0] == rms_j && mul_j->src[1] != nullptr;
+            g.residuals[jb] = add_j->src[ar_add.s_r];
+            g.dsts[jb]      = add_j;
+            g.rms_nodes[jb] = rms_j;
+            g.mul_nodes[jb] = mul_j;
+        }
+        return g;
+    };
+    auto add_args_of = [&](size_t j, const std::vector<ggml_tensor *> & partials) -> gap_boundary_args {
+        gap_boundary_args g;
+        g.residuals.assign(n_backends, nullptr);
+        g.dsts.assign(n_backends, nullptr);
+        const auto & ar_add = backend_ctx->ar_add[j];
+        g.ok = true;
+        for (size_t jb = 0; jb < n_backends && g.ok; jb++) {
+            ggml_tensor * add_j = backend_ctx->backend_configs[jb].cgraphs[j + 1].cgraph_main->nodes[ar_add.node];
+            g.ok = add_j->op == GGML_OP_ADD && add_j->src[ar_add.s_p] != nullptr &&
+                (add_j->src[ar_add.s_p] == partials[jb] || add_j->src[ar_add.s_p]->view_src == partials[jb]) &&
+                add_j->src[ar_add.s_r] != nullptr;
+            g.residuals[jb] = add_j->src[ar_add.s_r];
+            g.dsts[jb]      = add_j;
+        }
+        return g;
+    };
+    // RS-ROW dry run: would boundary j be taken by a gap-fused hook on every backend? Validation only; nothing is enqueued.
+    auto gap_fused_dry_ok = [&](size_t j) -> bool {
+        if (j + 1 >= backend_ctx->n_subgraphs || !backend_ctx->comm_ctx || !backend_ctx->ar_add[j].ok) {
+            return false;
+        }
+        std::vector<ggml_tensor *> partials = partials_of(j);
+        if (backend_ctx->comm_allreduce_add_rms != nullptr && backend_ctx->ar_add[j].rms) {
+            gap_boundary_args g = rms_args_of(j, partials);
+            if (g.ok && backend_ctx->comm_allreduce_add_rms(backend_ctx->comm_ctx, partials.data(), g.residuals.data(), g.dsts.data(),
+                                                            g.rms_nodes.data(), g.mul_nodes.data(), false, true)) {
+                return true;
+            }
+        }
+        if (backend_ctx->comm_allreduce_add != nullptr) {
+            gap_boundary_args g = add_args_of(j, partials);
+            return g.ok && backend_ctx->comm_allreduce_add(backend_ctx->comm_ctx, partials.data(), g.residuals.data(), g.dsts.data(), true);
+        }
+        return false;
+    };
+    // RS-ROW: boundary i-1 wrote only its own rows of the residual that boundary i reads; boundary i must then take it fused.
+    bool owner_pending = false;
+
     for (size_t i = 0; i < backend_ctx->n_subgraphs; i++) {
         for (size_t j = 0; j < n_backends; j++) {
             auto & bcj = backend_ctx->backend_configs[j];
@@ -2477,16 +3115,43 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
 
         if (n_backends > 1 && i < backend_ctx->n_subgraphs - 1) {
             bool backend_allreduce_success = false;
+            bool fused_success             = false; // the residual ADD of boundary i was taken by a gap-fused hook (its node is skipped)
+            bool owner_applied             = false; // boundary i wrote only the rows its rank owns in its residual output (RS-ROW)
             if (backend_ctx->comm_ctx) {
-                std::vector<ggml_tensor *> nodes;
-                nodes.reserve(n_backends);
-                for (size_t j = 0; j < n_backends; j++) {
-                    auto & bcj = backend_ctx->backend_configs[j];
-                    ggml_cgraph * cgraph_ij = bcj.cgraphs[i].cgraph_main;
-                    nodes.push_back(cgraph_ij->nodes[cgraph_ij->n_nodes-1]);
+                std::vector<ggml_tensor *> nodes = partials_of(i);
+                // Gap-fused residual add (opt-in through the backend's comm hook): when subgraph i+1 starts with the ADD consuming these partials, the comm enqueues ALLREDUCE+ADD and the backends skip that ADD.
+                // On false nothing was enqueued. MC05 (switch 3): when the next subgraph continues with RMS_NORM+MUL behind the residual ADD, the norm gather is tried first (ALLREDUCE+ADD and the norm gather enqueued, ADD/RMS/MUL skipped); on false the plain add hook follows.
+                if (backend_ctx->comm_allreduce_add_rms != nullptr && backend_ctx->ar_add[i].ok && backend_ctx->ar_add[i].rms) {
+                    gap_boundary_args g = rms_args_of(i, nodes);
+                    if (g.ok && backend_ctx->ar_add[i].rs_row && backend_ctx->comm_allreduce_add_rms_owner != nullptr &&
+                            gap_fused_dry_ok(i + 1)) {
+                        // RS-ROW: own rows only. Boundary i+1 has been validated as a gap-fused hook, so its residual read stays fused.
+                        fused_success = backend_ctx->comm_allreduce_add_rms_owner(backend_ctx->comm_ctx, nodes.data(), g.residuals.data(),
+                                                                                  g.dsts.data(), g.rms_nodes.data(), g.mul_nodes.data(),
+                                                                                  true, false);
+                        owner_applied = fused_success;
+                    }
+                    if (g.ok && !fused_success) {
+                        fused_success = backend_ctx->comm_allreduce_add_rms(backend_ctx->comm_ctx, nodes.data(), g.residuals.data(),
+                                                                            g.dsts.data(), g.rms_nodes.data(), g.mul_nodes.data(),
+                                                                            false, false);
+                    }
                 }
-                backend_allreduce_success = backend_ctx->comm_allreduce(backend_ctx->comm_ctx, nodes.data());
+                if (!fused_success && backend_ctx->comm_allreduce_add != nullptr && backend_ctx->ar_add[i].ok) {
+                    gap_boundary_args g = add_args_of(i, nodes);
+                    fused_success = g.ok && backend_ctx->comm_allreduce_add(backend_ctx->comm_ctx, nodes.data(), g.residuals.data(),
+                                                                           g.dsts.data(), false);
+                }
+                backend_allreduce_success = fused_success;
+                if (!backend_allreduce_success) {
+                    backend_allreduce_success = backend_ctx->comm_allreduce(backend_ctx->comm_ctx, nodes.data());
+                }
             }
+            if (owner_pending && !fused_success) {
+                // Boundary i-1 wrote only its own rows of the residual that boundary i reads. Only the fused hook reads them correctly.
+                GGML_ABORT("RS-ROW: boundary %zu is not gap-fused after boundary %zu wrote only its own rows (stale residual rows)", i, i - 1);
+            }
+            owner_pending = owner_applied;
 
             if (!backend_allreduce_success) {
                 const ggml_status status = allreduce_fallback(i);

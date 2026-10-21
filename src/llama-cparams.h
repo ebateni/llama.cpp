@@ -14,6 +14,9 @@ struct llama_cparams {
     uint32_t n_ubatch;
     uint32_t n_seq_max;
     uint32_t n_rs_seq;        // number of recurrent-state snapshots per seq for rollback
+    // typed-rows snapshot range (llama_set_rs_snap_range); n == 0 writes every rollback slot (default)
+    int32_t  rs_snap_d0 = 0;
+    int32_t  rs_snap_n  = 0;
     uint32_t n_outputs_max;   // max outputs supported by the context
     uint32_t n_outputs_max_per_seq;
     int32_t  n_threads;       // number of threads to use for generation
