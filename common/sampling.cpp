@@ -156,9 +156,20 @@ struct common_sampler {
         } else {
             const auto * logits = llama_get_logits_ith(ctx, idx);
             GGML_ASSERT(logits != nullptr);
-            cur.resize(n_vocab);
-            for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
-                cur[token_id] = llama_token_data{token_id, logits[token_id], 0.0f};
+            const int32_t n_trim = llama_model_vocab_trim_n(model);
+            if (n_trim > 0) {
+                // LLAMA_VOCAB_TRIM: each logits row holds only the kept token ids, in order
+                const int32_t * trim_ids = llama_model_vocab_trim_ids(model);
+                GGML_ASSERT(trim_ids != nullptr);
+                cur.resize(n_trim);
+                for (int32_t i = 0; i < n_trim; ++i) {
+                    cur[i] = llama_token_data{trim_ids[i], logits[i], 0.0f};
+                }
+            } else {
+                cur.resize(n_vocab);
+                for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
+                    cur[token_id] = llama_token_data{token_id, logits[token_id], 0.0f};
+                }
             }
         }
 

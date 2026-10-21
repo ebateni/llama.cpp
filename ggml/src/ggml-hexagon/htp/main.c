@@ -28,13 +28,14 @@
 #include "ggml-common.h"
 #include "hex-bitmap.h"
 #include "htp-ctx.h"
-#include "htp-dcache.h"
 #include "htp-ops.h"
+#include "htp-tensor.h"
 #include "htp_iface.h"
 #include "work-queue.h"
 #include "hex-profile.h"
 #include "allreduce-ops.h"
 #include "htp-fence.h"
+#include "gated-delta-net-ops.h"
 
 #define HMX_QUEUE_CAPACITY     128
 #define HMX_QUEUE_STACK_SIZE   16384
@@ -287,15 +288,15 @@ AEEResult htp_iface_munmap(remote_handle64 handle, uint32 fd) {
 }
 
 static void vtcm_acquire(struct htp_context * ctx) {
-    if (!atomic_load(&ctx->vtcm_valid)) {
+    if (!ctx->vtcm_valid) {
         int err = HAP_compute_res_acquire_cached(ctx->vtcm_rctx, 10000000u);
         if (err != 0) {
             FARF(ERROR, "ggml-hex: failed to acquire VTCM: 0x%08x", (unsigned)err);
             abort();
         }
 
-        atomic_store(&ctx->vtcm_needs_release, false);
-        atomic_store(&ctx->vtcm_valid, true);
+        ctx->vtcm_needs_release = false;
+        ctx->vtcm_valid = true;
 
         // Drop the priority to make sure we get the release callback from other GGML-HTP and QNN-HTP sessions
         HAP_compute_res_update_priority(ctx->vtcm_rctx, ctx->thread_prio + 10);
@@ -303,16 +304,16 @@ static void vtcm_acquire(struct htp_context * ctx) {
 }
 
 static void vtcm_release(struct htp_context * ctx) {
-    if (atomic_load(&ctx->vtcm_valid)) {
-        atomic_store(&ctx->vtcm_valid, false);
-        atomic_store(&ctx->vtcm_needs_release, false);
+    if (ctx->vtcm_valid) {
+        ctx->vtcm_valid         = false;
+        ctx->vtcm_needs_release = false;
         HAP_compute_res_release_cached(ctx->vtcm_rctx);
     }
 }
 
 static int vtcm_release_callback(unsigned int rctx, void * state) {
     struct htp_context * ctx = (struct htp_context *) state;
-    atomic_store(&ctx->vtcm_needs_release, true);
+    ctx->vtcm_needs_release = true;
     return 0;
 }
 
@@ -352,9 +353,10 @@ static int vtcm_alloc(struct htp_context * ctx) {
 
     ctx->vtcm_base          = (uint8_t *) vtcm_ptr;
     ctx->vtcm_size          = vtcm_size;
+    ctx->vtcm_size_full     = vtcm_size;
     ctx->vtcm_rctx          = rctx;
-    atomic_store(&ctx->vtcm_valid, false);
-    atomic_store(&ctx->vtcm_needs_release, false);
+    ctx->vtcm_valid         = false;
+    ctx->vtcm_needs_release = false;
 
     return 0;
 }
@@ -370,96 +372,24 @@ static void vtcm_free(struct htp_context * ctx) {
 static void htp_main_thread(void * context);
 static void htp_packet_callback(dspqueue_t queue, int error, void * context);
 static void htp_error_callback(dspqueue_t queue, int error, void * context);
+static int  htp_lane_create(struct htp_context * ctx, uint32_t n_lane);
+static void htp_lane_destroy(struct htp_context * ctx);
+static uint32_t htp_lane_n_threads(struct htp_context * ctx);
 
-// Non-BURST modes leave DCVS enabled and keep the HTP awake.
-// BURST pins all corners to MAX and disables DCVS.
-// Corner constants are from HAP_power.h (HAP_dcvs_voltage_corner_t / HAP_dcvs_exp_vcorner_t).
-struct htp_power_profile {
-    boolean  dcvs_enable;
-    uint32_t bus_min_corner;
-    uint32_t bus_max_corner;
-    uint32_t bus_target_corner;
-    uint32_t core_min_corner;
-    uint32_t core_max_corner;
-    uint32_t core_target_corner;
-    boolean  sleep_disable;
-    uint32_t hmx_min_corner;    // only used when __HVX_ARCH__ >= 75
-    uint32_t hmx_max_corner;
-    uint32_t hmx_target_corner;
-    uint32_t hmx_perf_mode;
-};
-
-#define HTP_POWER_PROFILE_ENTRY(min_c, max_c, hmx_c) \
-    { \
-        .dcvs_enable        = TRUE, \
-        .bus_min_corner     = (min_c), \
-        .bus_max_corner     = (max_c), \
-        .bus_target_corner  = (max_c), \
-        .core_min_corner    = (min_c), \
-        .core_max_corner    = (max_c), \
-        .core_target_corner = (max_c), \
-        .sleep_disable      = TRUE, \
-        .hmx_min_corner     = (hmx_c), \
-        .hmx_max_corner     = (hmx_c), \
-        .hmx_target_corner  = (hmx_c), \
-        .hmx_perf_mode      = HAP_CLK_PERF_HIGH, \
-    }
-
-static const struct htp_power_profile htp_power_profiles[HTP_POWER_MODE_COUNT] = {
-    [HTP_POWER_MODE_LOW_POWER_SAVER] =
-        HTP_POWER_PROFILE_ENTRY(HAP_DCVS_VCORNER_SVS2, HAP_DCVS_VCORNER_SVS2, HAP_DCVS_EXP_VCORNER_MIN_SVS),
-    [HTP_POWER_MODE_POWER_SAVER] =
-        HTP_POWER_PROFILE_ENTRY(HAP_DCVS_VCORNER_SVS, HAP_DCVS_VCORNER_SVS_PLUS, HAP_DCVS_EXP_VCORNER_SVS),
-    [HTP_POWER_MODE_HIGH_POWER_SAVER] =
-        HTP_POWER_PROFILE_ENTRY(HAP_DCVS_VCORNER_SVS_PLUS, HAP_DCVS_VCORNER_NOM, HAP_DCVS_EXP_VCORNER_SVS_L2),
-    [HTP_POWER_MODE_LOW_BALANCED] =
-        HTP_POWER_PROFILE_ENTRY(HAP_DCVS_VCORNER_NOM, HAP_DCVS_VCORNER_NOM_PLUS, HAP_DCVS_EXP_VCORNER_NOM),
-    [HTP_POWER_MODE_BALANCED] =
-        HTP_POWER_PROFILE_ENTRY(HAP_DCVS_VCORNER_NOM_PLUS, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_EXP_VCORNER_NOM_L1),
-    [HTP_POWER_MODE_HIGH_PERFORMANCE] =
-        HTP_POWER_PROFILE_ENTRY(HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_TURBO_PLUS, HAP_DCVS_EXP_VCORNER_TUR_L2),
-    [HTP_POWER_MODE_SUSTAINED_HIGH_PERFORMANCE] =
-        HTP_POWER_PROFILE_ENTRY(HAP_DCVS_VCORNER_NOM_PLUS, HAP_DCVS_VCORNER_TURBO_PLUS, HAP_DCVS_EXP_VCORNER_TUR_L2),
-    [HTP_POWER_MODE_BURST] = {
-        .dcvs_enable        = FALSE,
-        .bus_min_corner     = HAP_DCVS_VCORNER_MAX,
-        .bus_max_corner     = HAP_DCVS_VCORNER_MAX,
-        .bus_target_corner  = HAP_DCVS_VCORNER_MAX,
-        .core_min_corner    = HAP_DCVS_VCORNER_MAX,
-        .core_max_corner    = HAP_DCVS_VCORNER_MAX,
-        .core_target_corner = HAP_DCVS_VCORNER_MAX,
-        .sleep_disable      = TRUE,
-        .hmx_min_corner     = HAP_DCVS_EXP_VCORNER_MAX,
-        .hmx_max_corner     = HAP_DCVS_EXP_VCORNER_MAX,
-        .hmx_target_corner  = HAP_DCVS_EXP_VCORNER_MAX,
-        .hmx_perf_mode      = HAP_CLK_PERF_HIGH,
-    },
-};
-
-#undef HTP_POWER_PROFILE_ENTRY
-
-AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp_queue_id, uint32_t n_hvx, uint32_t n_hmx, uint64_t max_vmem, uint32_t power_mode) {
+AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp_queue_id, uint32_t n_hvx, uint32_t n_hmx, uint64_t max_vmem) {
     struct htp_handle * h = (struct htp_handle *) handle;
     if (!h) {
         return AEE_EBADPARM;
     }
 
-    if (power_mode >= HTP_POWER_MODE_COUNT) {
-        FARF(ERROR, "invalid power-mode %u, falling back to burst", (unsigned) power_mode);
-        power_mode = HTP_POWER_MODE_BURST;
-    }
-    const struct htp_power_profile * pwr = &htp_power_profiles[power_mode];
-    FARF(ALWAYS, "power-mode %u : dcvs-enable %d bus[%u,%u,%u] core[%u,%u,%u] sleep-disable %d hmx[%u,%u,%u]",
-         (unsigned) power_mode, (int) pwr->dcvs_enable,
-         (unsigned) pwr->bus_min_corner, (unsigned) pwr->bus_max_corner, (unsigned) pwr->bus_target_corner,
-         (unsigned) pwr->core_min_corner, (unsigned) pwr->core_max_corner, (unsigned) pwr->core_target_corner,
-         (int) pwr->sleep_disable,
-         (unsigned) pwr->hmx_min_corner, (unsigned) pwr->hmx_max_corner, (unsigned) pwr->hmx_target_corner);
-
     if (h->ctx) {
         FARF(ERROR, "Queue already open");
         return AEE_EITEMBUSY;
     }
+    // n_hmx packing for the lane experiment: bits 0-7 HMX on/off, 8-15 HVX threads of lane B, 16-23 main-lane VTCM budget (MB)
+    const uint32_t n_lane    = (n_hmx >> 8) & 0xff;
+    const uint32_t vtcm_a_mb = (n_hmx >> 16) & 0xff;
+    n_hmx &= 0xff;
 
     // Cache the original FastRPC thread priority, then calculate compute priority
     int fastrpc_tid  = qurt_thread_get_id();
@@ -522,7 +452,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     size_t dma_align = dma_queue_alignof();
     size_t offset_dma = hex_align_up(offset, dma_align);
     size_t size_dma = 0;
-    for (uint32_t i = 0; i < n_hvx; i++) {
+    for (uint32_t i = 0; i < n_hvx + n_lane; i++) {
         size_dma  = hex_align_up(size_dma, dma_queue_alignof());
         size_dma += dma_queue_sizeof(256);
     }
@@ -586,17 +516,17 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
 
         request.type                              = HAP_power_set_DCVS_v3;
         request.dcvs_v3.set_dcvs_enable           = TRUE;
-        request.dcvs_v3.dcvs_enable               = pwr->dcvs_enable;
+        request.dcvs_v3.dcvs_enable               = FALSE;
         request.dcvs_v3.set_bus_params            = TRUE;
-        request.dcvs_v3.bus_params.min_corner     = pwr->bus_min_corner;
-        request.dcvs_v3.bus_params.max_corner     = pwr->bus_max_corner;
-        request.dcvs_v3.bus_params.target_corner  = pwr->bus_target_corner;
+        request.dcvs_v3.bus_params.min_corner     = HAP_DCVS_VCORNER_MAX;
+        request.dcvs_v3.bus_params.max_corner     = HAP_DCVS_VCORNER_MAX;
+        request.dcvs_v3.bus_params.target_corner  = HAP_DCVS_VCORNER_MAX;
         request.dcvs_v3.set_core_params           = TRUE;
-        request.dcvs_v3.core_params.min_corner    = pwr->core_min_corner;
-        request.dcvs_v3.core_params.max_corner    = pwr->core_max_corner;
-        request.dcvs_v3.core_params.target_corner = pwr->core_target_corner;
+        request.dcvs_v3.core_params.min_corner    = HAP_DCVS_VCORNER_MAX;
+        request.dcvs_v3.core_params.max_corner    = HAP_DCVS_VCORNER_MAX;
+        request.dcvs_v3.core_params.target_corner = HAP_DCVS_VCORNER_MAX;
         request.dcvs_v3.set_sleep_disable         = TRUE;
-        request.dcvs_v3.sleep_disable             = pwr->sleep_disable;
+        request.dcvs_v3.sleep_disable             = TRUE;
 
 #if (__HEXAGON_ARCH__ >= 79)
         HAP_set_dcvs_v3_protected_bus_corners(&request, 1);
@@ -624,10 +554,10 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
         request.hmx_v2.set_power     = TRUE;
         request.hmx_v2.power_up      = TRUE;
         request.hmx_v2.set_clock     = TRUE;
-        request.hmx_v2.target_corner = pwr->hmx_target_corner;
-        request.hmx_v2.min_corner    = pwr->hmx_min_corner;
-        request.hmx_v2.max_corner    = pwr->hmx_max_corner;
-        request.hmx_v2.perf_mode     = pwr->hmx_perf_mode;
+        request.hmx_v2.target_corner = HAP_DCVS_EXP_VCORNER_MAX;
+        request.hmx_v2.min_corner    = HAP_DCVS_EXP_VCORNER_MAX;
+        request.hmx_v2.max_corner    = HAP_DCVS_EXP_VCORNER_MAX;
+        request.hmx_v2.perf_mode     = HAP_CLK_PERF_HIGH;
         FARF(ALWAYS, "Setting HMX clock\n");
         err = HAP_power_set((void *) ctx, &request);
         if (err != AEE_SUCCESS) {
@@ -668,7 +598,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     uint8_t * dma_ptr_curr = (uint8_t *) ((uintptr_t) block + offset_dma);
     size_t size_dma_q = dma_queue_sizeof(256);
 
-    for (int i = 0; i < ctx->n_threads; i++) {
+    for (int i = 0; i < (int) (ctx->n_threads + n_lane); i++) {
         dma_ptr_curr = (uint8_t *) hex_align_up((uintptr_t) dma_ptr_curr, dma_queue_alignof());
         ctx->dma[i] = dma_queue_init(dma_ptr_curr, 256, &ctx->trace[i]);
         dma_ptr_curr += size_dma_q;
@@ -679,6 +609,23 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
 
     void * wq_ptr = (void *) ((uintptr_t) block + offset_wq);
     ctx->work_queue = work_queue_init(wq_ptr, n_hvx, WORK_QUEUE_CAPACITY, WORK_QUEUE_STACK_SIZE);
+
+    // VTCM budget of the main lane (ops and chunking follow ctx->vtcm_size); lane B gets the rest of the VTCM
+    {
+        size_t vtcm_a = vtcm_a_mb ? ((size_t) vtcm_a_mb << 20) : (n_lane ? ctx->vtcm_size / 2 : ctx->vtcm_size);
+        if (vtcm_a > ctx->vtcm_size_full) {
+            vtcm_a = ctx->vtcm_size_full;
+        }
+        ctx->vtcm_size = vtcm_a;
+    }
+    if (n_lane) {
+        err = htp_lane_create(ctx, n_lane);
+        if (err != AEE_SUCCESS) {
+            FARF(ERROR, "ggml-hex: failed to create HVX lane B");
+            htp_iface_stop(handle);
+            return err;
+        }
+    }
 
     ctx->main_stack = NULL;
     ctx->main_thread = 0;
@@ -729,9 +676,12 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
         return err;
     }
 
+    const uint32_t n_dma_free = ctx->n_threads + htp_lane_n_threads(ctx);
+    htp_lane_destroy(ctx);
+
     work_queue_free(ctx->work_queue);
 
-    for (int i = 0; i < ctx->n_threads; i++) {
+    for (uint32_t i = 0; i < n_dma_free; i++) {
         dma_queue_free(ctx->dma[i]);
     }
 
@@ -781,6 +731,26 @@ AEEResult htp_iface_hwinfo(remote_handle64 handle, uint32_t * n_threads, uint32_
     *vtcm_size = vtcm_query_size();
 
     return AEE_SUCCESS;
+}
+
+int htp_hmx_bench_run(struct htp_context * ctx, uint32_t variant, uint32_t n_row, uint32_t n_col, uint32_t n_dot,
+                      uint32_t n_iters, uint32_t n_writers, uint64_t * cycles, uint64_t * usec, uint64_t * writer_bytes);
+
+AEEResult htp_iface_hmx_bench(remote_handle64 handle, const htp_iface_hmx_bench_cfg * cfg, uint64_t * cycles, uint64_t * usec,
+                              uint64_t * writer_bytes) {
+    struct htp_handle * h = (struct htp_handle *) handle;
+    if (!h || !h->ctx || !cfg || !cycles || !usec || !writer_bytes) {
+        return AEE_EBADPARM;
+    }
+    struct htp_context * c = h->ctx;
+    vtcm_acquire(c);
+    work_queue_wakeup(c->work_queue);
+    if (c->hmx_queue) hmx_queue_wakeup(c->hmx_queue);
+    int err = htp_hmx_bench_run(c, cfg->variant, cfg->n_row, cfg->n_col, cfg->n_dot, cfg->n_iters, cfg->n_writers,
+                                cycles, usec, writer_bytes);
+    if (c->hmx_queue) { hmx_queue_suspend(c->hmx_queue); hmx_queue_flush(c->hmx_queue); }
+    work_queue_suspend(c->work_queue);
+    return err == 0 ? AEE_SUCCESS : AEE_EFAILED;
 }
 
 static void htp_error_callback(dspqueue_t queue, int error, void * context) {
@@ -841,7 +811,7 @@ static int op_fence(struct htp_ops_context * octx) {
     atomic_uint * sync_fence = (atomic_uint *) (uintptr_t) sync->data;
 
     if (mode == 1) {
-        htp_dcache_flush_dirty_ranges(ctx);
+        htp_flush_dirty_ranges(ctx);
 
         htp_mdev_group_barrier(octx);
 
@@ -927,6 +897,7 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_NORM:
         case HTP_OP_RMS_NORM:
         case HTP_OP_RMS_NORM_MUL:
+        case HTP_OP_RMS_NORM_SCALE:
         case HTP_OP_SCALE:
         case HTP_OP_CLAMP:
         case HTP_OP_LEAKY_RELU:
@@ -936,8 +907,6 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_UNARY_SIGMOID:
         case HTP_OP_UNARY_SILU:
         case HTP_OP_UNARY_GELU:
-        case HTP_OP_UNARY_GELU_QUICK:
-        case HTP_OP_UNARY_GELU_ERF:
         case HTP_OP_UNARY_NEG:
         case HTP_OP_UNARY_EXP:
         case HTP_OP_UNARY_TANH:
@@ -946,7 +915,6 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_UNARY_RELU:
         case HTP_OP_UNARY_STEP:
         case HTP_OP_L2_NORM:
-        case HTP_OP_HADAMARD:
             return op_unary(octx);
 
         case HTP_OP_GLU_SWIGLU:
@@ -954,13 +922,13 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_GLU_SWIGLU_CLAMP:
         case HTP_OP_GLU_GEGLU:
         case HTP_OP_GLU_GEGLU_QUICK:
-        case HTP_OP_GLU_GEGLU_ERF:
             return op_activations(octx);
 
         case HTP_OP_SOFTMAX:
             return op_softmax(octx);
 
         case HTP_OP_ROPE:
+        case HTP_OP_ROPE_NX:
             return op_rope(octx);
 
         case HTP_OP_FLASH_ATTN_EXT:
@@ -994,8 +962,21 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_ARGMAX:
             return op_argmax(octx);
 
+        case HTP_OP_GDN_GATE:
+            return op_gdn_gate(octx);
+
+        case HTP_OP_GATE_MUL:
+            return op_gate_mul(octx);
+
+        case HTP_OP_RMS_NORM_MUL_SILU:
+            return op_rms_norm_mul_silu(octx);
+
         case HTP_OP_SSM_CONV:
+        case HTP_OP_SSM_CONV_SILU:
             return op_ssm_conv(octx);
+
+        case HTP_OP_SSM_CONV_CHAIN:
+            return op_ssm_conv_chain(octx);
 
         case HTP_OP_CUMSUM:
             return op_cumsum(octx);
@@ -1015,17 +996,8 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_IM2COL:
             return op_im2col(octx);
 
-        case HTP_OP_IM2COL_3D:
-            return op_im2col_3d(octx);
-
         case HTP_OP_ROLL:
             return op_roll(octx);
-
-        case HTP_OP_POOL_2D:
-            return op_pool_2d(octx);
-
-        case HTP_OP_POOL_1D:
-            return op_pool_1d(octx);
 
         case HTP_OP_CONCAT:
             return op_concat(octx);
@@ -1042,6 +1014,215 @@ static int execute_op(struct htp_ops_context * octx) {
 
     FARF(ERROR, "Unknown Op %u", octx->op);
     return HTP_STATUS_NO_SUPPORT;
+}
+
+// --------------------------------------------------------------------------- HVX lane B (GGML_HEXAGON_LANE_OPS, Phase-1 feasibility experiment; off unless the host requests lane threads). Ops on the lane see a view of the context (own queue, VTCM, dma queues; shared fields copied at issue). An op flagged HTP_OPFLAGS_LANE_B is prepared by the dispatch thread as usual, then executed on the lane while the dispatch continues.
+// Lane trace events are copied back by count only. Only HVX-only ops may be flagged: the HMX queue has a single producer. The lane has its own work queue (n_lane threads; the lane thread is job 0 of that queue), VTCM partition [vtcm_size, vtcm_size_full) and dma queues [n_hvx, n_hvx + n_lane). At most one op is in flight; it is joined by the next LANE_B issue, by a HTP_OPFLAGS_LANE_JOIN op, or at batch end.
+
+#define LANE_POLL_COUNT 2000
+
+struct htp_lane {
+    work_queue_t           wq;
+    void *                 wq_mem;
+    struct htp_context *   view;
+    uint8_t *              vtcm_base;
+    size_t                 vtcm_size;
+    uint32_t               n_threads;
+    uint32_t               dma_off;
+    struct fastdiv_values  n_threads_div;
+    qurt_thread_t          thread;
+    void *                 stack;
+    atomic_uint            issued;   // ops issued by the dispatch thread (futex word)
+    atomic_uint            done;     // ops completed by the lane
+    atomic_bool            killed;
+    struct htp_ops_context octx;     // op in flight
+    struct profile_data    prof;     // written by the lane
+    int                    status;   // written by the lane
+    uint32_t               profiler;
+    struct htp_prof_desc * pds;      // batch profile descriptors (dispatch side)
+    bool                   pending;
+    uint32_t               pending_idx;
+    uint32_t               pending_opcode;
+    bool                   dma_note;
+    bool                   dma_only;
+    const struct htp_tensor * dsts[HTP_OP_MAX_OUTPUTS];
+};
+
+static void htp_lane_thread(void * arg) {
+    struct htp_lane * ln = (struct htp_lane *) arg;
+    unsigned int poll = LANE_POLL_COUNT;
+    unsigned int done = 0;
+
+    while (1) {
+        unsigned int seq = atomic_load_explicit(&ln->issued, memory_order_acquire);
+        if (seq == done) {
+            if (--poll) {
+                hex_pause();
+                continue;
+            }
+            qurt_futex_wait(&ln->issued, done);
+            poll = LANE_POLL_COUNT;
+            continue;
+        }
+        poll = LANE_POLL_COUNT;
+        if (atomic_load(&ln->killed)) {
+            break;
+        }
+
+        struct profile_data prof;
+        profile_start(ln->profiler, &prof);
+        ln->status = execute_op(&ln->octx);
+        profile_stop(ln->profiler, &prof);
+        ln->prof = prof;
+
+        done = seq;
+        atomic_store_explicit(&ln->done, done, memory_order_release);
+    }
+}
+
+static void htp_lane_join(struct htp_context * ctx) {
+    struct htp_lane * ln = ctx->lane;
+    if (!ln || !ln->pending) {
+        return;
+    }
+
+    const unsigned int target = atomic_load_explicit(&ln->issued, memory_order_relaxed);
+    while (atomic_load_explicit(&ln->done, memory_order_acquire) != target) {
+        hex_pause();
+    }
+    ln->pending = false;
+
+    if (ln->pds) {
+        struct htp_prof_desc * pd = &ln->pds[ln->pending_idx];
+        pd->opcode       = ln->pending_opcode;
+        pd->usecs        = (uint32_t) ln->prof.usecs;
+        pd->cycles_start = ln->prof.cycles_start;
+        pd->cycles_stop  = ln->prof.cycles_stop;
+        for (int j = 0; j < HEX_NUM_PMU_COUNTERS; j++) {
+            pd->pmu[j] = ln->prof.pmu_counters[j];
+        }
+    }
+
+    if (ln->dma_note) {
+        htp_dma_clean_note_outputs(ctx, ln->dsts, HTP_OP_MAX_OUTPUTS, ln->dma_only && ln->status == HTP_STATUS_OK);
+    }
+    htp_ops_context_set_status(&ctx->octx, ln->status);
+
+    for (uint32_t i = 0; i < ln->n_threads; i++) {
+        ctx->trace[ln->dma_off + i].count = ln->view->trace[i].count;
+    }
+}
+
+static void htp_lane_issue(struct htp_context * ctx, struct htp_ops_context * octx, uint32_t idx, bool dma_note, bool dma_only) {
+    struct htp_lane * ln = ctx->lane;
+
+    htp_lane_join(ctx); // at most one op in flight on the lane
+
+    // lane view: shared state copied from the context, lane-private queue / VTCM / dma / trace
+    struct htp_context * v = ln->view;
+    memcpy(v, ctx, sizeof(*v));
+    v->lane          = NULL;
+    v->work_queue    = ln->wq;
+    v->n_threads     = ln->n_threads;
+    v->n_threads_div = ln->n_threads_div;
+    v->vtcm_base     = ln->vtcm_base;
+    v->vtcm_size     = ln->vtcm_size;
+    for (uint32_t i = 0; i < ln->n_threads; i++) {
+        v->dma[i]   = ctx->dma[ln->dma_off + i];
+        v->trace[i] = ctx->trace[ln->dma_off + i];
+    }
+
+    ln->octx = *octx;
+    ln->octx.ctx           = v;
+    ln->octx.n_threads     = ln->n_threads;
+    ln->octx.n_threads_div = ln->n_threads_div;
+
+    ln->pending        = true;
+    ln->pending_idx    = idx;
+    ln->pending_opcode = octx->op;
+    ln->dma_note       = dma_note;
+    ln->dma_only       = dma_only;
+    memcpy(ln->dsts, octx->dsts, sizeof(ln->dsts));
+
+    atomic_fetch_add_explicit(&ln->issued, 1, memory_order_release);
+    qurt_futex_wake(&ln->issued, 1);
+}
+
+static int htp_lane_create(struct htp_context * ctx, uint32_t n_lane) {
+    struct htp_lane * ln = (struct htp_lane *) calloc(1, sizeof(*ln));
+    if (!ln) {
+        return AEE_ENOMEMORY;
+    }
+
+    const size_t wq_size = work_queue_sizeof(n_lane, WORK_QUEUE_CAPACITY, WORK_QUEUE_STACK_SIZE);
+    ln->n_threads     = n_lane;
+    ln->dma_off       = ctx->n_threads;
+    ln->n_threads_div = init_fastdiv_values(n_lane);
+    ln->vtcm_base     = ctx->vtcm_base + ctx->vtcm_size;
+    ln->vtcm_size     = ctx->vtcm_size_full - ctx->vtcm_size;
+    ln->view          = (struct htp_context *) memalign(128, sizeof(struct htp_context));
+    ln->wq_mem        = memalign(work_queue_alignof(), wq_size);
+    ln->stack         = memalign(4096, MAIN_THREAD_STACK_SIZE);
+    if (!ln->view || !ln->wq_mem || !ln->stack) {
+        free(ln->view); free(ln->wq_mem); free(ln->stack); free(ln);
+        return AEE_ENOMEMORY;
+    }
+    memset(ln->wq_mem, 0, wq_size);
+    ln->wq = work_queue_init(ln->wq_mem, n_lane, WORK_QUEUE_CAPACITY, WORK_QUEUE_STACK_SIZE);
+    if (!ln->wq) {
+        free(ln->view); free(ln->wq_mem); free(ln->stack); free(ln);
+        return AEE_ENOMEMORY;
+    }
+
+    atomic_init(&ln->issued, 0);
+    atomic_init(&ln->done, 0);
+    atomic_init(&ln->killed, false);
+
+    qurt_thread_attr_t attr;
+    qurt_thread_attr_init(&attr);
+    qurt_thread_attr_set_stack_addr(&attr, ln->stack);
+    qurt_thread_attr_set_stack_size(&attr, MAIN_THREAD_STACK_SIZE);
+    int prio = qurt_thread_get_priority(qurt_thread_get_id());
+    if (prio < 1)   prio = 1;
+    if (prio > 254) prio = 254;
+    qurt_thread_attr_set_priority(&attr, prio);
+    qurt_thread_attr_set_name(&attr, "htp-lane");
+    if (qurt_thread_create(&ln->thread, &attr, htp_lane_thread, ln) != 0) {
+        work_queue_free(ln->wq);
+        free(ln->view); free(ln->wq_mem); free(ln->stack); free(ln);
+        return AEE_ENOMEMORY;
+    }
+
+    ctx->lane = ln;
+    FARF(ALWAYS, "htp-lane: %u threads, vtcm %zu MB at +%zu MB, dma from %u", n_lane, ln->vtcm_size >> 20,
+         (size_t) ctx->vtcm_size >> 20, ln->dma_off);
+    return AEE_SUCCESS;
+}
+
+static void htp_lane_destroy(struct htp_context * ctx) {
+    struct htp_lane * ln = ctx->lane;
+    if (!ln) {
+        return;
+    }
+    htp_lane_join(ctx);
+
+    atomic_store(&ln->killed, true);
+    atomic_fetch_add_explicit(&ln->issued, 1, memory_order_release);
+    qurt_futex_wake(&ln->issued, 1);
+
+    int status;
+    qurt_thread_join(ln->thread, &status);
+    work_queue_free(ln->wq);
+
+    free(ln->wq_mem);
+    free(ln->stack);
+    free(ln->view);
+    free(ln);
+    ctx->lane = NULL;
+}
+
+static uint32_t htp_lane_n_threads(struct htp_context * ctx) {
+    return ctx->lane ? ctx->lane->n_threads : 0;
 }
 
 static inline bool reuse_buf(struct htp_context *ctx, uint32_t *m_reuse, struct htp_buf_desc *b) {
@@ -1192,6 +1373,71 @@ static void mdev_group_init(struct htp_context * ctx, const struct htp_opbatch_r
     ctx->mdev.fence_seq = (uint32_t)((req->seq & 0xfffff) << 12);
 }
 
+// DMA-clean op classes (GGML_HEXAGON_DMA_CLEAN). The kernels listed here were checked for their DDR accesses (DMA-only audit, impl/GdnFusePort.md). Reads are DMA-only when every load of a DDR input goes through a DMA queue; writes are DMA-only when every store to a DDR output goes through a DMA queue and has completed when the op returns.
+// Ops not listed are cached: their inputs are flushed as before and their outputs drop the records they touch. AR_DMA_CLEAN (HTP_OPFLAGS_AR_DMA_CLEAN): every DDR load of the all-reduce kernels goes through a DMA queue (partials, residual, norm weight) and every DDR store is a DMA that has completed when the op returns (dma_queue_flush at the end of each worker); the fence slots are accessed with explicit cache maintenance and are excluded from the dirty tracking.
+static inline bool htp_ar_dma_clean_enabled(const struct htp_ops_context * octx) {
+    return (octx->flags & HTP_OPFLAGS_AR_DMA_CLEAN) != 0;
+}
+
+static bool htp_op_reads_dma_only(const struct htp_ops_context * octx) {
+    if (octx->ctx->mdev.count > 1) {
+        return false;
+    }
+    switch (octx->op) {
+        case HTP_OP_SSM_CONV:
+        case HTP_OP_SSM_CONV_SILU:
+        case HTP_OP_SSM_CONV_CHAIN:
+        case HTP_OP_RMS_NORM_MUL:
+        case HTP_OP_RMS_NORM_MUL_SILU:
+        case HTP_OP_GDN_GATE:
+        case HTP_OP_GATE_MUL:
+        case HTP_OP_MUL_MAT:
+        case HTP_OP_MUL_MAT_NX:
+            return true;
+        case HTP_OP_ALLREDUCE:
+        case HTP_OP_ALLREDUCE_ADD:
+            return htp_ar_dma_clean_enabled(octx);
+        case HTP_OP_GLU_SWIGLU:
+            return octx->src[0] != NULL && octx->src[0]->type == HTP_TYPE_F32;
+        case HTP_OP_GATED_DELTA_NET: {
+            const struct htp_gdn_kernel_params * kp = (const struct htp_gdn_kernel_params *) octx->kernel_params;
+            return kp->kernel_type == HTP_GDN_KERNEL_HMX_CHUNKED;
+        }
+        default:
+            return false;
+    }
+}
+
+static bool htp_op_writes_dma_only(const struct htp_ops_context * octx) {
+    if (octx->ctx->mdev.count > 1) {
+        return false;
+    }
+    switch (octx->op) {
+        case HTP_OP_SSM_CONV:
+        case HTP_OP_SSM_CONV_SILU:
+        case HTP_OP_SSM_CONV_CHAIN:
+        case HTP_OP_GDN_GATE:
+        case HTP_OP_GATE_MUL:
+        case HTP_OP_RMS_NORM_MUL_SILU:
+            return true;
+        case HTP_OP_ALLREDUCE:
+        case HTP_OP_ALLREDUCE_ADD:
+            return htp_ar_dma_clean_enabled(octx);
+        case HTP_OP_RMS_NORM_MUL:
+            // ACT_TILE_ONLY: the fp32 output is not written at all (its readers are HMX tiles), so it is not recorded
+            return (octx->flags & HTP_OPFLAGS_ACT_TILE_ONLY) == 0;
+        case HTP_OP_GLU_SWIGLU:
+            return octx->src[0] != NULL && octx->src[0]->type == HTP_TYPE_F32;
+        case HTP_OP_GATED_DELTA_NET: {
+            const struct htp_gdn_kernel_params * kp = (const struct htp_gdn_kernel_params *) octx->kernel_params;
+            // K > 1 writes snapshot planes through a typed range (some planes may stay unwritten): not recorded whole
+            return kp->kernel_type == HTP_GDN_KERNEL_HMX_CHUNKED && kp->K == 1;
+        }
+        default:
+            return false;
+    }
+}
+
 static int proc_op_req(struct htp_ops_context * octx, struct htp_buf_desc * bufs, uint32_t n_bufs,
                        struct htp_tensor * tens, uint32_t idx, struct htp_op_desc * op) {
     memcpy(octx->op_params,     op->params, sizeof(octx->op_params));
@@ -1200,6 +1446,9 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_buf_desc * bufs
     octx->op            = op->opcode;
     octx->n_threads     = octx->ctx->n_threads;
     octx->n_threads_div = octx->ctx->n_threads_div;
+    if (octx->ctx->lane && (op->flags & HTP_OPFLAGS_LANE_JOIN)) {
+        htp_lane_join(octx->ctx);
+    }
 
     FARF(HIGH, "proc-op #%u: opcode %u flags 0x%x", idx, octx->op, octx->flags);
 
@@ -1218,7 +1467,17 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_buf_desc * bufs
             src->ne[0], src->ne[1], src->ne[2], src->ne[3]);
     }
 
-    htp_dcache_flush_dirty_tensors(octx->ctx, octx->src, HTP_OP_MAX_INPUTS);
+    octx->ctx->mm_early_pending = false;
+    if ((octx->flags & HTP_OPFLAGS_MM_EARLY_W) != 0 && octx->ctx->mdev.count <= 1) {
+        // weights are static in DDR (never dirty): fetch the first chunk while this op's bookkeeping and input flush run
+        htp_mm_early_weight_dma(octx);
+    }
+
+    // DMA-clean (GGML_HEXAGON_DMA_CLEAN, htp-tensor.c): nothing here changes unless the host sets HTP_OPFLAGS_DMA_CLEAN.
+    // An op that reads its inputs only by DMA skips the flush of inputs that DMA alone wrote in this batch. An op that writes its outputs only by DMA records them (dma_only below); any other op drops the records its outputs touch.
+    const bool dma_clean = (octx->flags & HTP_OPFLAGS_DMA_CLEAN) != 0;
+    const bool dma_only  = dma_clean && htp_op_writes_dma_only(octx);
+    htp_tensor_flush_all(octx->ctx, octx->src, HTP_OP_MAX_INPUTS, dma_clean && htp_op_reads_dma_only(octx));
 
     // Prep output tensors
     for (uint32_t i = 0; i < HTP_OP_MAX_OUTPUTS; i++) {
@@ -1234,13 +1493,29 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_buf_desc * bufs
             dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
     }
 
-    htp_dcache_mark_dirty_tensors(octx->ctx, octx->dsts, HTP_OP_MAX_OUTPUTS);
+    if (dma_only) {
+        // a DMA-only op writes its outputs to DDR directly: dirty cache lines over them must go first
+        htp_flush_dirty_overlapping(octx->ctx, octx->dsts, HTP_OP_MAX_OUTPUTS);
+    }
+    htp_tensor_dirty_all(octx->ctx, octx->dsts, HTP_OP_MAX_OUTPUTS);
 
     htp_mdev_group_barrier(octx);
 
-    int status = execute_op(octx);
+    if (octx->ctx->lane && (octx->flags & HTP_OPFLAGS_LANE_B)) {
+        htp_lane_issue(octx->ctx, octx, idx, dma_clean, dma_only);
+    } else {
+        int status = execute_op(octx);
+        if (dma_clean) {
+            htp_dma_clean_note_outputs(octx->ctx, octx->dsts, HTP_OP_MAX_OUTPUTS, dma_only && status == HTP_STATUS_OK);
+        }
+        htp_ops_context_set_status(octx, status);
+    }
 
-    htp_ops_context_set_status(octx, status);
+    if (octx->ctx->mm_early_pending) {
+        // the kernel did not take the early chunk (it returned before its first pipeline run): drain it
+        dma_queue_flush(octx->ctx->dma[0]);
+        octx->ctx->mm_early_pending = false;
+    }
 
     octx->src0_spad.src = NULL;
     octx->src1_spad.src = NULL;
@@ -1297,6 +1572,7 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
     qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
     hex_l2fetch_block(ctx, ctx->footprint);
     memset(ctx->dirty_ranges, 0, sizeof(ctx->dirty_ranges));
+    htp_dma_clean_reset(ctx);
     htp_trace_event_stop(&ctx->trace[0], HTP_TRACE_EVT_L2FLUSH, 0);
 
     htp_trace_event_start(&ctx->trace[0], HTP_TRACE_EVT_BUFF, 0);
@@ -1314,6 +1590,12 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
     mdev_group_init(ctx, req);
 
     work_queue_wakeup(ctx->work_queue);
+    if (ctx->lane) {
+        ctx->lane->pds      = ctx->profiler ? pds : NULL;
+        ctx->lane->profiler = ctx->profiler;
+        ctx->lane->pending  = false;
+        work_queue_wakeup(ctx->lane->wq);
+    }
     if (ctx->hmx_queue) {
         hmx_queue_wakeup(ctx->hmx_queue);
     }
@@ -1331,7 +1613,7 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
 
         htp_ops_context_set_status(octx, op_status);
 
-        if (ctx->profiler) {
+        if (ctx->profiler && !(ctx->lane && ctx->lane->pending && ctx->lane->pending_idx == i)) {
             pds[i].opcode = ops[i].opcode;
             pds[i].usecs  = prof.usecs;
             pds[i].cycles_start = prof.cycles_start;
@@ -1345,6 +1627,10 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
     if (ctx->hmx_queue) {
         hmx_queue_suspend(ctx->hmx_queue);
         hmx_queue_flush(ctx->hmx_queue);
+    }
+    if (ctx->lane) {
+        htp_lane_join(ctx);
+        work_queue_suspend(ctx->lane->wq);
     }
     work_queue_suspend(ctx->work_queue);
 
@@ -1395,7 +1681,7 @@ static void process_ops(struct htp_context * ctx) {
 
     vtcm_acquire(ctx);
 
-    while (!atomic_load(&ctx->vtcm_needs_release) && !atomic_load(&ctx->killed)) {
+    while (!ctx->vtcm_needs_release && !atomic_load(&ctx->killed)) {
         struct htp_opbatch_req req;
         uint32_t r_size = sizeof(req);
 

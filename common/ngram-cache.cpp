@@ -3,6 +3,7 @@
 #include "log.h"
 
 #include <cinttypes>
+#include <cstdlib>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -59,6 +60,16 @@ static llama_token get_token(const std::vector<llama_token> & inp, const std::ve
 // If sample size or percentage are below these thresholds the draft is aborted early:
 constexpr int    draft_min_sample_size_lax[LLAMA_NGRAM_MAX] = { 2,  2,  1,  1};
 constexpr int        draft_min_percent_lax[LLAMA_NGRAM_MAX] = {66, 50, 50, 50};
+// LLAMA_NGRAM_LAX=1 (env, default off): thresholds lax-all (sample >= 1, percent >= 0) at every level
+constexpr int    draft_min_sample_size_lax_all[LLAMA_NGRAM_MAX] = { 1,  1,  1,  1};
+constexpr int        draft_min_percent_lax_all[LLAMA_NGRAM_MAX] = { 0,  0,  0,  0};
+static bool ngram_lax_all() {
+    static const bool v = [] {
+        const char * e = std::getenv("LLAMA_NGRAM_LAX");
+        return e != nullptr && e[0] == '1';
+    }();
+    return v;
+}
 constexpr int draft_min_sample_size_strict[LLAMA_NGRAM_MAX] = { 4,  3,  2,  2};
 constexpr int     draft_min_percent_strict[LLAMA_NGRAM_MAX] = {75, 66, 66, 66};
 
@@ -68,7 +79,7 @@ static llama_token try_draft(common_ngram_cache & nc_static, const common_ngram 
     if (part_static_it == nc_static.end()) {
         return LLAMA_TOKEN_NULL;
     }
-    const common_ngram_cache_part & part_static = part_static_it->second;
+    const common_ngram_cache_part part_static = part_static_it->second;
 
     int max_count_static  = 0;
     int sum_count_static  = 0;
@@ -85,10 +96,10 @@ static llama_token try_draft(common_ngram_cache & nc_static, const common_ngram 
         sum_count_static += count_static;
     }
 
-    if (sum_count_static < draft_min_sample_size_lax[LLAMA_NGRAM_STATIC-1]) {
+    if (sum_count_static < (ngram_lax_all() ? draft_min_sample_size_lax_all : draft_min_sample_size_lax)[LLAMA_NGRAM_STATIC-1]) {
         return LLAMA_TOKEN_NULL;
     }
-    if (100*max_count_static < draft_min_percent_lax[LLAMA_NGRAM_STATIC-1]*sum_count_static) {
+    if (100*max_count_static < (ngram_lax_all() ? draft_min_percent_lax_all : draft_min_percent_lax)[LLAMA_NGRAM_STATIC-1]*sum_count_static) {
         return LLAMA_TOKEN_NULL;
     }
     return max_token;
@@ -96,7 +107,7 @@ static llama_token try_draft(common_ngram_cache & nc_static, const common_ngram 
 
 // Try to draft a token from primary cache (context/dynamic), validate with static cache:
 static llama_token try_draft(
-    common_ngram_cache & nc_primary, const std::vector<common_ngram> & ngrams_primary, const common_ngram_cache_part & part_static,
+    common_ngram_cache & nc_primary, const std::vector<common_ngram> & ngrams_primary, common_ngram_cache_part & part_static,
     const int * min_sample_size, const int * min_percent) {
 
     llama_token drafted_token = LLAMA_TOKEN_NULL;
@@ -108,7 +119,7 @@ static llama_token try_draft(
         if (part_primary_it == nc_primary.end()) {
             continue;
         }
-        const common_ngram_cache_part & part_primary = part_primary_it->second;
+        const common_ngram_cache_part part_primary = part_primary_it->second;
 
         int max_count_primary = 0;
         int max_count_static  = 0;
@@ -118,7 +129,7 @@ static llama_token try_draft(
         for (std::pair<llama_token, int> token_count_primary : part_primary) {
             const llama_token token = token_count_primary.first;
 
-            common_ngram_cache_part::const_iterator token_count_static_it = part_static.find(token);
+            common_ngram_cache_part::iterator token_count_static_it = part_static.find(token);
 
             const int32_t count_primary = token_count_primary.second;
             const int32_t count_static  = token_count_static_it != part_static.end() ? 100*token_count_static_it->second : 1;
@@ -162,9 +173,11 @@ void common_ngram_cache_draft(
         for (int j = ngram_start_static; j < ngram_start_static + LLAMA_NGRAM_STATIC; ++j) {
             ngram_static.tokens[j-ngram_start_static] = get_token(inp, draft, j);
         }
-        static const common_ngram_cache_part part_static_empty;
-        common_ngram_cache::const_iterator part_static_it = nc_static.find(ngram_static);
-        const common_ngram_cache_part & part_static = part_static_it != nc_static.end() ? part_static_it->second : part_static_empty;
+        common_ngram_cache::iterator part_static_it = nc_static.find(ngram_static);
+        common_ngram_cache_part part_static;
+        if (part_static_it != nc_static.end()) {
+            part_static = part_static_it->second;
+        }
 
         // cd = context + dynamic
         std::vector<common_ngram> ngrams_cd;
@@ -177,7 +190,7 @@ void common_ngram_cache_draft(
             ngrams_cd.push_back(ngram_cd);
         }
         if (drafted_token == LLAMA_TOKEN_NULL) {
-            drafted_token = try_draft(nc_context, ngrams_cd, part_static, draft_min_sample_size_lax, draft_min_percent_lax);
+            drafted_token = try_draft(nc_context, ngrams_cd, part_static, ngram_lax_all() ? draft_min_sample_size_lax_all : draft_min_sample_size_lax, ngram_lax_all() ? draft_min_percent_lax_all : draft_min_percent_lax);
         }
         if (drafted_token == LLAMA_TOKEN_NULL) {
             drafted_token = try_draft(nc_dynamic, ngrams_cd, part_static, draft_min_sample_size_strict, draft_min_percent_strict);

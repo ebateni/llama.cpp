@@ -934,7 +934,7 @@ static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch
                     slot.id,
                     llama_n_batch(slot.ctx_tgt),
                     &new_n_past,
-                    cb,
+                    static_cast<mtmd_helper_post_decode_callback>(cb),
                     &cb_data
                 );
                 if (res != 0) {
@@ -3765,9 +3765,6 @@ private:
                             /* .id_last  = */ slot.sampled,
                             /* .prompt   = */ &slot.spec_prompt,
                             /* .result   = */ &slot.spec_draft,
-                            /* .result_q = */ spec_reject ? &slot.spec_draft_q : nullptr,
-                            /* .temp     = */ slot.task->params.sampling.temp,
-                            /* .seed     = */ slot.task->params.sampling.seed,
                         };
 
                         drafting.push_back(&slot);
