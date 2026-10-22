@@ -6,7 +6,7 @@ upstream `620d2225c`. Device `1b531bdd`, 4 NSPs, row split (`GGML_HEXAGON_DEVICE
 This file is the living plan and history. It is updated and pushed after every step.
 Detailed measurements live in [`adaptive-split-baseline.md`](adaptive-split-baseline.md).
 
-_Last updated: 2026-10-21 — M1 shipped as a single `GGML_HEXAGON_FA_SPLIT` flag on upstream master. M1b (zig-zag Q-blocks) pushed for A/B. Plan replanned around upstream PR #30843 (fusions)._
+_Last updated: 2026-10-21 — M1b zig-zag dropped (no gain); M5 next. M1 shipped as a single `GGML_HEXAGON_FA_SPLIT` flag on upstream master. M1b (zig-zag Q-blocks) pushed for A/B. Plan replanned around upstream PR #30843 (fusions)._
 
 ---
 
@@ -65,11 +65,11 @@ Details are in `adaptive-split-baseline.md`.
 | # | Item | Axis change? | Knob | Estimated 4c gain (upper bound from profiles) | Status |
 |---|---|---|---|---|---|
 | M1 | **FA adaptive team split** — shipped as `hexagon: KV-head team split for HMX flash attention in multicore` + merged flag (`8075d1d54`, qualcomm `ebateni/adaptive-split`). `FA_SPLIT=0` = token split only; `1` = head split when `n_kv % N == 0`, team split when `n_kv < N` | **yes** | `GGML_HEXAGON_FA_SPLIT=0/1` | — | **SHIPPED.** On the new base (run `20261021-104316`, pp1024 4c): E4B **+14.7%**, 12B **+14.9%**, 26B **+6.6%** (TG +15%), E2B −0.5% |
-| M1b | **Zig-zag Q-blocks within a team.** Masked-block skipping makes per-Q-block cost grow with position under a causal mask, so the contiguous split leaves the last member with the most work: 4-way critical path 7/16 vs 4/16 ideal (E2B, 1 team × 4); 2-way 3/4 vs 1/2 (E4B / 12B / 26B, 2 teams × 2). Snake order {m, 2T−1−m, …} balances it. Any mask; no host cost | no (order only) | `FA_SPLIT=2` | E2B and Gemma global layers: FA up to ~1.5–1.75× faster at depth 0 | **pushed `e9ee0abec` (ebateni fork, `ebateni/fa-team-zigzag`), awaiting A/B 1 vs 2** |
+| M1b | **Zig-zag Q-blocks within a team.** Masked-block skipping makes per-Q-block cost grow with position under a causal mask, so the contiguous split leaves the last member with the most work: 4-way critical path 7/16 vs 4/16 ideal (E2B, 1 team × 4); 2-way 3/4 vs 1/2 (E4B / 12B / 26B, 2 teams × 2). Snake order {m, 2T−1−m, …} balances it. Any mask; no host cost | no (order only) | `FA_SPLIT=2` | E2B and Gemma global layers: FA up to ~1.5–1.75× faster at depth 0 | **DROPPED.** Run `20261021-213738` (1 vs 2, ub1024, d0/16k): no change on any model, all within ±1% (E2B 4c d0 5143→5111, d16k 3912→3932; E4B 3320→3322). Likely the Br solver already gives ≤ 1 Q-block per member, so the zig-zag order equals the contiguous one; at d16k the mask imbalance is small anyway |
 | M2 | **Matmul-epilogue GLU**: MUL_MAT_NX(gate, up) + act·mul in the HMX writeback. Not covered by #30843 (it fuses UNARY+MUL into one elementwise GLU op, but gate/up still round-trip through DDR) | no | next free `OPFUSION` bit after #30843 (≥ 8192) | llama ~8%, Qwen ~7%, Gemma ~10% (upper bound; the elementwise part is already fused by #30843) | **blocked on #30843 landing** (it refactors htp-fusion / kparams); then rebase and build on its GLU op |
 | M3 | Qwen3.5 conv block, **narrowed**: #30843 fuses SSM_CONV+SILU and GDN+CPY. What remains: the CONCAT (transpose) and conv-state CPY around SSM_CONV, and the channels → TOKEN + 3-token halo axis | **yes** | next free bit | Qwen3.5 ~5–8% (was ~13%) | after #30843; needs a Qwen3.5 profile on the post-#30843 base |
 | M4 | **Cross-op residual ADD → RMS_NORM(+MUL)** (pre-norm of the next sublayer). #30843 covers same-op chains (BINARY_NX), RMS_NORM+MUL, RMS_NORM+SCALE and MUL+MUL scalar, but not ADD feeding a norm | no | next free bit | 3–6% | **agree ownership with Max first**; otherwise drop |
-| M5 | **MoE**: token-count-balanced experts (LPT), expert vs token split; 4c host memory overhead. FA does not help here (35B-A3B: +2.1%, noise) and the scaling is 2.25×, the worst of all models | **probably** | `GGML_HEXAGON_MMID_SPLIT` | TBD | **next after M1b**: needs the M5-0 MoE profile |
+| M5 | **MoE**: token-count-balanced experts (LPT), expert vs token split; 4c host memory overhead. FA does not help here (35B-A3B: +2.1%, noise) and the scaling is 2.25×, the worst of all models | **probably** | `GGML_HEXAGON_MMID_SPLIT` | TBD | **NEXT**: needs the M5-0 MoE profile |
 | M6 | Barrier elision + REPL for tiny ops, on the post-fusion graph | no (sync only) | `GGML_HEXAGON_MDEV_SYNC` | ≤ 2–3% | later |
 | M7 | Automatic tuning of whatever knobs remain scenario-dependent | picks axes | `auto` | — | last |
 
@@ -92,7 +92,7 @@ separate PR. The axis-related items are M1, M3 and M5 (+ M7); M2 and M4 are fusi
 | Dense matmuls (QKV, o, FFN, PLE) | hardcode TOKEN |
 | Elementwise (norm, act, GLU, ADD, ROPE) | hardcode TOKEN/rows; fuse |
 | FA, `n_kv % N == 0` | hardcode KV-head split (upstream) |
-| FA | **shipped**: head split (`n_kv % N == 0`), team split (`n_kv < N`); zig-zag within a team pending (M1b) |
+| FA | **shipped**: head split (`n_kv % N == 0`), team split (`n_kv < N`); zig-zag within a team tried and dropped (M1b, no gain) |
 | SSM_CONV / conv block | TOKEN + halo once validated (M3) |
 | GATED_DELTA_NET | hardcode V-heads (upstream) |
 | MUL_MAT_ID | knob (M5) |
@@ -257,3 +257,4 @@ Gemma-4-12B is still GARBAGE (IQ 2/10) at 1c and 4c, independent of the knob.
 | owner run | `20261021-104316` (shipped flag, new base): E4B +14.7%, 12B +14.9%, 26B +6.6% / TG +15%, E2B −0.5% |
 | qualcomm `e9ee0abec` | **M1b** zig-zag Q-block order in a team (`FA_SPLIT=2`), branch `ebateni/fa-team-zigzag` on the ebateni fork |
 | (this commit) | Replan around PR #30843: M2 = matmul-epilogue GLU only; M3 narrowed; M4 = cross-op ADD→norm (coordinate); M5 next after M1b |
+| owner run | `20261021-213738` (M1b 1 vs 2, stopped before 26B 4c): no change, within noise -> **M1b dropped** |
