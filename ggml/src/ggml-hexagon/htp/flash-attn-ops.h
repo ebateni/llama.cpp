@@ -33,13 +33,19 @@ enum htp_fa_kernel_type {
 };
 
 // Multicore: gcd(n_kv_heads, N) teams own the KV heads, team members share the Q-blocks
-#define HTP_FA_FLAG_TEAM_SPLIT 0x01
+#define HTP_FA_FLAG_TEAM_SPLIT  0x01
+#define HTP_FA_FLAG_TEAM_ZIGZAG 0x02 // zig-zag Q-block order within a team (balances causal masks)
 
 static inline void htp_fa_mdev_teams(uint32_t n_kv_heads, uint32_t mdev_count, bool head_split,
                                      uint32_t * n_teams, uint32_t * team_size) {
     const uint32_t t = (head_split && n_kv_heads > 0 && mdev_count > 1) ? hex_gcd_u32(n_kv_heads, mdev_count) : 1;
     *n_teams   = t;
     *team_size = mdev_count > 1 ? mdev_count / t : 1;
+}
+
+static inline uint32_t htp_fa_zigzag_owner(uint32_t q_block, uint32_t team_size) {
+    const uint32_t r = q_block % (2 * team_size);
+    return r < team_size ? r : 2 * team_size - 1 - r;
 }
 
 struct htp_fa_kernel_params {

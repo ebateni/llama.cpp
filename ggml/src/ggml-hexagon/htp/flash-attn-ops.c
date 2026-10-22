@@ -2066,6 +2066,8 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     uint32_t q_start_max  = neq1;
     uint32_t kv_head_min  = 0;
     uint32_t kv_head_max  = n_kv_heads;
+    uint32_t zz_team      = 0;
+    uint32_t zz_member    = 0;
 
     if (octx->ctx->mdev.count > 1) {
         const uint32_t mdev_count = octx->ctx->mdev.count;
@@ -2084,17 +2086,25 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
             kv_head_min = team * kv_per_team;
             kv_head_max = kv_head_min + kv_per_team;
 
-            const uint32_t base  = n_q_blocks / team_size;
-            const uint32_t rem   = n_q_blocks - base * team_size;
-            const uint32_t b0    = member * base + MIN(member, rem);
-            const uint32_t nblk  = base + (member < rem ? 1 : 0);
+            if (kparams->flags & HTP_FA_FLAG_TEAM_ZIGZAG) {
+                if (member >= n_q_blocks) {
+                    return HTP_STATUS_OK;
+                }
+                zz_team   = team_size;
+                zz_member = member;
+            } else {
+                const uint32_t base  = n_q_blocks / team_size;
+                const uint32_t rem   = n_q_blocks - base * team_size;
+                const uint32_t b0    = member * base + MIN(member, rem);
+                const uint32_t nblk  = base + (member < rem ? 1 : 0);
 
-            if (nblk == 0) {
-                return HTP_STATUS_OK;
+                if (nblk == 0) {
+                    return HTP_STATUS_OK;
+                }
+
+                q_start_min = b0 * Br;
+                q_start_max = MIN((b0 + nblk) * Br, neq1);
             }
-
-            q_start_min = b0 * Br;
-            q_start_max = MIN((b0 + nblk) * Br, neq1);
         } else if (kparams->head_split && can_split && n_kv_heads >= mdev_count && n_kv_heads % mdev_count == 0) {
             const uint32_t kv_per_core = n_kv_heads / mdev_count;
             kv_head_min = mdev_idx * kv_per_core;
@@ -2227,6 +2237,9 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     for (uint32_t ib3 = 0; ib3 < neq3; ++ib3) {
         const uint32_t im3 = mask ? fastmodulo(ib3, mask->ne[3], &factx.src3_div3) : 0;
         for (uint32_t q_start = q_start_min; q_start < q_start_max; q_start += Br) {
+            if (zz_team > 1 && htp_fa_zigzag_owner(q_start / Br, zz_team) != zz_member) {
+                continue;
+            }
             const uint32_t n_rows_q    = hex_smin(Br, neq1 - q_start);
             const size_t   n_rows_g    = n_rows_q * G;
             const size_t   g_br_actual = hex_align_up(n_rows_g, HMX_FP16_TILE_N_ROWS);

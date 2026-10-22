@@ -151,7 +151,7 @@ static size_t opt_mbuf_total  = 0;                        // total buffer space 
 
 static int    opt_mm_select  = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
 static int    opt_fa_select  = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
-static int    opt_fa_split   = 1; // 1 = head-split + team-split when n_kv_heads < N_cores (default), 0 = off
+static int    opt_fa_split   = 1; // 1 = head-split + team-split when n_kv_heads < N_cores (default), 2 = 1 + zig-zag Q-blocks in a team, 0 = off
 static int    opt_gdn_select = 2; // 2 = HMX -> HVX, 1 = HVX, 0 = CPU (unsupported)
 static int    opt_ar_select  = 2; // 2 = fused ALLREDUCE+ADD (default), 1 = unfused ALLREDUCE, 0 = fallback to CPY+FENCE
 static int    opt_ar_scatter = 1; // 1 = reduce-scatter the fused ALLREDUCE+ADD (default), 0 = full reduction
@@ -3560,6 +3560,9 @@ static bool ggml_hexagon_precompute_flash_attn_params(
         htp_fa_mdev_teams(n_kv_heads, sess->mdev.count, kparams->head_split != 0, &fa_teams, &fa_team_size);
         if (fa_team_size > 1) {
             kparams->flags |= HTP_FA_FLAG_TEAM_SPLIT;
+            if (opt_fa_split >= 2) {
+                kparams->flags |= HTP_FA_FLAG_TEAM_ZIGZAG;
+            }
         }
     }
 
