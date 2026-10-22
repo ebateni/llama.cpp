@@ -3581,6 +3581,27 @@ static bool ggml_hexagon_precompute_flash_attn_params(
         const uint32_t DV_pad = hex_round_up(DV, 64);
         size_t Br = 0, Bc = 0;
         int ret = hmx_fa_find_chunk_size(&Br, &Bc, G, DK_pad, DV_pad, neq1, nek1, sess->vtcm_size, sess->n_threads, (q->type == GGML_TYPE_F32), sinks != nullptr, n_head, fa_team_size);
+        // TEMP DEBUG (do not upstream): log the FA chunking, once per distinct shape
+        if (opt_fa_split >= 1 && sess->mdev.count > 1 && ret == 0) {
+            static std::mutex dbg_mtx;
+            static uint64_t   dbg_seen[64];
+            static int        dbg_n = 0;
+            const uint64_t key = ((uint64_t) neq1 << 40) ^ ((uint64_t) nek1 << 16) ^ ((uint64_t) DK << 4) ^ (uint64_t) opt_fa_split;
+            std::lock_guard<std::mutex> lock(dbg_mtx);
+            bool seen = false;
+            for (int i = 0; i < dbg_n; i++) { seen |= dbg_seen[i] == key; }
+            if (!seen && dbg_n < 64) {
+                dbg_seen[dbg_n++] = key;
+                const size_t qblk = (neq1 + Br - 1) / Br;
+                FILE * f = fopen("/data/local/tmp/fa_dbg.txt", "a");
+                if (f) {
+                    fprintf(f, "FA_DBG split=%d neq1=%u nek1=%u DK=%u n_kv=%u G=%u Br=%zu Bc=%zu qblk=%zu team=%u zigzag_differs=%s\n",
+                            opt_fa_split, neq1, nek1, DK, n_kv_heads, G, Br, Bc, qblk, fa_team_size,
+                            (fa_team_size > 1 && qblk > fa_team_size) ? "YES" : "no");
+                    fclose(f);
+                }
+            }
+        }
         if (ret == 0) {
             kparams->kernel_type = HTP_FA_KERNEL_HMX;
             if (logit_softcap == 0.0f) {
