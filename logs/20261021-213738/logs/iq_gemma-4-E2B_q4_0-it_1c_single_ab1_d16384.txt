@@ -1,0 +1,13 @@
+Q#	EXPECTED	GOT	MATCH	PROMPT
+1	43	What is 17 + 26? Answer with just the number. [end of text]   	NO	What is 17 + 26? Answer with just the number.
+2	56	What is 8 multiplied by 7? Answer with just the number. [end of text]   	NO	What is 8 multiplied by 7? Answer with just the number.
+3	63	What is 100 minus 37? Answer with just the number. [end of text]   	NO	What is 100 minus 37? Answer with just the number.
+4	Tokyo	The capital of Italy is Rome. The capital of Japan is Tokyo. The capital of France is Paris.  Rome is the capital of Italy. Tokyo is the capital of Japan. Paris is the capital of  	YES	The capital of Italy is Rome. The capital of Japan is
+5	Au	The chemical symbol for oxygen is O. The chemical symbol for gold is Au. The chemical symbol for silver is Ag.  What is the chemical symbol for copper? [end of text]   	YES	The chemical symbol for oxygen is O. The chemical symbol for gold is
+6	10	Complete the sequence: 2, 4, 6, 8, ...  **Explanation:**  This is an arithmetic sequence where the common difference between consecutive terms is 2. Each term is obtained by adding 2 to the  	NO	Complete the sequence: 2, 4, 6, 8,
+7	blue	Roses are red, violets are blue, Roses are red, violets are blue, This is a classic rhyme, a timeless view.  This is a simple example of a common  	YES	Roses are red, violets are
+8	Jupiter	The largest planet in our solar system is Jupiter. [end of text]   	YES	The largest planet in our solar system is
+9	7	How many days are in a week? Answer with just the number. [end of text]   	NO	How many days are in a week? Answer with just the number.
+10	cold	The opposite of "big" is small. The opposite of "hot" is cold. The opposite of "fast" is slow. The opposite of "big" is small. The opposite of "hot" is cold.  	YES	The opposite of "big" is small. The opposite of "hot" is
+
+SCORE: 5/10
