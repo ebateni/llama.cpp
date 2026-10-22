@@ -1,0 +1,6 @@
+2026-10-22T01:40:31,179056627-04:00	DEFERRED	case=bench_Qwen3.5-35B-A3B-UD-Q4_K_M_4c_row_ab1_ub1024_d16384; confirmed kernel OOM requires a clean memory state; recovery deferred until this row finishes
+2026-10-22T01:45:34,094365468-04:00	REQUESTED	case=bench_Qwen3.5-35B-A3B-UD-Q4_K_M_4c_row_ab1_ub1024_d16384; confirmed kernel OOM requires a clean memory state; row complete; PDU=10.238.2.94 outlet=2
+2026-10-22T01:46:13,248905368-04:00	RECOVERED	case=bench_Qwen3.5-35B-A3B-UD-Q4_K_M_4c_row_ab1_ub1024_d16384; confirmed kernel OOM requires a clean memory state; row complete; device online and driver reinstalled
+2026-10-22T02:09:18,970708532-04:00	DEFERRED	case=bench_Qwen3.5-35B-A3B-UD-Q4_K_M_4c_row_ab2_ub1024_d16384; confirmed kernel OOM requires a clean memory state; recovery deferred until this row finishes
+2026-10-22T02:14:25,583404708-04:00	REQUESTED	case=bench_Qwen3.5-35B-A3B-UD-Q4_K_M_4c_row_ab2_ub1024_d16384; confirmed kernel OOM requires a clean memory state; row complete; PDU=10.238.2.94 outlet=2
+2026-10-22T02:15:04,544539247-04:00	RECOVERED	case=bench_Qwen3.5-35B-A3B-UD-Q4_K_M_4c_row_ab2_ub1024_d16384; confirmed kernel OOM requires a clean memory state; row complete; device online and driver reinstalled

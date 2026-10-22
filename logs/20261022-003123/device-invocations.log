@@ -1,0 +1,90 @@
+===== DEVICE INVOCATION =====
+timestamp=2026-10-22T00:32:49,693498226-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 1 
+device_args=iq Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-22T00:47:50,898615305-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 1 
+device_args=needle Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-22T00:49:45,471709926-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 1 
+device_args=cookie Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-22T00:51:15,647228327-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 1\ 1024\ 0\ 1024\ 1024 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 1 1024 0 1024 1024 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-22T00:55:36,812148982-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 2 
+device_args=iq Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 2 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-22T01:10:38,195369592-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 2 
+device_args=needle Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 2 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-22T01:12:34,050467059-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 2 
+device_args=cookie Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 2 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-22T01:14:04,340873149-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 2\ 1024\ 0\ 1024\ 1024 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 2 1024 0 1024 1024 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-22T01:18:21,666942601-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 1 
+device_args=iq Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-22T01:33:23,183505030-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 1 
+device_args=needle Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-22T01:35:20,481466280-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 1 
+device_args=cookie Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-22T01:36:50,663758372-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 1\ 1024\ 16384\ 17408\ 1024 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 1 1024 16384 17408 1024 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-22T01:40:31,188161971-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 1\ 512\ 16384\ 17408\ 1024 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 1 512 16384 17408 1024 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-22T01:46:13,251180199-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 2 
+device_args=iq Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 2 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-22T02:01:14,459725986-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 2 
+device_args=needle Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 2 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-22T02:03:10,113360681-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 2 
+device_args=cookie Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 2 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-22T02:04:40,293421922-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 2\ 1024\ 16384\ 17408\ 1024 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 2 1024 16384 17408 1024 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-22T02:09:18,978740000-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 2\ 512\ 16384\ 17408\ 1024 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 2 512 16384 17408 1024 
+

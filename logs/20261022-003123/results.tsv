@@ -1,0 +1,5 @@
+model	cores	split	ab	ubatch	pp_tokens	pp_ts	tg_ts	iq	needle	cookie_ok	depth
+Qwen3.5-35B-A3B-UD-Q4_K_M	4	row	1	1024	1024	857.39	25.05	0/10	PASS	ERR	0
+Qwen3.5-35B-A3B-UD-Q4_K_M	4	row	2	1024	1024	1084.33	25.87	2/10	PASS	OK	0
+Qwen3.5-35B-A3B-UD-Q4_K_M	4	row	1	512*	1024	709.36	21.56	2/10	PASS	ERR	16384
+Qwen3.5-35B-A3B-UD-Q4_K_M	4	row	2	512*	1024	686.56	22.26	1/10	PASS	ERR	16384
