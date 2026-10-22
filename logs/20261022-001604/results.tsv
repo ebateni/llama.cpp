@@ -1,0 +1,3 @@
+model	cores	split	ab	ubatch	pp_tokens	pp_ts	tg_ts	iq	needle	cookie_ok	depth
+gemma-4-E2B_q4_0-it	4	row	1	1024	1024	5157.06	54.68	5/10	PASS	OK	0
+gemma-4-E2B_q4_0-it	4	row	2	1024	1024	5164.84	54.72	5/10	PASS	OK	0
