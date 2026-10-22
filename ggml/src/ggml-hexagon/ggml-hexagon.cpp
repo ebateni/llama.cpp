@@ -3581,6 +3581,14 @@ static bool ggml_hexagon_precompute_flash_attn_params(
         const uint32_t DV_pad = hex_round_up(DV, 64);
         size_t Br = 0, Bc = 0;
         int ret = hmx_fa_find_chunk_size(&Br, &Bc, G, DK_pad, DV_pad, neq1, nek1, sess->vtcm_size, sess->n_threads, (q->type == GGML_TYPE_F32), sinks != nullptr, n_head, fa_team_size);
+        // zig-zag needs >= 2 Q-blocks per team member to balance a causal mask
+        if (ret == 0 && (kparams->flags & HTP_FA_FLAG_TEAM_ZIGZAG)) {
+            const size_t br_unit = (32 + G - 1) / G;
+            const size_t want    = 2 * fa_team_size;
+            if ((neq1 + Br - 1) / Br < want && neq1 >= want * br_unit) {
+                Br = ((neq1 + want - 1) / want + br_unit - 1) / br_unit * br_unit;
+            }
+        }
         // TEMP DEBUG (do not upstream): log the FA chunking, once per distinct shape
         if (opt_fa_split >= 1 && sess->mdev.count > 1 && ret == 0) {
             static std::mutex dbg_mtx;
