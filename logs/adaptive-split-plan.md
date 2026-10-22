@@ -6,7 +6,7 @@ upstream `620d2225c`. Device `1b531bdd`, 4 NSPs, row split (`GGML_HEXAGON_DEVICE
 This file is the living plan and history. It is updated and pushed after every step.
 Detailed measurements live in [`adaptive-split-baseline.md`](adaptive-split-baseline.md).
 
-_Last updated: 2026-10-18 — **M1 closed**: team split is the default (`FA_SPLIT=1`). Auto mode (`=2`) and the solver memo were reverted: they gave no gain over `=1`. Next: M2._
+_Last updated: 2026-10-21 — M1 shipped as a single `GGML_HEXAGON_FA_SPLIT` flag on upstream master. M1b (zig-zag Q-blocks) pushed for A/B. Plan replanned around upstream PR #30843 (fusions)._
 
 ---
 
@@ -64,13 +64,21 @@ Details are in `adaptive-split-baseline.md`.
 
 | # | Item | Axis change? | Knob | Estimated 4c gain (upper bound from profiles) | Status |
 |---|---|---|---|---|---|
-| M1 | **FA adaptive team split** ("hexagon: adaptive KV-head team split for flash attention on multi-NSP"): KV heads -> gcd(n_kv, N) teams, Q-blocks split within each team, per-NSP Br cost | **yes** (Q-block -> KV-head team x Q-block) | `GGML_HEXAGON_FA_SPLIT=0/1` | Gemma ub1024 +15–18%; llama 0% | **CLOSED — default on.** Gemma ub1024 +14% (d0 and d16k), TG +4–21%, ub2048 −1–2% (within run-to-run noise), no other model changes |
-| M2 | GLU epilogue fusion: MUL_MAT_NX(gate, up) + SWIGLU/GEGLU -> one op | no | `GGML_HEXAGON_OPFUSION` new bit 128 | llama ~8%, Qwen ~7%, Gemma ~10% | next |
-| M3 | Qwen3.5 conv block fusion: CONCAT + SSM_CONV + SILU + state CPY | **yes** (channels -> TOKEN + 3-token halo) | OPFUSION bit 256 | Qwen3.5 ~13% | planned |
-| M4 | Residual ADD + RMS_NORM(+MUL) fusion; Gemma post-norm + ADD + layer-scale MUL | no | OPFUSION bit 512 | 3–8% | planned |
-| M5 | MoE: token-count-balanced experts (LPT), expert vs token split; fix the 4c memory overhead | **probably** | `GGML_HEXAGON_MMID_SPLIT` | TBD (needs profile) | waiting for MoE profile |
+| M1 | **FA adaptive team split** — shipped as `hexagon: KV-head team split for HMX flash attention in multicore` + merged flag (`8075d1d54`, qualcomm `ebateni/adaptive-split`). `FA_SPLIT=0` = token split only; `1` = head split when `n_kv % N == 0`, team split when `n_kv < N` | **yes** | `GGML_HEXAGON_FA_SPLIT=0/1` | — | **SHIPPED.** On the new base (run `20261021-104316`, pp1024 4c): E4B **+14.7%**, 12B **+14.9%**, 26B **+6.6%** (TG +15%), E2B −0.5% |
+| M1b | **Zig-zag Q-blocks within a team.** Masked-block skipping makes per-Q-block cost grow with position under a causal mask, so the contiguous split leaves the last member with the most work: 4-way critical path 7/16 vs 4/16 ideal (E2B, 1 team × 4); 2-way 3/4 vs 1/2 (E4B / 12B / 26B, 2 teams × 2). Snake order {m, 2T−1−m, …} balances it. Any mask; no host cost | no (order only) | `FA_SPLIT=2` | E2B and Gemma global layers: FA up to ~1.5–1.75× faster at depth 0 | **pushed `e9ee0abec` (ebateni fork, `ebateni/fa-team-zigzag`), awaiting A/B 1 vs 2** |
+| M2 | **Matmul-epilogue GLU**: MUL_MAT_NX(gate, up) + act·mul in the HMX writeback. Not covered by #30843 (it fuses UNARY+MUL into one elementwise GLU op, but gate/up still round-trip through DDR) | no | next free `OPFUSION` bit after #30843 (≥ 8192) | llama ~8%, Qwen ~7%, Gemma ~10% (upper bound; the elementwise part is already fused by #30843) | **blocked on #30843 landing** (it refactors htp-fusion / kparams); then rebase and build on its GLU op |
+| M3 | Qwen3.5 conv block, **narrowed**: #30843 fuses SSM_CONV+SILU and GDN+CPY. What remains: the CONCAT (transpose) and conv-state CPY around SSM_CONV, and the channels → TOKEN + 3-token halo axis | **yes** | next free bit | Qwen3.5 ~5–8% (was ~13%) | after #30843; needs a Qwen3.5 profile on the post-#30843 base |
+| M4 | **Cross-op residual ADD → RMS_NORM(+MUL)** (pre-norm of the next sublayer). #30843 covers same-op chains (BINARY_NX), RMS_NORM+MUL, RMS_NORM+SCALE and MUL+MUL scalar, but not ADD feeding a norm | no | next free bit | 3–6% | **agree ownership with Max first**; otherwise drop |
+| M5 | **MoE**: token-count-balanced experts (LPT), expert vs token split; 4c host memory overhead. FA does not help here (35B-A3B: +2.1%, noise) and the scaling is 2.25×, the worst of all models | **probably** | `GGML_HEXAGON_MMID_SPLIT` | TBD | **next after M1b**: needs the M5-0 MoE profile |
 | M6 | Barrier elision + REPL for tiny ops, on the post-fusion graph | no (sync only) | `GGML_HEXAGON_MDEV_SYNC` | ≤ 2–3% | later |
 | M7 | Automatic tuning of whatever knobs remain scenario-dependent | picks axes | `auto` | — | last |
+
+**Qwen3.5 (4 KV heads → head split):** its FA partition is already balanced; every NSP does one head's full causal triangle, and masked-block skipping cuts the same work on every NSP. So no FA tweak helps it. Qwen3.5's remaining 4c gap is in GDN, the conv block (M3), GLU (M2) and, for 35B-A3B, MUL_MAT_ID (M5).
+
+**Overlap with upstream PR #30843** (fusion refactor, not merged as of 2026-10-21). Our plan does not duplicate it:
+- Fusions it adds: RMS_NORM+MUL (non-contiguous), RMS_NORM+SCALE, MUL_MAT+ADD, MUL_MAT_NX, MUL_MAT_ID_NX, GDN+CPY, SSM_CONV+SILU, REPEAT+GET_ROWS, UNARY+MUL → GLU (SWIGLU/GEGLU/…), MUL+MUL scalar, BINARY_NX (same-op chains), ALLREDUCE+ADD.
+- `OPFUSION` bits 2…4096 are taken, so new fusions start at 8192.
+- htp-fusion.cpp / htp-kparams are refactored, so do not write fusion code until it lands.
 
 Dropped for prefill: FEAT matmul split (loses at ub ≥ 1024; revisit in decode, Phase 2).
 
@@ -84,7 +92,7 @@ separate PR. The axis-related items are M1, M3 and M5 (+ M7); M2 and M4 are fusi
 | Dense matmuls (QKV, o, FFN, PLE) | hardcode TOKEN |
 | Elementwise (norm, act, GLU, ADD, ROPE) | hardcode TOKEN/rows; fuse |
 | FA, `n_kv % N == 0` | hardcode KV-head split (upstream) |
-| FA, `n_kv % N != 0` | **hardcoded** team split (`FA_SPLIT=1` default; `0` = upstream, kept for A/B) |
+| FA | **shipped**: head split (`n_kv % N == 0`), team split (`n_kv < N`); zig-zag within a team pending (M1b) |
 | SSM_CONV / conv block | TOKEN + halo once validated (M3) |
 | GATED_DELTA_NET | hardcode V-heads (upstream) |
 | MUL_MAT_ID | knob (M5) |
@@ -246,3 +254,6 @@ Gemma-4-12B is still GARBAGE (IQ 2/10) at 1c and 4c, independent of the knob.
 | (this commit) | Plan: dependency on Alan Zhu's in-flight PR (FA HMX/HVX SWA crossover, Gemma4 fusions, OPBATCH 2K): impact on M1/M2/M4/M6 |
 | owner runs | `20261018-142527` (T1 test-ops), `-171424` (T2 0 vs 2), `-191245` (T3 1 vs 2), `-200106` (Gemma-4-12B) |
 | (this commit) | **M1 closed**: reverted `FA_SPLIT=2` auto + solver memo (no gain over `=1`), team split default on (`opt_fa_split = 1`). Harness keeps `git add -f` for logs |
+| owner run | `20261021-104316` (shipped flag, new base): E4B +14.7%, 12B +14.9%, 26B +6.6% / TG +15%, E2B −0.5% |
+| qualcomm `e9ee0abec` | **M1b** zig-zag Q-block order in a team (`FA_SPLIT=2`), branch `ebateni/fa-team-zigzag` on the ebateni fork |
+| (this commit) | Replan around PR #30843: M2 = matmul-epilogue GLU only; M3 narrowed; M4 = cross-op ADD→norm (coordinate); M5 next after M1b |
