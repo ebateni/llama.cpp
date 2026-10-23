@@ -26,44 +26,6 @@ struct l2flush_multi_task {
     uint32_t                  blocks_per_thread;
 };
 
-struct inval_task {
-    uint32_t start;        // line-aligned start of the range
-    uint32_t end;          // line-aligned end of the range
-    uint32_t per_thread;   // lines per thread
-};
-
-static void inval_worker(unsigned int n, unsigned int i, void * data) {
-    const struct inval_task * t = (const struct inval_task *) data;
-    (void) n;
-    const uint64_t lo = (uint64_t) t->start + (uint64_t) i * t->per_thread * HEX_L2_LINE_SIZE;
-    if (lo >= t->end) {
-        return;
-    }
-    uint64_t hi = lo + (uint64_t) t->per_thread * HEX_L2_LINE_SIZE;
-    if (hi > t->end) {
-        hi = t->end;
-    }
-    hex_l2inval((void *) (uintptr_t) lo, (size_t) (hi - lo));
-}
-
-// invalidate (drop, without write-back) exactly the cache lines of [addr, addr + size) on all worker threads; the lines are not dirty on the DSP
-// (the host wrote the range after the DSP's last cache clean, and no DSP op writes it through the cache)
-void htp_inval_range(struct htp_context * ctx, void * addr, size_t size) {
-    if (size == 0) {
-        return;
-    }
-    struct inval_task t;
-    t.start = hex_align_down((size_t) (uintptr_t) addr, HEX_L2_LINE_SIZE);
-    t.end   = hex_align_up((size_t) (uintptr_t) addr + size, HEX_L2_LINE_SIZE);
-    const uint32_t n_lines = (t.end - t.start) / HEX_L2_LINE_SIZE;
-    if (size < HEX_L2_FLUSH_WQ_THRESHOLD || ctx->n_threads <= 1) {
-        hex_l2inval((void *) (uintptr_t) t.start, t.end - t.start);
-        return;
-    }
-    t.per_thread = (n_lines + ctx->n_threads - 1) / ctx->n_threads;
-    work_queue_run(ctx->work_queue, inval_worker, &t, ctx->n_threads);
-}
-
 static void flush_all_dcache(struct htp_context * ctx) {
     struct htp_thread_trace * tr = &ctx->trace[0];
     htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, 0);

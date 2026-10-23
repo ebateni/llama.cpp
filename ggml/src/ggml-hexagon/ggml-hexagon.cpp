@@ -109,9 +109,6 @@ static int    opt_etm     = 0;
 static int    opt_verbose = 0;
 static int    opt_profile = 0; // profiling mode (0-disabled, 1-basic, 2-pmu)
 static bool   opt_hostbuf = true;  // host-type buffer for CPU-side inputs: removes the input copies (GGML_HEXAGON_HOSTBUF=0 disables)
-static uint64_t g_ple_engaged = 0, g_ple_seq_fallback = 0;   // reps that overlapped / reps that ran the deferred node sequentially (stats only)
-static int    opt_ple_overlap = 0;  // GGML_HEXAGON_PLE_OVERLAP=1: run the CPU-split per-layer-embedding gather AFTER the HTP batch was written; the DSP waits on a host-written fence before the first consumer (0 = sequential, as before)
-static uint32_t opt_ple_timeout_us = 500000;   // GGML_HEXAGON_PLE_TIMEOUT_US: bound of the DSP fence wait; on expiry the batch fails with an error status (never a hang)
 static bool   opt_dma64   = false;
 
 static size_t opt_mbuf_dyn    = 512ul * 1024 * 1024;      // max dynamic (compute) buffer size
@@ -870,14 +867,6 @@ struct ggml_hexagon_session {
     std::atomic<uint64_t> batch_req_seq{0};
     std::atomic<uint64_t> batch_rsp_seq{0};
     std::atomic<uint32_t> last_error{HTP_STATUS_OK};
-
-    // PLE-gather overlap (GGML_HEXAGON_PLE_OVERLAP): the CPU split's big gather is flagged GGML_TENSOR_FLAG_DEFER, so the CPU backend skips it. graph_compute then queues a
-    // FENCE-wait op in front of the first consumer of the gather, writes the batch, runs the gather on the host and only then signals the fence slot.
-    ggml_tensor *           ple_node       = nullptr;   // the deferred GET_ROWS node of the cached graph
-    volatile uint32_t *     ple_slot       = nullptr;   // device-visible fence slot (fence_buf)
-    ggml_tensor             ple_fence_t    = {};         // dummy tensor describing the slot
-    uint32_t                ple_seq        = 0;          // fence sequence used by the batch in flight
-    int                     desc_fence_op  = -1;         // descriptor index of the FENCE op inside the cached batch (-1: none)
 
     uint64_t                cached_uid = 0;
     std::vector<htp_opnode> cached_nodes;
@@ -9458,27 +9447,6 @@ static bool ggml_hexagon_match_softcap(const struct ggml_hexagon_session * sess,
     return true;
 }
 
-// the CPU backend that executes a deferred (GGML_TENSOR_FLAG_DEFER) node; set by the application, see ggml_backend_hexagon_set_defer_cpu
-static ggml_backend_t g_defer_cpu = nullptr;
-typedef enum ggml_status (*ggml_backend_cpu_compute_node_t)(ggml_backend_t, struct ggml_tensor *);
-static ggml_backend_cpu_compute_node_t g_defer_cpu_fn = nullptr;
-
-static void ggml_backend_hexagon_set_defer_cpu(ggml_backend_t backend_cpu) {
-    g_defer_cpu    = backend_cpu;
-    g_defer_cpu_fn = nullptr;
-    if (backend_cpu) {
-        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_cpu));
-        g_defer_cpu_fn = reg ? (ggml_backend_cpu_compute_node_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cpu_compute_node") : nullptr;
-    }
-}
-
-// Is `n` the one deferred node of this graph? Conditions (all of them): overlap enabled, no profiling, single device without peers, the graph is a
-// whole-ubatch graph (>= 64 rows), n is a GET_ROWS of a q-type table with >= 64 index rows and >= 8 MB of output (the PLE gather), it is flagged DEFER,
-// and the host can execute it (CPU hook set).
-static bool ggml_hexagon_is_deferred_node(const ggml_tensor * n) {
-    return n && (n->flags & GGML_TENSOR_FLAG_DEFER) != 0 && n->op == GGML_OP_GET_ROWS;
-}
-
 static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, ggml_cgraph * graph) {
     auto sess = static_cast<ggml_hexagon_session *>(backend->context);
 
@@ -9698,61 +9666,6 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
     // batch build (fusion tests, add_tensor lookups, descriptor writes, buffer sort, nodirty marking) is ~0.5 ms of host time in front of
     // the DSP. The finished batch of the previous rep is replayed when a fingerprint of all node op_params and tensor addresses matches.
     // GGML_HEXAGON_DESC_CACHE=0 disables it; GGML_HEXAGON_DESC_VERIFY=1 rebuilds normally and compares with the snapshot.
-    // PLE overlap: find the deferred node of this graph (a GET_ROWS flagged DEFER by the scheduler-side gate) and the first compute node that reads it.
-    // Anything unexpected (no consumer found, consumer at index 0, not exactly one deferred node, profiling, peers, multi device) runs the batch sequentially:
-    // the deferred node is then computed on the host BEFORE the batch is written, which is exactly the old behaviour.
-    ggml_tensor * ple_node = nullptr;
-    int           ple_consumer = -1;
-    {
-        // the deferred node belongs to the CPU split's graph; this (HTP) split reads its output directly (shared host buffer), so look for it among the
-        // inputs of the op list. Exactly one distinct deferred tensor is supported.
-        int n_def = 0;
-        for (const auto & nd : *nodes_ptr) {
-            for (const auto * in : nd.inputs) {
-                if (in && ggml_hexagon_is_deferred_node(in) && in != ple_node) { ple_node = const_cast<ggml_tensor *>(in); n_def++; }
-            }
-        }
-        if (n_def != 1) {
-            // zero: nothing to do. More than one: cannot fence them, compute every one now (sequential)
-            if (n_def > 1) {
-                std::vector<ggml_tensor *> all;
-                for (const auto & nd : *nodes_ptr) {
-                    for (const auto * in : nd.inputs) {
-                        if (in && ggml_hexagon_is_deferred_node(in) && std::find(all.begin(), all.end(), in) == all.end()) { all.push_back(const_cast<ggml_tensor *>(in)); }
-                    }
-                }
-                for (auto * t : all) {
-                    if (!g_defer_cpu_fn || g_defer_cpu_fn(g_defer_cpu, t) != GGML_STATUS_SUCCESS) { return GGML_STATUS_FAILED; }
-                }
-            }
-            ple_node = nullptr;
-        }
-        if (ple_node && (!opt_ple_overlap || sess->mdev.count > 1 || !sess->virt_peers.empty() || !sess->phys_peers.empty() ||
-                         !g_defer_cpu_fn || !sess->fence_buf || !sess->op_batch->empty())) {
-            // cannot overlap: compute the node now (sequential)
-            g_ple_seq_fallback++;
-            if (g_defer_cpu_fn) {
-                if (g_defer_cpu_fn(g_defer_cpu, ple_node) != GGML_STATUS_SUCCESS) { return GGML_STATUS_FAILED; }
-            } else {
-                GGML_ABORT("ggml-hex: a graph node is flagged GGML_TENSOR_FLAG_DEFER but no CPU compute hook is installed\n");
-            }
-            ple_node = nullptr;
-        }
-        if (ple_node) {
-            // first node of the (fused, cached) op list whose inputs contain the deferred tensor; the deferred tensor is the only thing the fence protects
-            for (size_t k = 0; k < nodes_ptr->size() && ple_consumer < 0; k++) {
-                for (const auto * in : (*nodes_ptr)[k].inputs) {
-                    if (in == ple_node || (in && in->view_src == ple_node)) { ple_consumer = (int) k; break; }
-                }
-            }
-            if (ple_consumer <= 0) {
-                // consumer before (or at) the first DSP op, or no consumer: run sequentially
-                if (g_defer_cpu_fn(g_defer_cpu, ple_node) != GGML_STATUS_SUCCESS) { return GGML_STATUS_FAILED; }
-                ple_node = nullptr; ple_consumer = -1;
-            }
-        }
-    }
-
     const bool desc_ok = opt_desc_cache && !opt_profile && sess->mdev.count <= 1 && sess->virt_peers.empty() && sess->phys_peers.empty() &&
                          graph->uid != 0 && nodes_ptr == &sess->cached_nodes && sess->op_batch->empty();
     uint64_t desc_fp = 0;
@@ -9761,7 +9674,6 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
         auto mix = [&](uint64_t v) { desc_fp = (desc_fp ^ v) * 0x100000001b3ULL; };
         desc_fp = 0xcbf29ce484222325ULL;
         mix(graph->uid); mix(nodes_ptr->size());
-        mix(ple_node ? (uint64_t) (ple_consumer + 1) : 0);   // the fence op (and its position) is part of the cached batch
         for (const auto & n : *nodes_ptr) {
             const ggml_tensor * t = n.node;
             mix((uint64_t) n.opcode);
@@ -9793,52 +9705,10 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
         // and the fingerprint includes every buffer fd/base (a buffer that was freed and reallocated changes it)
         sess->desc_replay_active = true;
         sess->desc_enq_serial++;
-        if (ple_node) {
-            // the snapshot holds the FENCE op at descriptor index `desc_fence_op` with the sequence of the rep that captured it: give it this rep's sequence
-            if (++sess->fence_seq == 0) { sess->fence_seq = 1; }
-            sess->ple_seq = sess->fence_seq;
-            GGML_ASSERT(sess->desc_fence_op >= 0 && (unsigned) sess->desc_fence_op < b->n_ops && b->h_ops[sess->desc_fence_op].opcode == HTP_OP_FENCE);
-            b->h_ops[sess->desc_fence_op].params[0] = (int32_t) sess->ple_seq;
-        }
     } else {
         const uint64_t flushes0 = sess->batch_req_seq;
-        sess->desc_fence_op = -1;
-        if (ple_node) {
-            // device-visible slot + descriptor of the fence, armed (value 0 < seq) before the batch is written
-            if (!sess->ple_slot) {
-                sess->ple_slot = (volatile uint32_t *) sess->alloc_fence(1);
-                static ggml_hexagon_tensor_extra ple_fence_extra { {}, 0, GGML_HEXAGON_TENSOR_FENCE };
-                sess->ple_fence_t = {};
-                sess->ple_fence_t.buffer = &sess->fence_buf->backend_buffer;
-                sess->ple_fence_t.extra  = &ple_fence_extra;
-                sess->ple_fence_t.data   = (void *) sess->ple_slot;
-                sess->ple_fence_t.type   = GGML_TYPE_I32;
-                sess->ple_fence_t.ne[0] = 4;   // same descriptor shape as the other host fences (slot[0] = seq, slot[1] = status)
-                for (int d = 1; d < GGML_MAX_DIMS; d++) { sess->ple_fence_t.ne[d] = 1; }
-                for (int d = 0; d < GGML_MAX_DIMS; d++) { sess->ple_fence_t.nb[d] = sizeof(int32_t); }
-                sess->ple_fence_t.op     = GGML_OP_NONE;
-            }
-            if (++sess->fence_seq == 0) { sess->fence_seq = 1; }
-            sess->ple_seq = sess->fence_seq;
-        }
-        for (size_t k = 0; k < nodes_ptr->size(); k++) {
-            if (ple_node && (int) k == ple_consumer) {
-                // FENCE-wait (mode 2): src[0] = slot, src[1] = the deferred tensor; params: seq, mode 2, timeout in us
-                htp_opnode fn(HTP_OP_FENCE);
-                ggml_tensor * fnode = fn.add_dummy(sess->ple_fence_t);
-                ggml_tensor * dep   = fn.add_dummy(*ple_node);
-                fnode->op = GGML_OP_NONE;
-                fnode->src[0] = fnode;
-                fnode->src[1] = dep;
-                fnode->op_params[0] = (int32_t) sess->ple_seq;
-                fnode->op_params[1] = 2;
-                fnode->op_params[2] = (int32_t) opt_ple_timeout_us;
-                fn.init(fnode);
-                fn.name = "FENCE_HOST";
-                sess->enqueue_op(fn);
-                sess->desc_fence_op = (int) sess->op_batch->n_ops - 1;   // the FENCE descriptor was just appended (never fused: try_fuse sees HTP_OP_FENCE)
-            }
-            sess->enqueue_op((*nodes_ptr)[k]);
+        for (const auto & node : *nodes_ptr) {
+            sess->enqueue_op(node);
         }
         if (desc_ok && sess->batch_req_seq == flushes0) {
             sess->desc_capture_uid = graph->uid;  sess->desc_capture_fp = desc_fp;
@@ -9847,25 +9717,6 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
         } else {
             sess->desc_capture_uid = 0;
         }
-    }
-
-    if (ple_node) {
-        // 1. arm the slot below the sequence the DSP waits for (it may still hold a previous rep's value)
-        auto * fence = reinterpret_cast<volatile std::atomic<uint32_t> *>(sess->ple_slot);
-        fence[1].store(HTP_STATUS_OK, std::memory_order_relaxed);
-        fence[0].store(sess->ple_seq - 1, std::memory_order_release);
-        // 2. hand the batch to the DSP now: the FENCE op is far inside it (consumer index > 0), everything before it can run
-        sess->flush_async();
-        g_ple_engaged++;
-        if (getenv("GGML_HEXAGON_PLE_STATS") && (g_ple_engaged <= 3 || (g_ple_engaged % 50) == 0)) {
-            fprintf(stderr, "PLE_OVERLAP engaged rep %llu seq %u consumer-op %d of %zu (fallbacks so far %llu)\n", (unsigned long long) g_ple_engaged, sess->ple_seq, ple_consumer, nodes_ptr->size(), (unsigned long long) g_ple_seq_fallback);
-        }
-        // 3. run the deferred node on the host CPU pool, then signal. The signal is the last thing written: its release store orders the gather's stores before it.
-        const ggml_status st = g_defer_cpu_fn(g_defer_cpu, ple_node);
-        std::atomic_thread_fence(std::memory_order_release);
-        fence[1].store(st == GGML_STATUS_SUCCESS ? HTP_STATUS_OK : HTP_STATUS_INTERNAL_ERR, std::memory_order_relaxed);
-        fence[0].store(sess->ple_seq, std::memory_order_release);
-        if (st != GGML_STATUS_SUCCESS) { return GGML_STATUS_FAILED; }
     }
 
     if (sess->last_error > HTP_STATUS_OK) {
@@ -10999,9 +10850,6 @@ static void * ggml_backend_hexagon_get_proc_address(ggml_backend_reg_t reg, cons
     if (strcmp(name, "ggml_backend_split_buffer_type") == 0) {
         return (void *) ggml_backend_hexagon_split_buffer_type;
     }
-    if (strcmp(name, "ggml_backend_hexagon_set_defer_cpu") == 0) {
-        return (void *) ggml_backend_hexagon_set_defer_cpu;
-    }
     if (strcmp(name, "ggml_backend_comm_init") == 0) {
         return (void *) ggml_backend_hexagon_comm_init;
     }
@@ -11256,8 +11104,6 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     }
     opt_vmem    = str_vmem    ? parse_size(str_vmem)   : opt_vmem;
     opt_hostbuf = str_hostbuf ? atoi(str_hostbuf) != 0 : opt_hostbuf;
-    if (const char * s_po = getenv("GGML_HEXAGON_PLE_OVERLAP"))    { opt_ple_overlap = atoi(s_po); }
-    if (const char * s_pt = getenv("GGML_HEXAGON_PLE_TIMEOUT_US")) { opt_ple_timeout_us = (uint32_t) strtoul(s_pt, NULL, 0); }
 
     // Parse device configuration
     const char * str_devices  = getenv("GGML_HEXAGON_DEVICES");

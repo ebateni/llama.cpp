@@ -455,18 +455,6 @@ llama_context::llama_context(
         }
         backends.emplace_back(backend_cpu);
 
-        // PLE-gather overlap: give every backend that can defer a node the CPU backend that runs it (GGML_HEXAGON_PLE_OVERLAP=1, hexagon only)
-        for (auto & backend : backends) {
-            ggml_backend_dev_t dev = ggml_backend_get_device(backend.get());
-            ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
-            if (reg && backend.get() != backend_cpu) {
-                auto set_defer_cpu = (void (*)(ggml_backend_t)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_hexagon_set_defer_cpu");
-                if (set_defer_cpu) {
-                    set_defer_cpu(backend_cpu);
-                }
-            }
-        }
-
         // create a list of the set_n_threads functions in the backends
         for (auto & backend : backends) {
             ggml_backend_dev_t dev = ggml_backend_get_device(backend.get());
