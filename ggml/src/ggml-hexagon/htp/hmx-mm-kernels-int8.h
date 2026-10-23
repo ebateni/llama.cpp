@@ -1,11 +1,5 @@
-// INT8 HMX matmul helpers: Q4_0 -> int8 weight crouton expand, per-row u8 activation quantizer, output convert.
-// Scalar reference versions (the HVX versions replace them one by one).
-//
-// Layouts (verified on v81, see analysis/hmx-int-log.md):
-//   activation crouton (32 spatial x 32 k) = 2 KB, data only in odd bytes: (s/2)*128 + k*4 + 1 + 2*(s&1), unsigned
-//   weight crouton (32 k x 32 out) = 1 KB: (k/4)*128 + c*4 + (k%4), signed; a 64-filter group holds
-//     per k crouton: set0 (cols 0..31) 1 KB then set1 (cols 32..63) 1 KB
-//   output tile (32 spatial x 32 out) = 2 KB int16: vector = 2 spatials, word = channel, 16-bit halves
+// INT8 HMX matmul helpers (scalar reference): Q4_0 -> int8 weight crouton expand, per-row u8 activation quantizer, output convert.
+// Layouts (v81): act crouton 32x32 = 2 KB odd bytes (s/2)*128 + k*4 + 1 + 2*(s&1); weight crouton (k/4)*128 + c*4 + (k%4), set0 then set1 per 64-filter group; output tile 2 KB int16.
 
 #ifndef HMX_MM_KERNELS_INT8_H
 #define HMX_MM_KERNELS_INT8_H
@@ -20,11 +14,8 @@
 #define HMX_INT8_CROUTON_A 2048
 #define HMX_INT8_CROUTON_W 2048  // two 1 KB sets (64 filters) per k crouton
 
-// Q4_0 tiled weights (tile = 512 B nibbles + 32 fp16 scales, tile index ct * n_k_tiles + kt)
-// -> int8 crouton groups. Group g = ct / 2, set = ct & 1. n_col_tiles must be even.
-// Per output row: s_n = dmax / 15.875; per block ratio r = round(|d| / dmax * 15.875 * 16) / 16;
-// w8 = clip(round(sign(d) * q * r), -127, 127).
-// Outputs per column: s_n, sum(w8), sum(|w8|).
+// Q4_0 tiled weights (tile = 512 B nibbles + 32 fp16 scales, index ct * n_k_tiles + kt) -> int8 crouton groups (g = ct / 2, set = ct & 1; n_col_tiles even).
+// s_n = dmax / 15.875, r = round(|d| / dmax * 15.875 * 16) / 16, w8 = clip(round(sign(d) * q * r), -127, 127); outputs per column: s_n, sum(w8), sum(|w8|).
 static inline void hmx_int8_expand_q4_0_ref(uint8_t * dst, float * s_n, int32_t * colsum, int32_t * abssum,
                                             const uint8_t * src, uint32_t ct0, uint32_t ct1, uint32_t n_k_tiles,
                                             uint32_t aligned_tile_size) {
@@ -91,10 +82,8 @@ static inline void hmx_int8_quant_act_rows_ref(uint8_t * dst, float * a_scale, c
     }
 }
 
-// Bias tables: per 64-filter group 512 B (set0 256 B, set1 256 B); per set 32 low words (fp16 scale bits)
-// then 32 high words (signed integer added to acc). ibias = -128 * colsum cancels the +128 activation offset.
-// Per-column shift keeps |acc| / 2^sh inside int16 (bound 127 * sum|w8|), minus `reduce` bits of headroom.
-// col_mul[col] = s_n * 2^sh converts the int16 readout to the real column scale.
+// Bias tables: per 64-filter group 512 B (set0 256 B, set1 256 B); per set 32 low words (fp16 scale bits) then 32 high words (integer ibias = -128 * colsum cancels the +128 activation offset).
+// Per-column shift keeps |acc| / 2^sh inside int16 (bound 127 * sum|w8|) minus `reduce` bits; col_mul[col] = s_n * 2^sh.
 static inline void hmx_int8_make_bias_ref(uint32_t * bias, float * col_mul, const float * s_n, const int32_t * colsum,
                                           const int32_t * abssum, uint32_t c0, uint32_t c1, uint32_t reduce) {
     for (uint32_t col = c0; col < c1; ++col) {
@@ -137,8 +126,7 @@ static inline void hmx_int8_out_convert_ref(float * dst, uint32_t dst_stride, co
 // ---- HVX versions ----
 
 // Tiled Q4_0 columns [ct0, ct1) -> int8 crouton groups (same result as the ref, ratio table in 1/16 steps).
-// Per 32-column tile: pass 1 finds dmax per channel, pass 2 expands each k tile with
-// w8 = clip((q * R + 8) >> 4), R = signed round(|d| / dmax * 254).
+// Per 32-column tile: pass 1 finds dmax per channel, pass 2 expands with w8 = clip((q * R + 8) >> 4), R = signed round(|d| / dmax * 254).
 static inline void hmx_int8_expand_q4_0(uint8_t * dst, float * s_n, int32_t * colsum, int32_t * abssum,
                                         const uint8_t * src, uint32_t ct0, uint32_t ct1, uint32_t n_k_tiles,
                                         uint32_t aligned_tile_size) {
@@ -256,9 +244,7 @@ static inline __attribute__((always_inline)) void hmx_int8_wht32_x4(HVX_Vector *
 }
 
 
-// A8 row pair, fast form: (1) optional static smoothing x *= inv_s (written back, the staging row is private) fused into the max
-// pass; (2) round-to-nearest-even via the float magic number: bits(y + 12583040.0f) - bits(1.5 * 2^23) = round(y) + 128, which also
-// folds the +128 offset (y is within [-127, 127] by construction). Two independent chains per loop so the vector latencies overlap.
+// A8 row pair, fast form: optional smoothing x *= inv_s fused into the max pass; round-to-nearest-even via magic number: bits(y + 12583040.0f) - bits(1.5 * 2^23) = round(y) + 128 (folds the +128 offset).
 // Differs from hmx_int8_quant_pair only on exact .5 ties (even vs away from zero).
 static inline void hmx_int8_quant_pair_fast_ex(uint8_t * dst_pair, float * sc, float * x0, float * x1, uint32_t k, const float * inv_s, uint32_t rot32, size_t cstride) {
     const uint32_t nkc = k / 32;
@@ -340,9 +326,7 @@ static inline void hmx_int8_quant_pair_fast(uint8_t * dst_pair, float * sc, floa
     hmx_int8_quant_pair_fast_ex(dst_pair, sc, x0, x1, k, inv_s, rot32, HMX_INT8_CROUTON_A);
 }
 
-// A16, fast form: ONE pass produces both int8 pages. t = y - round(y) is bounded by 0.5, so the low page needs no residual-max
-// pass: lo = round(t * 254) fits int8 with the fixed scale s_lo = s_hi / 254 (the max |t| of a long row is ~0.5 anyway, so the
-// resolution is the same as the data-dependent scale). Both pages share the window shift/bias table of the weights.
+// A16, fast form: one pass makes both int8 pages; t = y - round(y) (|t| <= 0.5) so lo = round(t * 254) with fixed scale s_lo = s_hi / 254, and both pages share the weights' window shift/bias table.
 // sc = { s_hi(row0), s_hi(row1), s_lo(row0), s_lo(row1) }; smoothing (inv_s) is fused into the max pass as in the A8 form.
 static inline void hmx_int8_quant_pair_a16_fast(uint8_t * dst_hi, uint8_t * dst_lo, float * sc, float * x0, float * x1, uint32_t k,
                                                 const float * inv_s) {
@@ -402,10 +386,8 @@ static inline void hmx_int8_quant_pair_a16_fast(uint8_t * dst_hi, uint8_t * dst_
 
 // forward declaration used below
 
-// A16: two int8 passes for a row pair. dst_hi/dst_lo point at the pair's 128-byte stride inside its 32-row tile
-// (caller passes dst + rt*nkc*2048 + p*128); sc = { s_hi(row0), s_hi(row1), s_lo(row0), s_lo(row1) }.
-// Both passes are full-scale int8 in their own scale, so the window shift is the same for both (bound 127 * sum|w8|)
-// and the epilogue combines o1 * s_hi + o2 * s_lo. Store layout is the odd-byte one: word k = channel k, byte 1 = row 2p, byte 3 = row 2p+1.
+// A16: two int8 passes for a row pair; dst_hi/dst_lo point at the pair's 128-byte stride in its 32-row tile, sc = { s_hi(row0), s_hi(row1), s_lo(row0), s_lo(row1) }.
+// Both passes are full-scale int8, so the window shift (bound 127 * sum|w8|) is shared and the epilogue gives o1 * s_hi + o2 * s_lo; odd-byte store: word k = channel k, byte 1 = row 2p, byte 3 = row 2p+1.
 static inline void hmx_int8_quant_pair_a16(uint8_t * dst_hi, uint8_t * dst_lo, float * sc,
                                            const float * x0, const float * x1, uint32_t k) {
     const uint32_t nkc = k / 32;
@@ -517,9 +499,8 @@ static inline void hmx_int8_scale_tile(HVX_Vector * tv, const uint32_t * as16, H
     }
 }
 
-// Core loop. act: [n_row_tiles][n_k] croutons, wgt: groups of 64 filters, each n_k 2 KB croutons, group stride wgt_stride bytes,
-// bias: 512 B per group (256 B aligned), group stride bias_stride bytes, out: [n_row_tiles][n_groups][2] 2 KB int16 tiles.
-// Must run on the HMX queue thread.
+// Core loop. act: [n_row_tiles][n_k] croutons; wgt: 64-filter groups of n_k 2 KB croutons (stride wgt_stride); bias: 512 B per group (256 B aligned, stride bias_stride).
+// out: [n_row_tiles][n_groups][2] 2 KB int16 tiles. Must run on the HMX queue thread.
 static void hmx_int8_core_dot_chunk(uint8_t * restrict out, const uint8_t * restrict act, const uint8_t * restrict wgt,
                                     const uint8_t * restrict bias, uint32_t n_row_tiles, uint32_t n_groups,
                                     uint32_t n_k, size_t wgt_stride, size_t bias_stride) {
@@ -551,8 +532,7 @@ static void hmx_int8_core_dot_chunk(uint8_t * restrict out, const uint8_t * rest
 }
 
 // ---- Hadamard rotation of an activation row (matches hex-int8-pack.h on the weight side) ----
-// Row = 3 blocks of 512 floats. x'[i] = sign[i] * x[i] / sqrt(512) is mixed by the unnormalised Walsh-Hadamard transform inside each block:
-// WHT over index bits = 5 in-vector stages (lane bit) + 4 cross-vector stages (vector index within the block).
+// Row = 3 blocks of 512 floats: x'[i] = sign[i] * x[i] / sqrt(512), then unnormalised WHT per block (5 lane stages + 4 cross-vector stages).
 
 static const uint32_t hmx_int8_iota[32] __attribute__((aligned(128))) = {
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
@@ -565,10 +545,8 @@ static inline void hmx_int8_make_signs(float * signs, uint32_t k) {
     }
 }
 
-// Row WHT (3 blocks of 512 floats = 16 vectors each). Lane stages (bit j of the word index, j = 0..4) use an even/odd split:
-// for a pair of vectors (a, b), vdeal on words separates even and odd lanes of the concatenation, so one add and one sub
-// perform the lane-bit-0 butterfly of both vectors at once. Higher lane bits are reached by changing the deal block size.
-// One row = 3 blocks x (5 lane stages x 8 pairs + 4 vector stages x 8 pairs) = 3 x 72 pair-butterflies.
+// Row WHT (3 blocks of 512 floats = 16 vectors each). Lane stages (bits 0..4) pair vectors (a, b) and vdeal words so one add and one sub do the lane-bit-0 butterfly of both.
+// Higher lane bits change the deal block size; one row = 3 x (5 x 8 + 4 x 8) pair-butterflies.
 static inline __attribute__((always_inline)) void hmx_int8_wht_pair_bit(HVX_Vector * a, HVX_Vector * b, int j) {
     const int bytes = 4 << j;
     HVX_VectorPair P = Q6_W_vdeal_VVR(*b, *a, bytes);      // lo = lanes with bit j == 0 (a then b), hi = lanes with bit j == 1
@@ -578,9 +556,8 @@ static inline __attribute__((always_inline)) void hmx_int8_wht_pair_bit(HVX_Vect
     *b = Q6_V_hi_W(R);
 }
 
-// f16 variant: the row is converted to f16 (8 vectors per 512-block instead of 16), the WHT runs on halfwords, and the result is
-// converted back to f32 for the quantizer. Rotation precision ~1e-3 (f16 mantissa) vs the A8 quantization error ~1e-2, so the extra
-// error is negligible, and the butterfly work halves. Sign multiply stays in f32 (identical sign handling to the f32 variant).
+// f16 variant: row converted to f16 (8 vectors per 512-block), WHT on halfwords, result back to f32; rotation error ~1e-3 is far below the A8 error ~1e-2.
+// Sign multiply stays in f32.
 static inline void hmx_int8_rotate_row_f16(HVX_Vector * v, const HVX_Vector * sg, uint32_t k) {
     HVX_Vector h[8];
     for (uint32_t blk = 0; blk < k / 512; ++blk) {

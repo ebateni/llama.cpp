@@ -912,9 +912,8 @@ typedef struct {
     size_t                    rows_per_o;   // mode 2: rows per other thread (DMA-out)
 } fa_o_store_args_t;
 
-// O store through DMA (mode 2): a worker widens groups of rows into its own VTCM staging slots (two) and lets its DMA
-// queue write them to DDR, so the stores bypass the data cache and the conversion of the next group overlaps the write
-// of the previous one. Only workers 1..n-1 use it: queue 0 carries the main flow's Q/K/V descriptors.
+// O store via DMA (mode 2): workers 1..n-1 widen row groups into two own VTCM slots and write them to DDR with their DMA queue, bypassing the cache.
+// Queue 0 is not used because it carries the main flow's Q/K/V descriptors.
 #define FA_OSTAGE_ROWS          8
 #define FA_OSTAGE_ROW_BYTES     2048   // DV <= 512 floats
 #define FA_OSTAGE_BYTES_PER_T   (2 * FA_OSTAGE_ROWS * FA_OSTAGE_ROW_BYTES)
@@ -942,9 +941,8 @@ static void fa_o_store_dma_rows(fa_o_store_args_t * args, unsigned int i, size_t
     for (size_t g0 = start; g0 < end; g0 += FA_OSTAGE_ROWS) {
         const size_t g1 = hex_smin(g0 + FA_OSTAGE_ROWS, end);
 
-        // The slot about to be refilled still has the group of two rounds ago in flight. Descriptors retire in push
-        // order, and that group's descriptors are the OLDEST in the queue (the other slot's were pushed after), so
-        // popping pending[slot] entries waits for exactly them.
+        // The slot to refill still has its group from two rounds ago in flight; those descriptors are the oldest in the queue,
+        // so popping pending[slot] entries waits for exactly them.
         while (pending[slot] > 0) { dma_queue_pop(dma_q); pending[slot]--; }
 
         uint8_t * stg = base + (size_t) slot * (FA_OSTAGE_ROWS * FA_OSTAGE_ROW_BYTES);
@@ -1181,12 +1179,8 @@ typedef struct {
     struct fastdiv_values     thread_div;
 } fa_softmax_args_t;
 
-// ---------------------------------------------------------------------------------------------------------------------
-// Straight-line softmax for FA_SM_P row pairs at once (plain-mask case, kv_rows == 128: two 64-column chunks). The
-// per-pair work is a chain of short dependent steps (mask/max -> horizontal max -> m_prev -> exp2 -> shuff -> horizontal
-// sum), so a single pair leaves the VLIW slots idle. The pairs are independent; with the chunk loop unrolled the compiler
-// can interleave them. Every vector value is produced by exactly the intrinsic sequence of the generic path (the row
-// buffers are simply kept in registers instead of VTCM), so the P tiles, rowmax and rowsum are bit-identical.
+// Straight-line softmax for FA_SM_P independent row pairs at once (plain mask, kv_rows == 128) so the compiler can interleave their dependent chains.
+// Each vector value uses the same intrinsics as the generic path, so the P tiles, rowmax and rowsum are bit-identical.
 #ifndef FA_SM_P
 #define FA_SM_P 2
 #endif
@@ -1453,11 +1447,8 @@ static inline void fa_softmax_impl(
             const __fp16 * s_ld_base = factx->vtcm_s_tiles[args->buf_idx] + r0 * HMX_FP16_TILE_N_ROWS * Bc;
             __fp16 *       p_st_base = factx->vtcm_p_tiles[args->buf_idx] + r0 * HMX_FP16_TILE_N_ROWS * Bc;
 
-            // Decode 2 rows from S tiles into per-thread row buffers.
-            // F1b: for the plain masked case (no softcap, no alibi) the mask add and the rowmax run inside this
-            // decode loop, with the same operations in the same order as the separate passes below, so the row
-            // buffers are written once and read once (by the exp pass) instead of being written, re-read for the
-            // mask and read again for exp. The row-buffer contents and the rowmax are bit-identical.
+            // Decode 2 rows from S tiles into row buffers. For the plain masked case (no softcap, no alibi) the mask add and rowmax (F1b) run in this loop,
+            // in the same order as the separate passes, so results are bit-identical and the row buffers are written once and read once.
             const bool fused_mask_max = has_mask && !has_softcap && !has_alibi;
             HVX_Vector v_s_rowmax0 = v_neg_inf;
             HVX_Vector v_s_rowmax1 = v_neg_inf;
@@ -1818,10 +1809,8 @@ static inline void fa_softmax_impl(
         HVX_Vector v_l_curr0;
         HVX_Vector v_l_curr1;
         if (args->kv_start == 0 && factx->sinks != NULL) {
-            // First KV block with sinks: m_prev holds the seeded sink value (not -inf),
-            // so exp_m_diff = exp2(sink - m_curr) is the sink's contribution to the
-            // denominator. l_prev is 0 here, so add exp_m_diff directly instead of
-            // multiplying the (uninitialized) l_prev term.
+            // First KV block with sinks: m_prev holds the sink value (not -inf), so exp_m_diff = exp2(sink - m_curr) seeds the denominator.
+            // l_prev is 0 here, so add exp_m_diff directly instead of multiplying l_prev.
             v_l_curr0 = HVX_OP_ADD_F32(exp_m_diff0, v_rowsum_acc_f32_0);
             v_l_curr1 = HVX_OP_ADD_F32(exp_m_diff1, v_rowsum_acc_f32_1);
         } else {
@@ -2171,11 +2160,8 @@ static inline void fa_prefetch_block(dma_queue * dma_q, const struct htp_tensor 
     }
 }
 
-// Number of leading KV blocks that can hold an unmasked score for q rows [q_start, q_start + n_rows_q).
-// a trailing block is dropped only if every one of its mask entries is -inf for every q row in the tile:
-// such a block adds exactly 0 to the softmax sum and nothing to O, so skipping it is lossless.
-// scans from the end and stops at the first live block. the scan is a vector OR of (x != -inf) over each
-// row segment: one 128B load covers 64 fp16 mask entries, so a fully masked block costs n_rows_q * Bc/64 loads.
+// Number of leading KV blocks that can hold an unmasked score for q rows [q_start, q_start + n_rows_q); a trailing block with all mask entries -inf adds 0 to the sum and O, so skipping it is lossless.
+// Scans from the end with a vector OR of (x != -inf) per row segment (one 128B load = 64 fp16 entries) and stops at the first live block.
 static uint32_t fa_kv_blocks_live(const struct htp_tensor * mask, uint32_t q_start, uint32_t n_rows_q, uint32_t im3,
                                   uint32_t Bc, uint32_t nek1, uint32_t n_kv_blocks) {
     if (!mask || mask->ne[2] != 1 || n_kv_blocks <= 1) {
@@ -2475,9 +2461,8 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
             const size_t   g_br_actual = hex_align_up(n_rows_g, HMX_FP16_TILE_N_ROWS);
             const size_t   n_row_tiles = g_br_actual / HMX_FP16_TILE_N_ROWS;
 
-            // 1. Push Q and KV DMAs for the very first iteration (before the live-block scan below, so the scan
-            // overlaps the DMA instead of delaying it). Block 0 is always kept, so these pushes do not depend on the scan.
-            // Subsequent iterations are enqueued early at the end of the previous iteration.
+            // 1. Push Q and KV DMAs for the very first iteration before the live-block scan so the scan overlaps the DMA (block 0 is always kept).
+            // Later iterations are enqueued early at the end of the previous iteration.
             if (ib3 == 0 && q_start == q_start_min) {
                 const uint32_t kv_head = kv_head_min;
                 const uint32_t ik2 = kv_head;

@@ -187,9 +187,8 @@ static inline void htp_unary_vtcm_layout_build(
     *out_vtcm_row_per_thread = vtcm_row_per_thread;
 }
 
-// ADD_RMS_NORM_MUL / RMS_NORM_MUL_ADD: two row inputs, the VTCM-resident sum (also an output)
-// and the normalized result. Every staging area is double-buffered: the output DMA of one block
-// runs while the next block computes, so a single buffer would be overwritten while still in flight.
+// ADD_RMS_NORM_MUL / RMS_NORM_MUL_ADD: two row inputs, the VTCM-resident sum (also an output) and the normalized result.
+// All staging areas are double-buffered because the output DMA of one block runs while the next block computes.
 static inline void htp_unary_fused_vtcm_layout_build(
     struct htp_unary_vtcm_layout * L,
     uint32_t ne00,

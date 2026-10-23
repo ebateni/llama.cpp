@@ -184,9 +184,8 @@ SET_ROWS_THREAD_DMA_FN(f16,  int64_t, { hvx_copy_f16_f32_uu((uint8_t *)dst_spad,
 SET_ROWS_THREAD_DMA_FN(q8_0, int32_t, { hvx_quantize_row_q8_0_f32(dst_spad, (const float *)src_spad, ne00); })
 SET_ROWS_THREAD_DMA_FN(q8_0, int64_t, { hvx_quantize_row_q8_0_f32(dst_spad, (const float *)src_spad, ne00); })
 
-// Block path: when a thread's destination indices are consecutive and valid (the KV-cache write), B rows move with
-// one 2D DMA in and one 2D DMA out instead of one descriptor pair per row. Only the DMA grouping differs from the
-// per-row path (same conversion on the same rows), so results are identical.
+// Block path: when a thread's dst indices are consecutive and valid (KV-cache write), B rows move with one 2D DMA in and one out.
+// Only the DMA grouping differs from the per-row path (same conversion on the same rows), so results are identical.
 #define SET_ROWS_BLOCK 16
 
 #define SET_ROWS_THREAD_BLOCK_FN(TYPE_NAME, IDX_TYPE, COMPUTE_ROW)                                               \

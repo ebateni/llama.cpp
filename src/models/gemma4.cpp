@@ -181,8 +181,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     if (model.per_layer_tok_embd) {
-        // per_layer_input_scale from project_per_layer_inputs() is folded in here: the table term
-        // is only ever consumed by that function, so one scale covers both.
+        // per_layer_input_scale from project_per_layer_inputs() is folded in here (the table term is only consumed by that function).
         // the converter may have baked part of it into the table already (f_embd_per_layer_scale)
         const float tok_embd_scale = sqrtf((float) n_embd_per_layer) / sqrtf(2.0f) / hparams.f_embd_per_layer_scale;
 
@@ -195,9 +194,8 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
         inp_per_layer = project_per_layer_inputs(inpL, inp_per_layer);
     }
 
-    // layers that reuse the KV of earlier layers write nothing to the cache, so they only need the
-    // rows that produce outputs. drop the other rows before the first of them, unless the caller
-    // wants per-token hidden states.
+    // layers that reuse the KV of earlier layers write nothing to the cache, so they only need the output rows.
+    // drop the other rows before the first of them, unless the caller wants per-token hidden states.
     bool prune_shared = inp_out_ids && n_outputs < n_tokens && cparams.causal_attn &&
                         hparams.n_layer_kv_from_start > 0 && hparams.n_layer_kv_from_start < n_layer &&
                         !cparams.embeddings && !(cparams.embeddings_nextn && !cparams.embeddings_nextn_masked) &&
@@ -555,8 +553,7 @@ ggml_tensor * llama_model_gemma4::graph::project_per_layer_inputs(ggml_tensor * 
     const float per_layer_input_scale      = 1.0f / sqrtf(2.0f);
 
     // note: this matrix multiplication will be performed in the input layer (i.e. on the CPU)
-    // the scale before the RMS norm only shifts how eps is weighted, so scale eps instead and
-    // drop the op. the two scales after it are constant and fold into one.
+    // the scale before the RMS norm only shifts how eps is weighted, so scale eps instead and drop the op; the two scales after it fold into one.
     // compute the scaled norm weight first so the RMS_NORM -> MUL -> ADD chain is contiguous in the graph
     ggml_tensor * proj_norm_w = ggml_scale(ctx0, model.per_layer_proj_norm, per_layer_input_scale);
     ggml_build_forward_expand(gf, proj_norm_w);

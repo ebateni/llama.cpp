@@ -120,9 +120,8 @@ static uint64_t opt_int_mm_layers = ~0ull; // bitmask of layers allowed to use i
 static uint64_t opt_int_mm_layers_gate = ~0ull; // same for the gate+up class (GGML_HEXAGON_INT_MM_LAYERS_GATE, default = LAYERS)
 static uint32_t opt_int_mm_reduce_big = 0; // window headroom for the k = 12288 class (GGML_HEXAGON_INT_MM_REDUCE_BIG)
 static uint32_t opt_int_mm_reduce = 4;     // window headroom bits for the rotated int8 packing (GGML_HEXAGON_INT_MM_REDUCE)
-// Per-class enable mask for the int8 HMX path (GGML_HEXAGON_INT_MM_MASK, hex). Bits: 0 qkv, 1 o-proj, 2 gate+up, 3 down,
-// 4 lm_head, 5 PLE model_proj, 6 PLE inp_gate + proj, 7 the k = 12288 (KV-shared) layers. Only meaningful when
-// GGML_HEXAGON_INT_MM >= 1; the fp16 path stays the default and the fallback (GGML_HEXAGON_INT_MM = 0).
+// Per-class enable mask for the int8 HMX path (GGML_HEXAGON_INT_MM_MASK, hex). Bits: 0 qkv, 1 o-proj, 2 gate+up, 3 down, 4 lm_head, 5 PLE model_proj, 6 PLE inp_gate + proj, 7 k = 12288 (KV-shared) layers.
+// Only used when GGML_HEXAGON_INT_MM >= 1; the fp16 path stays the default and fallback.
 static uint32_t opt_int_mm_mask = 0x000000EF;
 // Per-class mask of classes that use A16 (two int8 passes, mode 6) instead of A8 (GGML_HEXAGON_INT_MM_MASK16, hex, same bit order).
 // A16 is the fallback for classes whose A8 error fails the KLD gate (measured: A16 cuts the error 3-10x in every class, see M20/M23).
@@ -133,12 +132,8 @@ static uint32_t opt_int_mm_scheme = 0;
 // Static per-input-channel activation smoothing (GGML_HEXAGON_INT_SMOOTH=<file from smooth_calib.py>): W' = W * s_k is packed,
 // the DSP divides the activation by s_k. Keyed by the first weight of a group (attn_q for qkv, ffn_gate for gate+up, attn_output).
 static std::map<std::string, std::vector<float>> g_int_smooth;
-// File format (analysis/hmxlab/smooth_calib.py -> smooth.bin, ~0.8 MB): repeated [u32 name_len][name][u32 k][f32 s[k]].
-// Calibrated on 6 x ~9 KB of wiki.test.raw text (about 10 minutes on a host CPU, 6 forward passes of the model); domain transfer to
-// other text is UNTESTED. Behaviour when the file is missing, unreadable or lacks the tensor (defined, no silent degradation):
-// the A8 classes that need smoothing (gate+up always, qkv and o-proj unless they run A16) are NOT packed and stay on the fp16
-// path, because unsmoothed A8 on all 35 layers measures KLD 0.033 (gate 0.008). GGML_HEXAGON_INT_SMOOTH_OPTIONAL=1 overrides
-// that for diagnostics (runs unsmoothed A8 and logs a warning).
+// File format (analysis/hmxlab/smooth_calib.py -> smooth.bin, ~0.8 MB): repeated [u32 name_len][name][u32 k][f32 s[k]]. Calibrated on 6 x ~9 KB of wiki.test.raw; domain transfer is UNTESTED.
+// If the file or tensor is missing, the A8 classes that need smoothing stay on the fp16 path (unsmoothed A8 gives KLD 0.033); GGML_HEXAGON_INT_SMOOTH_OPTIONAL=1 runs unsmoothed A8 with a warning.
 static bool g_int_smooth_optional = false;
 static bool g_int_smooth_warned   = false;
 static uint32_t opt_int_rot_abl = 0;  // GGML_HEXAGON_INT_ROT_STAGES=1..5: timing ablation, run only that many butterfly stages (wrong results)
@@ -1266,8 +1261,7 @@ static void pack_mxfp4_quants(block_mxfp4 * x, const uint8_t * qs, unsigned int 
     }
 }
 
-// repack q4_0 data into q4_0_tiled tensor
-// v2 (Q4_0 only): plane i holds, per row, 4 bytes (q[8i+c] | q[8i+4+c] << 4); the HVX dot needs no nibble shuffles.
+// repack q4_0 into q4_0_tiled; v2 (Q4_0 only) stores 4 bytes per row per plane for shuffle-free HVX dots.
 // IQ4_NL keeps the original cp-major layout (v2 = false).
 static void repack_q4_0_tiled(ggml_tensor * t, const void * data, size_t offset, size_t size, bool v2 = false) {
     const block_q4_0 * src_matrix = (const block_q4_0 *) data;
@@ -3835,12 +3829,8 @@ struct ggml_hexagon_opbatch {
         }
     }
 
-    // ---- DMA-only dirty-range elision --------------------------------------------------------------------------
-    // The DSP records every op output as a dirty range and cleans the data cache for it before any later op reads the
-    // tensor. That is only needed if the output was written through the cache or is read through the cache. Outputs
-    // of DMA-only writers whose consumers in this batch all read them by DMA never touch the cache; they are flagged so
-    // the DSP skips the bookkeeping and the clean. Cache-written outputs (matmul, flash attention) keep the clean for
-    // ALL their consumers. The batch start/end clean-all still covers everything across batches.
+    // DMA-only dirty-range elision: outputs of DMA-only writers whose consumers in this batch all read them by DMA never touch the cache, so the DSP skips the dirty record and the clean.
+    // Cache-written outputs (matmul, flash attention) keep the clean for ALL consumers; the batch start/end clean-all still covers across batches.
 
     // Ops whose outputs (all of them) are written by DMA only, on every kernel path.
     static bool op_writes_dst_by_dma(uint32_t opc) {
@@ -4100,8 +4090,7 @@ struct ggml_hexagon_opbatch {
         return true;
     }
 
-    // ADD -> RMS_NORM+MUL where the norm reads the add result: keep the sum in VTCM so the
-    // residual is written once and never read back. Both tensors stay live as outputs.
+    // ADD -> RMS_NORM+MUL where the norm reads the add result: keep the sum in VTCM so the residual is written once and never read back.
     // Runs after try_fuse_rms_norm_mul() has collapsed RMS_NORM+MUL into ops[n_ops - 1].
     bool try_merge_add_rms_norm_mul() {
         if (n_ops < 2) return false;
@@ -4131,10 +4120,8 @@ struct ggml_hexagon_opbatch {
         // broadcast weight only (one row), which is what every norm weight is
         if (w->ne[0] != a->ne[0] || w->ne[1] * w->ne[2] * w->ne[3] != 1) return false;
 
-        // each thread reads rows [r0,r1) of a/b and writes the same rows of sum/out, and every
-        // row is read before it is written. so an output that exactly reuses an input buffer
-        // (same base, same size) is safe; a partial overlap shifts rows across threads and is not.
-        // sum and out must still be distinct, they are both live outputs.
+        // Each thread reads rows [r0,r1) of a/b before writing the same rows of sum/out, so an output that exactly reuses an input buffer (same base, same size) is safe.
+        // A partial overlap shifts rows across threads and is not safe; sum and out must be distinct.
         auto unsafe = [](const ggml_tensor * x, const ggml_tensor * y) {
             return ggml_hexagon_tensors_overlap(x, y) && !(x->data == y->data && ggml_nbytes(x) == ggml_nbytes(y));
         };
@@ -5092,9 +5079,8 @@ struct ggml_hexagon_opbatch {
         return true;
     }
 
-    // MUL_MAT_NX_GEGLU -> MUL_MAT chain: have the geglu emit f16 in HMX activation-tile layout
-    // so the consumer matmul can DMA it in verbatim. Halves the intermediate's DDR traffic and
-    // removes the consumer's activation conversion entirely. Rewrites both ops, does not merge them.
+    // MUL_MAT_NX_GEGLU -> MUL_MAT chain: the geglu emits f16 in HMX activation-tile layout so the consumer matmul can DMA it in verbatim.
+    // This halves the intermediate's DDR traffic and removes the consumer's activation conversion. Rewrites both ops, does not merge them.
     bool can_chain_geglu_matmul(const htp_opnode & node) const {
         if (n_ops == 0 || node.opcode != HTP_OP_MUL_MAT) return false;
         if (sess->mdev.count > 1) return false; // producer/consumer must partition identically
@@ -6003,9 +5989,7 @@ void ggml_hexagon_session::unclone_buffer(const ggml_hexagon_shared_buffer * sbu
 }
 
 static size_t ggml_hexagon_measure_max_vmem(ggml_hexagon_session *sess) {
-    // Allocate a bunch pinned buffers till failure.
-    // This is kind of expensive but handy for figuring out exactly how much we can mmap on a specific device.
-    // Typically we're going to allocate all/most of these buffers anyway for the model weights.
+    // Allocate pinned buffers till failure to measure the mmap limit; most are needed for weights anyway.
 
     std::vector<ggml_hexagon_shared_buffer *> sbufs;
 
@@ -6465,9 +6449,7 @@ static bool ggml_hexagon_precompute_flash_attn_params(
     // Check HMX eligibility
     const struct ggml_tensor * sinks = op->src[4];
     if (ggml_hexagon_flash_attn_is_hmx_eligible(sess, q, k, v, sinks)) {
-        // HMX tiles head_dim in units of 64; when DK/DV are not 64-aligned the kernel
-        // operates on padded dims with zero-filled tail lanes. VTCM budget and chunk-size
-        // are sized for the padded tiles.
+        // HMX tiles head_dim in units of 64; DK/DV tails are zero-padded, and VTCM/chunk sizes use the padded dims.
         const uint32_t DK_pad = hex_round_up(DK, 64);
         const uint32_t DV_pad = hex_round_up(DV, 64);
         size_t Br = 0, Bc = 0;
@@ -6564,9 +6546,7 @@ static bool ggml_hexagon_supported_flash_attn_ext(const struct ggml_hexagon_sess
         return false;
     }
 
-    // For now we support F32 or F16 output as htp backend often converts output on the fly if needed,
-    // but the op implementation writes to F16 or F32.
-    // Let's assume dst can be F32 or F16.
+    // Output may be F32 or F16; the backend often converts on the fly, but the op writes F16 or F32.
     if (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16) {
         return false;
     }
@@ -8737,9 +8717,7 @@ static bool ggml_hexagon_supported_softmax(const struct ggml_hexagon_session * s
         }
     }
 
-    // Reject non-HVX-aligned sizes when ne[0] > HVX_F32_LANES
-    // The HVX softmax implementation has issues with tail handling for larger non-aligned sizes
-    // Small sizes (ne[0] <= 32) work correctly with tail-only processing
+    // Reject non-HVX-aligned ne[0] > HVX_F32_LANES; the HVX softmax has tail bugs for large sizes, but ne[0] <= 32 is safe.
     const int64_t ne0 = src0->ne[0];
     if (ne0 > 32 && (ne0 & (32 - 1)) != 0) {
         return false;
@@ -9661,10 +9639,7 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
         }
     }
 
-    // Queue and execute.
-    // Descriptor cache: a reused graph (cache_hit) enqueues the same ops with the same tensors at the same addresses every rep, and the
-    // batch build (fusion tests, add_tensor lookups, descriptor writes, buffer sort, nodirty marking) is ~0.5 ms of host time in front of
-    // the DSP. The finished batch of the previous rep is replayed when a fingerprint of all node op_params and tensor addresses matches.
+    // Queue and execute. Descriptor cache: replay the finished batch of the previous rep of a reused graph when a fingerprint of all node op_params and tensor addresses matches (saves ~0.5 ms of host batch build).
     // GGML_HEXAGON_DESC_CACHE=0 disables it; GGML_HEXAGON_DESC_VERIFY=1 rebuilds normally and compares with the snapshot.
     const bool desc_ok = opt_desc_cache && !opt_profile && sess->mdev.count <= 1 && sess->virt_peers.empty() && sess->phys_peers.empty() &&
                          graph->uid != 0 && nodes_ptr == &sess->cached_nodes && sess->op_batch->empty();

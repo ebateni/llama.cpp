@@ -147,12 +147,8 @@ static inline void htp_im2col_vtcm_layout_build(struct htp_im2col_vtcm_layout * 
 IM2COL_PATCHEMBED_BODY(im2col_patchembed_thread, __fp16, hvx_copy_f16_f32_uu, hvx_splat_f16_u, sizeof(__fp16), "f32-f16")
 IM2COL_PATCHEMBED_BODY(im2col_patchembed_f32_thread, float, hvx_copy_f32_uu, hvx_splat_f32_u, sizeof(float), "f32-f32")
 
-// Software-pipelined 2-deep: while HVX computes block bi from buffer slot
-// (bi&1), the DMA engine stages block bi+1 into the other slot concurrently.
-// A single dma_queue_flush per iteration (after issuing the next stage-in and
-// this block's store-out) waits for both - safe because the ring is strict
-// FIFO and each buffer slot is only reused after its prior consumer (compute
-// or store-out) already finished in program order.
+// Software-pipelined 2-deep: HVX computes block bi from slot (bi&1) while DMA stages block bi+1 into the other slot.
+// One dma_queue_flush per iteration waits for both; the ring is FIFO and a slot is reused only after its consumer.
 #define IM2COL_BLOCKED_DMA_BODY(FNAME, DST_CTYPE, COPY_FN, SPLAT_FN, DST_ELEM, TAG)                                            \
     static void FNAME(unsigned int nth, unsigned int ith, void * data) {                                                       \
         struct htp_im2col_context * ictx        = (struct htp_im2col_context *) data;                                          \
@@ -307,9 +303,8 @@ IM2COL_PATCHEMBED_BODY(im2col_patchembed_f32_thread, float, hvx_copy_f32_uu, hvx
 IM2COL_BLOCKED_DMA_BODY(im2col_blocked_dma_thread,     __fp16, hvx_copy_f16_f32_uu, hvx_splat_f16_u, sizeof(__fp16), "blk-dma-f16")
 IM2COL_BLOCKED_DMA_BODY(im2col_blocked_dma_f32_thread, float,  hvx_copy_f32_uu,     hvx_splat_f32_u, sizeof(float),  "blk-dma-f32")
 
-// Exact-tiling patch-embed DMA fast path (s0==KW, p0=0, d0=1; and 2D s1==KH,
-// p1=0, d1=1). Intentionally reads no stride/pad/dilation params so the inner
-// copy stays tight and fully hoisted - do NOT graft the general gather in here.
+// Exact-tiling patch-embed DMA fast path (s0==KW, p0=0, d0=1; 2D s1==KH, p1=0, d1=1).
+// It reads no stride/pad/dilation params; do not graft the general gather in here.
 #define IM2COL_PATCHEMBED_DMA_BODY(FNAME, DST_CTYPE, COPY_FN, SPLAT_FN, DST_ELEM, TAG)                           \
     static void FNAME(unsigned int nth, unsigned int ith, void * data) {                                         \
         struct htp_im2col_context * ictx        = (struct htp_im2col_context *) data;                            \
@@ -453,9 +448,8 @@ static bool im2col_patchembed_dma_fits(struct htp_ops_context *    octx,
     return true;
 }
 
-// Sizes a per-thread 2x(src,dst) VTCM ping-pong for the blocked general kernel.
-// Stages Wb=(owb-1)*s0+(KW-1)*d0+1 source cols per (iic,ikh) row and owb patches
-// of dst. Picks the largest owb that fits; returns false if even owb=1 does not.
+// Size a per-thread 2x(src,dst) VTCM ping-pong for the blocked general kernel: stage Wb source cols and owb patches.
+// Pick the largest owb that fits; return false if even owb=1 does not.
 static bool im2col_blocked_dma_fits(struct htp_ops_context *    octx,
                                     struct htp_im2col_context * ictx,
                                     uint32_t                    n_threads) {
@@ -546,9 +540,8 @@ int op_im2col(struct htp_ops_context * octx) {
     ictx.npatches            = npatches;
     ictx.npatches_per_thread = (npatches + n_threads - 1) / n_threads;
 
-    // Clean non-overlapping patch-embed -> DMA kernel (if it fits VTCM);
-    // everything else (padding/dilation/stride edges) -> blocked-staging DMA
-    // kernel; if neither fits VTCM -> pure-DDR kernel.
+    // Non-overlapping patch-embed uses the DMA kernel if it fits VTCM; padding/dilation/stride edges use blocked staging.
+    // If neither fits VTCM, use the pure-DDR kernel.
     if (nrows > 0) {
         const uint32_t pth = MIN(octx->n_threads, nrows);
         if (pth > 0) {

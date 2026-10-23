@@ -624,9 +624,8 @@ static inline void rope_theta_update(struct htp_rope_context * rctx, const int32
     }
 }
 
-// Flat variant: rows of src0/dst are contiguous across heads and tokens, so DMA blocks run across
-// token boundaries and keep ROPE_FLAT_DEPTH blocks in flight. Pop order alternates (write of an
-// earlier block, read of the current block); slots = 2 * depth keeps a slot free before it is refilled.
+// Flat variant: rows are contiguous across heads and tokens, so DMA blocks cross token boundaries and keep ROPE_FLAT_DEPTH blocks in flight.
+// Pops alternate (earlier write, current read); slots = 2 * depth keeps a slot free before it is refilled.
 #define ROPE_FLAT_DEPTH (HTP_ROPE_SPAD_NSLOTS / 2)
 
 static void rope_job_f32_flat(unsigned int nth, unsigned int ith, void * data) {

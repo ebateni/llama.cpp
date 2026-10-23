@@ -1298,10 +1298,8 @@ static void unary_thread_rms_norm_mul_f32(unsigned int nth, unsigned int ith, vo
     dma_queue_flush(dma_q);
 }
 
-// 2a. RMS_NORM_MUL_Q8: rms_norm(x) * w for ROW PAIRS (2 rows = the unit of the HMX activation crouton), then the exact int8 A8
-// quantizer of the plain int8 matmul (hmx_int8_quant_pair_fast: same smoothing multiply, same row max, same magic-number rounding on
-// the same f32 values the matmul used to DMA back), writing the 2 KB-crouton payload and the f32 row scales into dst. Each thread owns
-// whole pairs, so no payload word and no scale is shared. dst layout: payload n_rt * (k/32) * 2048 B, then f32 scales at q8_scale_off.
+// 2a. RMS_NORM_MUL_Q8: rms_norm(x) * w per ROW PAIR, then the int8 quantizer of the plain int8 matmul (hmx_int8_quant_pair_fast), writing crouton payload and f32 row scales to dst.
+// Each thread owns whole pairs, so nothing is shared. dst: payload n_rt * (k/32) * 2048 B, then f32 scales at q8_scale_off.
 static void unary_thread_rms_norm_mul_q8(unsigned int nth, unsigned int ith, void * data) {
     (void) nth;
     const struct htp_unary_context * uctx = (const struct htp_unary_context *) data;
@@ -1472,9 +1470,7 @@ static void unary_thread_add_rms_norm_mul_f32(unsigned int nth, unsigned int ith
         compute(s0, s2, w_vtcm, sum, out, bs, uctx);
         htp_trace_event_stop(&octx->ctx->trace[ith], HTP_TRACE_EVT_HVX_COMP, ir);
 
-        // the output-write descriptors double as the next iteration's buffer handles:
-        // popping one waits for the write and hands the VTCM slot back, so the push order
-        // here must match the pop order above (dst first, then sum)
+        // The output-write descriptors double as the next iteration's buffer handles, so push order must match pop order (dst, then sum).
         dma_queue_push(dma_q, dma_make_data(uctx->data_dst + ir * nb1, out), nb1, row_aligned, row_bytes, bs);
         if (has_sum) {
             dma_queue_push(dma_q, dma_make_data(data_sum + ir * nb_sum, sum), nb_sum, row_aligned, row_bytes, bs);
@@ -2121,12 +2117,8 @@ static int execute_op_unary(struct htp_ops_context * octx) {
     return err;
 }
 
-// RMS_NORM_MUL_Q8 entry. Layout contract with the host fusion pass (ggml_hexagon_opbatch::try_fuse_norm_q8) and the plain int8 op:
-//   src[0] = f32 activation rows [k x m], src[1] = f32 norm weight [k], src[2] = qkv weight 0 (Q4_0 tensor with the packed int8 region,
-//   only used to locate the 1/s_k smoothing vector behind the records), dst = the norm output tensor reused as the payload buffer:
-//   payload  : ceil(m/32) * (k/32) * 2048 bytes (HMX activation croutons, int8 + 128 zero point, as hmx_int8_quant_pair_fast writes them)
-//   scales   : m f32 row scales at byte offset scale_off = round_up(payload, 128)
-// The op never falls back silently: any unmet precondition returns NO_SUPPORT, and the host guarantees the consumer is the int8 plain op.
+// RMS_NORM_MUL_Q8 entry: src[0]=f32 rows [k x m], src[1]=f32 norm weight [k], src[2]=qkv weight 0 (locates 1/s_k), dst=payload ceil(m/32)*(k/32)*2048 B then m f32 row scales at round_up(payload, 128).
+// Any unmet precondition returns NO_SUPPORT; the host guarantees the consumer is the plain int8 op.
 static int execute_op_rms_norm_mul_q8(struct htp_ops_context * octx) {
     const struct htp_tensor * src0 = octx->src[0];
     const struct htp_tensor * src1 = octx->src[1];

@@ -293,9 +293,7 @@ static int concat_transposed(struct htp_ops_context * octx, const struct htp_con
 
     const uint32_t n_threads = octx->n_threads;
 
-    // layout precomputed on host; kept for reference:
-    // struct htp_concat_transposed_vtcm_layout layout;
-    // htp_concat_transposed_vtcm_layout_build(&layout, octx->src[0]->ne[0], octx->src[1]->ne[0], type_size, n_threads);
+    // layout precomputed on host; kept for reference (see htp_concat_transposed_vtcm_layout_build).
 
     uint8_t * vtcm_base = (uint8_t *) octx->ctx->vtcm_base;
 

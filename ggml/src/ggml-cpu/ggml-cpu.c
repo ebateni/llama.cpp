@@ -2371,10 +2371,8 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             } break;
         case GGML_OP_GET_ROWS:
             {
-                // A get_rows over many rows of a dequantizing type (the per-layer-embedding gather: 512 rows x 35 KB of f32 output,
-                // ~18 MB) is memory-bandwidth and ALU bound on ONE core (28 GB/s) and sits in front of the accelerator graph:
-                // split it over the rows. Small get_rows (decode: 1 row, or the 3 MB embedding gather) keep one task: the thread
-                // wake-up cost exceeds the gain. The output bytes are identical (each row is produced by the same code).
+                // Split a get_rows of a dequantizing type over rows when output is large (>= 64 rows, >= 8 MB); one core is bandwidth and ALU bound.
+                // Small get_rows keep one task because the thread wake-up cost exceeds the gain. Output bytes are identical.
                 const int64_t nr_rows = ggml_nelements(node->src[1]);
                 const size_t  out_bytes = ggml_nbytes(node);
                 if (nr_rows >= 64 && out_bytes >= (size_t) 8 * 1024 * 1024 && ggml_is_quantized(node->src[0]->type)) {

@@ -771,13 +771,8 @@ llama_memory_context_ptr llama_kv_cache::init_update(llama_context * lctx, bool 
 llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_ubatch> & ubatches) {
     llama_kv_cache::slot_info_vec_t res;
 
-    // Fast path for the common prefill shape: ONE ubatch placed into free cells.
-    // The generic loop below applies the ubatch (apply_ubatch: seq_add, pos_set, ext_set per cell, std::set inserts) only to take
-    // the state back out again (cp / set / seq_pos_rm) because prepare() must leave the cache untouched. For a single ubatch nothing
-    // reads that intermediate state, and when every target cell is EMPTY apply_ubatch neither removes a cell nor purges other
-    // positions (seq_pos_max_rm stays -1), so apply + restore is an exact round trip and can be skipped. find_slot() does not
-    // modify the cells, so the sinfo is the one the generic loop computes. Any occupied target cell (SWA overwrite, defrag, ...)
-    // takes the generic path below.
+    // Fast path for the common prefill shape (ONE ubatch into free cells): if every target cell is EMPTY, apply_ubatch removes and purges nothing, so apply + restore is an exact round trip and is skipped.
+    // find_slot() does not modify the cells, so the sinfo equals the generic one. Any occupied target cell (SWA overwrite, defrag, ...) takes the generic path below.
     if (ubatches.size() == 1) {
         auto sinfo_new = find_slot(ubatches[0], false);
         if (sinfo_new.empty()) {
@@ -1695,9 +1690,8 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, T * data
                 const llama_pos * pp = pk.data();
                 T * row = data + idst;
 
-                // Window form: valid for causal masks with no SWA or the standard SWA, when the recorded cells are consecutive and
-                // their positions strictly ascend. Then cell k is kept iff p1 - n_swa < pp[k] <= p1, i.e. k in [lo, hi), which is
-                // exactly what the per-cell test below computes for every k (same predicate, evaluated by bisection).
+                // Window form (causal, no SWA or standard SWA; consecutive cells, strictly ascending positions): cell k is kept iff p1 - n_swa < pp[k] <= p1, i.e. k in [lo, hi).
+                // This is the same predicate as the per-cell test below, evaluated by bisection.
                 if (causal && nk > 0 && (!swa || swa_type == LLAMA_SWA_TYPE_STANDARD || swa_type == LLAMA_SWA_TYPE_NONE)) {
                     auto & w = seq_win[seq_id];
                     if (w == 0) {

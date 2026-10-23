@@ -2864,11 +2864,8 @@ static void transfer_output_chunk_col_chunk_worker_fn(unsigned int n, unsigned i
 #define HTP_GELU_COEF_A    0.044715f
 #define HTP_SQRT_2_OVER_PI 0.79788456080286535587989211986876f
 
-// sigmoid taking t = log2(e) * x, so the caller folds the scale into the gelu constants.
-// Two things make this much cheaper than hvx_vec_fast_sigmoid_f16: 1 + 2^-|t| always lies
-// in [1, 2], so a degree-5 polynomial in w = 2^-|t| replaces the full-range
-// hvx_vec_inverse_f16; and the negative branch is w/(1+w) rather than 1 - 1/(1+w), which
-// also removes the f16 cancellation that collapses sigmoid(x) to 0 for x < -9.
+// sigmoid taking t = log2(e) * x. Cheaper than hvx_vec_fast_sigmoid_f16: 1 + 2^-|t| is in [1, 2], so a degree-5 polynomial in w = 2^-|t| replaces the full-range inverse;
+// the negative branch is w/(1+w), which avoids the f16 cancellation that collapses sigmoid(x) to 0 for x < -9.
 static inline HVX_Vector hvx_vec_sigmoid_log2_f16(HVX_Vector t) {
     // u = -|t|, by forcing the sign bit. Clamped so the exponent add below stays in range.
     HVX_Vector u = Q6_Vhf_vmax_VhfVhf(Q6_V_vor_VV(t, Q6_Vh_vsplat_R(0x8000)), hvx_vec_splat_f16(-24.0f));
@@ -2897,10 +2894,8 @@ static inline HVX_Vector hvx_vec_sigmoid_log2_f16(HVX_Vector t) {
     return Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VhVh(Q6_V_vzero(), t), hvx_vec_mul_f16_f16(w, s), s);
 }
 
-// gelu(x) = x * sigmoid(2 * sqrt(2/pi) * x * (1 + a * x^2)), with the factor 2 and log2(e)
-// folded into the constants. f16 math fits 64 lanes per vector instead of 32, so the pair of
-// output rows is done in one pass. x^2 is clamped because sigmoid saturates long before the
-// square can overflow f16.
+// gelu(x) = x * sigmoid(2 * sqrt(2/pi) * x * (1 + a * x^2)), with the factor 2 and log2(e) folded into the constants; f16 does a row pair per pass.
+// x^2 is clamped because sigmoid saturates long before the square can overflow f16.
 static inline HVX_Vector hvx_vec_geglu_f16(HVX_Vector x, HVX_Vector g, HVX_Vector c_a, HVX_Vector c_s, HVX_Vector x2_max) {
     HVX_Vector x2   = Q6_Vhf_vmin_VhfVhf(hvx_vec_mul_f16_f16(x, x), x2_max);
     HVX_Vector coef = hvx_vec_add_f16_f16(hvx_vec_mul_f16_f16(x2, c_a), c_s);
@@ -3017,10 +3012,8 @@ static void transfer_output_geglu_threaded(struct htp_context *ctx, float *dst, 
     }
 }
 
-// Fused geglu epilogue writing f16 straight into HMX activation-tile layout. The HMX output tile
-// layout and the HMX activation tile layout are identical (both pack a row pair per vector, see
-// transfer_activation_row_pair_fp32_to_fp16_col_chunk), so the consumer matmul can DMA this in with
-// no conversion at all. Tile-at-a-time so each 2KB destination tile is written sequentially.
+// Fused geglu epilogue writing f16 straight into HMX activation-tile layout, which equals the HMX output tile layout (a row pair per vector),
+// so the consumer matmul DMAs it in with no conversion. Tile-at-a-time so each 2KB destination tile is written sequentially.
 static void transfer_output_geglu_tiled_col_chunk(__fp16 *restrict dst, const __fp16 *restrict vtcm_gate,
                                                  const __fp16 *restrict vtcm_up, uint32_t n_rows, uint32_t c_len,
                                                  uint32_t total_n_cols, uint32_t dst_tile_col, uint32_t dst_k_tiles) {
@@ -4543,9 +4536,8 @@ static int hmx_mm_nx_geglu_2d_int8_rot(struct htp_ops_context * octx, const stru
                     ROT_PUSH_W(s + 1, raw[(s - 1) % 2]);             // its raw buffer takes step s + 1 (same parity as s - 1)
                 }
             }
-            // chunk c - 1 is complete once job s - 1 has retired (s = 2c, w = 0). The tiled GEGLU epilogue (~85k cycles) is longer than one job
-            // (~63k), so it runs in two row-tile halves, one after each of the two pushes of chunk c: the next job is queued before the
-            // epilogue ends and the HMX never waits for it. obuf pair (c - 1) % 2 is first rewritten by the job of step 2c + 2, after part 1.
+            // chunk c - 1 is complete once job s - 1 has retired (s = 2c, w = 0). The tiled GEGLU epilogue (~85k cycles) is longer than one job (~63k), so it runs in two row-tile halves,
+            // one after each push of chunk c: the next job is queued before it ends. obuf pair (c - 1) % 2 is first rewritten by step 2c + 2, after part 1.
             if (c > 0) {
                 if (tiled_out) { ROT_EPILOGUE(c - 1, mr, n_rows, w, 2); }
                 else if (w == 1) { ROT_EPILOGUE(c - 1, mr, n_rows, 0, 1); }
@@ -4672,9 +4664,8 @@ static int hmx_mm_nx_2d_int8_f32(struct htp_ops_context * octx, const struct htp
     if (n_weights > 4) { return HTP_STATUS_NO_SUPPORT; }
     if (octx->op == HTP_OP_MUL_MAT_ADD) { return HTP_STATUS_NO_SUPPORT; }
     const bool act_tiled = (octx->op == HTP_OP_MUL_MAT_AT);   // x = tiled f16 activation from the fused GEGLU_T producer
-    // q8_in: the activation is the int8 payload + row scales written by RMS_NORM_MUL_Q8 (host sets kparams->q8_in only when it emitted that
-    // producer for this exact tensor). The payload replaces the f32 rows; every requirement below must hold or the op reports NO_SUPPORT
-    // loudly (the host guarantees the int8 path runs, so a refusal here is a bug and must never fall back to the f32 path).
+    // q8_in: the activation is the int8 payload + row scales from RMS_NORM_MUL_Q8 (host sets kparams->q8_in only when it emitted that producer for this tensor).
+    // Every requirement below must hold or the op reports NO_SUPPORT; the host guarantees this path runs, so a refusal is a bug and must never fall back to f32.
     const bool q8_in = kparams->q8_in != 0;
 
     const struct htp_tensor * restrict act = octx->src[n_weights];
@@ -4775,9 +4766,8 @@ static int hmx_mm_nx_2d_int8_f32(struct htp_ops_context * octx, const struct htp
 
     dma_queue * weight_dma = ctx->dma[0];
 
-    // Flat step stream: step s = chunk c of weight wi, steps run weight after weight. The weight record DMA, the double buffers (raw, obuf, colmul, coladd)
-    // and the job slots all alternate by s % 2, so the HMX never drains at a weight boundary: the epilogue of the last chunk of a weight overlaps the first job
-    // of the next weight exactly like the epilogue of chunk c - 1 overlaps job c inside a weight. The math per element is unchanged.
+    // Flat step stream: step s = chunk c of weight wi, weight after weight. The weight record DMA, double buffers (raw, obuf, colmul, coladd) and job slots alternate by s % 2,
+    // so the HMX never drains at a weight boundary: the last epilogue of a weight overlaps the first job of the next. The math per element is unchanged.
     struct i8f_wst { const struct htp_tensor * w; float * dst_ptr; size_t n, int8_off; int dst_stride, dst_cols; uint32_t cnt; } wst[4];
     #define I8F_STEP(s_, wi_, c_) do { uint32_t _r = (uint32_t) (s_); (wi_) = 0; while (_r >= wst[(wi_)].cnt) { _r -= wst[(wi_)].cnt; ++(wi_); } (c_) = _r; } while (0)
     #define I8F_PUSH_S(s_, buf) do {                                                                         \

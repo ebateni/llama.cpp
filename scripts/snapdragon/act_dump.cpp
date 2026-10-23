@@ -1,15 +1,5 @@
-// Dump class-input activations (f32) used by smooth_calib.py.
-//
-// Usage: act_dump <model.gguf> <prompt.txt>
-// Env:   DUMP_DIR=<dir>   output directory (default: .)
-//
-// MUL_MAT nodes whose src[0] is blk.L.{attn_q,attn_output,ffn_gate,...}.weight
-// write src[1] to CLS_<class>_<L>.f32, row-major [n_tokens, k]. smooth_calib.py
-// reads CLS_qkv_*, CLS_gate_* and CLS_o_*.
-//
-// Build (in the llama.cpp tree):
-//   c++ -O2 -std=c++17 -I include -I ggml/include scripts/snapdragon/act_dump.cpp \
-//       -o act_dump -L build/bin -Wl,-rpath,$PWD/build/bin -lllama -lggml
+// Dump MUL_MAT src[1] (f32, row-major [n_tokens, k]) per blk.L weight to $DUMP_DIR/CLS_<class>_<L>.f32 (default .) for smooth_calib.py.
+// Usage: act_dump <model.gguf> <prompt.txt>. Build with c++ -std=c++17, link -lllama -lggml from build/bin.
 
 #include "llama.h"
 #include "ggml-backend.h"

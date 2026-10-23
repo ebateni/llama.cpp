@@ -28,20 +28,14 @@ extern "C" {
 // Q5_K: the Q4_1 tile (640) followed by a 128-byte plane with the 5th bit of every quant, transposed so that
 //   plane byte l holds the eight flags of lane l: bit 2i = low nibble of nibble vector i, bit 2i+1 = high nibble
 #define HTP_MM_WEIGHT_TILE_SIZE_Q5_K   768
-// Q6_K native 6-bit tile (32 rows x 32 k), vrmpy-ready: byte 4*row+b of a vector holds k = 4*group+b
-//   vectors 0..3: low nibbles, vector i holds group 2i (low nibble) and group 2i+1 (high nibble)
-//   vectors 4..5: high 2 bits, vector m holds groups 4m..4m+3 at bit offsets 0,2,4,6
-//   vector 6: fp16 scales per row, d * scales[]: k 0..15 in lanes 0..31, k 16..31 in lanes 32..63
+// Q6_K native 6-bit tile (32 rows x 32 k), vrmpy-ready: vectors 0..5 hold nibbles and high bits, vector 6 the fp16 scales.
+// Byte 4*row+b holds k = 4*group+b; scales split k 0..15 / 16..31 across lane halves.
 #define HTP_MM_WEIGHT_TILE_SIZE_Q6_K   896
-// Q3_K native 3-bit tile, vrmpy-ready like Q6_K
-//   vectors 0..1: low 2 bits, vector m holds groups 4m..4m+3 at bit offsets 0,2,4,6
-//   vector 2: bit g set where the hmask bit of group g is clear (quant = low 2 bits - 4)
-//   vector 3: fp16 scales per row, d * (scales[] - 32): k 0..15 in lanes 0..31, k 16..31 in lanes 32..63
+// Q3_K native 3-bit tile, vrmpy-ready: vectors 0..1 hold low 2 bits, vector 2 the hmask bits, vector 3 the fp16 scales.
+// Scales are d * (scale - 32), split k 0..15 / 16..31 across lane halves.
 #define HTP_MM_WEIGHT_TILE_SIZE_Q3_K   512
-// Q2_K native 2-bit tile, vrmpy-ready like Q6_K
-//   vectors 0..1: unsigned 2-bit quants, vector m holds groups 4m..4m+3 at bit offsets 0,2,4,6
-//   vector 2: fp16 scales per row, d * (scales[] & 0xF), same lanes as Q3_K vector 3
-//   vector 3: fp16 offsets per row, -dmin * (scales[] >> 4), same lanes
+// Q2_K native 2-bit tile, vrmpy-ready: vectors 0..1 hold quants, vector 2 fp16 scales (d * (scale & 0xF)).
+// Vector 3 holds fp16 offsets (-dmin * (scale >> 4)), same lanes as Q3_K vector 3.
 #define HTP_MM_WEIGHT_TILE_SIZE_Q2_K   512
 
 // --- Weight Repacked Aligned Tile Sizes ---
@@ -900,9 +894,8 @@ static inline size_t htp_mm_hmx_nx_geglu_vtcm_size(int wtype, uint32_t k, size_t
     return hex_align_up(L.total_bytes, HTP_MM_HMX_TILE_SIZE) + 2 * L.output_area_bytes;
 }
 
-// MUL_MAT_AT reads an activation that is already f16 in tile layout, so the f32 conversion
-// scratch (act_threads) is dead weight. Re-solve (mc, nc) without it: the freed VTCM buys a
-// larger m_chunk, which cuts how many times the weight is streamed from DDR.
+// MUL_MAT_AT reads an f16 tile-layout activation, so the f32 conversion scratch (act_threads) is unused.
+// Re-solve (mc, nc) without it: the freed VTCM buys a larger m_chunk, so the weight is streamed from DDR fewer times.
 static inline bool htp_mm_hmx_solve_2d_tiled_act_params(int wtype, uint32_t k, uint32_t n, uint32_t m,
                                                         uint32_t aligned_tile_size, size_t vtcm_budget,
                                                         size_t * mc_out, size_t * nc_out, size_t * vtcm_out) {

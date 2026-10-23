@@ -320,12 +320,8 @@ static inline void hvx_fast_rms_norm_mul_add_f32(const uint8_t * restrict x,
     }
 }
 
-// ---------------------------------------------------------------------------------------------------------------
-// Row-interleaved variants: HVX_NORM_X independent rows go through exactly the intrinsic sequence of the single-row
-// kernels above (same per-row accumulation order, same rounding points, so the result is bit-identical). One row is a
-// short dependent chain (sum-of-squares accumulate -> horizontal reduce -> inverse -> 3x Newton rsqrt), so a single row
-// is latency-bound; X rows in flight overlap those chains. Only rows with num_elems % 32 == 0 take this path; callers
-// run the leftover rows (and ragged rows) through the single-row kernels.
+// Row-interleaved variants: HVX_NORM_X rows run the exact intrinsic sequence of the single-row kernels (bit-identical) to overlap their latency-bound dependent chains.
+// Only rows with num_elems % 32 == 0 take this path; callers run leftover and ragged rows through the single-row kernels.
 #ifndef HVX_NORM_X
 #define HVX_NORM_X 4
 #endif

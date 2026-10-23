@@ -1,12 +1,5 @@
-// Host-side packing of Hadamard-rotated int8 weights for the HMX int8 matmul path (see htp/hmx-mm-kernels-int8.h).
-//
-// For a Q4_0 weight [n rows (output channels)][k] the rows are dequantized, multiplied by a fixed +-1 sign pattern, mixed by a
-// normalized Walsh-Hadamard transform over blocks of HEX_INT8_WHT_BLOCK elements, quantized to int8 with one scale per row, and stored as
-// records of 64 output channels:
-//   [k/32 croutons of 2 KB: set0 (cols 0..31, 1 KB) then set1 (cols 32..63); byte (kk/4)*128 + c*4 + (kk%4)]
-//   [HMX bias table, 2 x 256 B: 32 scale words (fp16 bits of 2^-shift * 2) then 32 words of -128*colsum + rounding]
-//   [col_mul: 64 floats = row scale * 2^shift]
-// The activation side applies the same sign pattern and transform on the DSP before its own int8 quantization.
+// Host-side packing of Hadamard-rotated int8 Q4_0 weights for the HMX int8 matmul (see htp/hmx-mm-kernels-int8.h): sign pattern, normalized WHT per HEX_INT8_WHT_BLOCK, one int8 scale per row.
+// Record per 64 channels: k/32 2 KB croutons (byte (kk/4)*128 + c*4 + kk%4), 2x256 B HMX bias table (scale words, -128*colsum words), 64 float col_mul = row scale * 2^shift.
 
 #pragma once
 
@@ -19,11 +12,8 @@
 
 #define HEX_INT8_WHT_BLOCK 512
 
-// Zero-point (input bias) handling. The HMX bias high word carries the per-column integer added to the accumulator before the
-// readout; the k = 12288 class needs |ibias| up to 1.36e6, beyond the ~4e5 the lab has verified, so the correction is split in two
-// levels: the bias word carries the value truncated to HEX_INT8_BIAS_BITS and the exact remainder is applied on HVX as a per-column
-// f32 term (col_add). With HEX_INT8_BIAS_BITS = 32 the remainder is exactly zero and this is bit-identical to a single-level bias;
-// e56.py on the device decides the largest width the hardware honours (M33).
+// Zero-point: the bias word is truncated to HEX_INT8_BIAS_BITS (|ibias| up to 1.36e6 at k = 12288 exceeds the ~4e5 verified) and the exact remainder is added on HVX as f32 col_add.
+// With HEX_INT8_BIAS_BITS = 32 the remainder is zero (single-level bias).
 #ifndef HEX_INT8_BIAS_BITS
 #define HEX_INT8_BIAS_BITS 32
 #endif
@@ -42,18 +32,8 @@ static inline size_t hex_int8_extra_bytes(uint32_t k, uint32_t n, bool smooth = 
 }
 
 
-// Scheme 1: the shipped W4A8 numerics, produced at LOAD time instead of on the fly. Each Q4_0 block has a fp16 scale d_g; with
-// dmax = max_g|d_g| the row scale is s_n = dmax/15.875 and each block gets the Q4.4 ratio R_g = round(|d_g|/dmax*254), so the
-// stored int8 is clip((q * sign(d_g) * R_g + 8) >> 4) with q in -8..7. This is exactly what the DSP's on-the-fly expand produces
-// (hmx_int8_expand_q4_0_ref in htp/hmx-mm-kernels-int8.h), so a class measured with this scheme reports the W4A8 numbers without
-// changing any kernel; the DDR cost is the same 1 B/weight as scheme 0 (only the on-the-fly expand saves those bytes).
-//
-// With smoothing (and/or R32) the Q4.4 values cannot be kept as they are: W' = W * s_k breaks the per-block constant scale, and the
-// activation side divides by s_k (and rotates), so the weights must carry the same transform. hex_int8_pack_q44 therefore composes
-// two stages: (1) the Q4.4 int8 values times the row scale s_n (exactly the values above), (2) hex_int8_pack_impl applies s_k /
-// sign / rotation and RE-DERIVES the per-row scale (amax/127 of the transformed row) and the window shift (bound = 127*sum|w8'|)
-// from the transformed row, so col_mul, the bias table and the zero-point correction all describe the final int8 values.
-// Without smoothing and without rotation the exact path (hex_int8_pack_q44_exact) is used unchanged.
+// Scheme 1 (W4A8 numerics at load time): s_n = dmax/15.875, R_g = round(|d_g|/dmax*254), int8 = clip((q * sign(d_g) * R_g + 8) >> 4), q in -8..7; matches hmx_int8_expand_q4_0_ref.
+// With smoothing/R32, hex_int8_pack_q44 re-derives row scale and window shift from the transformed row in hex_int8_pack_impl; else the exact path (hex_int8_pack_q44_exact) is used.
 template <typename Fetch>
 static inline void hex_int8_pack_impl(uint8_t * dst, uint32_t n, uint32_t k, uint32_t reduce, bool rotate, const float * smooth,
                                       uint32_t rot_block, Fetch fetch);
