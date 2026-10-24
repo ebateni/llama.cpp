@@ -375,8 +375,6 @@ struct common_params_speculative_ngram_cache {
 };
 
 struct common_params_speculative {
-    // set by the server before common_speculative_init(); used by the cabin template drafter (LLAMA_JF_TEMPLATE=1)
-    const struct llama_vocab * vocab = nullptr;
     std::vector<enum common_speculative_type> types = { COMMON_SPECULATIVE_TYPE_NONE };
 
     double synth_len = -1.0;
@@ -1140,15 +1138,6 @@ struct common_batch {
 // positions continue from the memory, last token always have output_logits set to true
 common_batch common_batch_get_one(struct llama_context * ctx, const llama_token * tokens, int32_t n_tokens);
 common_batch common_batch_get_one(struct llama_context * ctx, const llama_tokens & tokens);
-
-void common_batch_clear(struct llama_batch & batch);
-
-void common_batch_add(
-                 struct llama_batch & batch,
-                        llama_token   id,
-                          llama_pos   pos,
-    const std::vector<llama_seq_id> & seq_ids,
-                               bool   logits);
 
 // decodes a single batch of tokens for a prompt and manages session tokens
 //

@@ -83,8 +83,6 @@ add_library(${TARGET}
     http.h
     imatrix-loader.cpp
     imatrix-loader.h
-    jf-knn.cpp
-    jf-knn.h
     json-schema-to-grammar.cpp
     json-schema.cpp
     json-schema.h
