@@ -6,7 +6,7 @@ upstream `620d2225c`. Device `1b531bdd`, 4 NSPs, row split (`GGML_HEXAGON_DEVICE
 This file is the living plan and history. It is updated and pushed after every step.
 Detailed measurements live in [`adaptive-split-baseline.md`](adaptive-split-baseline.md).
 
-_Last updated: 2026-10-22 — M1b zig-zag dropped after retry (no gain); M5 next. M1 shipped as a single `GGML_HEXAGON_FA_SPLIT` flag on upstream master. M1b (zig-zag Q-blocks) pushed for A/B. Plan replanned around upstream PR #30843 (fusions)._
+_Last updated: 2026-10-25 — M5 deferred (v2 within noise). M2/M3/M4 merged into one fusion ticket "F" on ebateni `ebateni/fusions` (base `06230cb87`, contains #30843): F1 GLU epilogue + F2 post-norm residual add prototyped, not yet built. M1 shipped; M1b dropped._
 
 ---
 
@@ -66,10 +66,8 @@ Details are in `adaptive-split-baseline.md`.
 |---|---|---|---|---|---|
 | M1 | **FA adaptive team split** — shipped as `hexagon: KV-head team split for HMX flash attention in multicore` + merged flag (`8075d1d54`, qualcomm `ebateni/adaptive-split`). `FA_SPLIT=0` = token split only; `1` = head split when `n_kv % N == 0`, team split when `n_kv < N` | **yes** | `GGML_HEXAGON_FA_SPLIT=0/1` | — | **SHIPPED.** On the new base (run `20261021-104316`, pp1024 4c): E4B **+14.7%**, 12B **+14.9%**, 26B **+6.6%** (TG +15%), E2B −0.5% |
 | M1b | **Zig-zag Q-blocks within a team.** Masked-block skipping makes per-Q-block cost grow with position under a causal mask, so the contiguous split leaves the last member with the most work: 4-way critical path 7/16 vs 4/16 ideal (E2B, 1 team × 4); 2-way 3/4 vs 1/2 (E4B / 12B / 26B, 2 teams × 2). Snake order {m, 2T−1−m, …} balances it. Any mask; no host cost | no (order only) | `FA_SPLIT=2` | E2B and Gemma global layers: FA up to ~1.5–1.75× faster at depth 0 | **DROPPED.** Run `20261021-213738` (1 vs 2, ub1024, d0/16k): no change on any model, all within ±1% (E2B 4c d0 5143→5111, d16k 3912→3932; E4B 3320→3322). Debug (`20261021-233331`, `fa_dbg.txt`) **confirmed** the bench shapes get Br=256 → 4 Q-blocks = team size, so zig-zag == contiguous (no-op). Causal critical path at d0 is 4/10 vs 2.5/10 ideal. Retry `bf0558252` (zig-zag + forced ≥ 2 Q-blocks per member): `20261022-000438` E4B 3309→3287 (−0.7%), `20261022-001604` E2B 5157→5165 (+0.2%) → no gain; causal FA imbalance is not material end-to-end |
-| M2 | **Matmul-epilogue GLU**: MUL_MAT_NX(gate, up) + act·mul in the HMX writeback. Not covered by #30843 (it fuses UNARY+MUL into one elementwise GLU op, but gate/up still round-trip through DDR) | no | next free `OPFUSION` bit after #30843 (≥ 8192) | llama ~8%, Qwen ~7%, Gemma ~10% (upper bound; the elementwise part is already fused by #30843) | **blocked on #30843 landing** (it refactors htp-fusion / kparams); then rebase and build on its GLU op |
-| M3 | Qwen3.5 conv block, **narrowed**: #30843 fuses SSM_CONV+SILU and GDN+CPY. What remains: the CONCAT (transpose) and conv-state CPY around SSM_CONV, and the channels → TOKEN + 3-token halo axis | **yes** | next free bit | Qwen3.5 ~5–8% (was ~13%) | after #30843; needs a Qwen3.5 profile on the post-#30843 base |
-| M4 | **Cross-op residual ADD → RMS_NORM(+MUL)** (pre-norm of the next sublayer). #30843 covers same-op chains (BINARY_NX), RMS_NORM+MUL, RMS_NORM+SCALE and MUL+MUL scalar, but not ADD feeding a norm | no | next free bit | 3–6% | **agree ownership with Max first**; otherwise drop |
-| M5 | **MoE**: token-count-balanced experts (LPT), expert vs token split; 4c host memory overhead. FA does not help here (35B-A3B: +2.1%, noise) and the scaling is 2.25×, the worst of all models | **probably** | `GGML_HEXAGON_MMID_SPLIT` | TBD | **NEXT**: needs the M5-0 MoE profile |
+| F | **Fusion ticket (was M2/M3/M4)**, ebateni `ebateni/fusions`, one `OPFUSION` bit per fusion. **F1** matmul-epilogue GLU (`8192`): gate/up chunks packed into one HMX job, `glu(gate, up)` in the fp16→f32 output store; covers MUL_MAT_NX(up, gate)+GLU (dense), MUL_MAT_ID_NX+GLU and merged `ffn_gate_up_exps` MUL_MAT_ID + 2 views + split GLU (Gemma-26B, Qwen3.5-35B); HMX only. **F2** post-norm residual (`16384`): RMS_NORM_MUL + ADD → `rms_norm(x)*w + r` (Gemma post-attn / post-ffw norm); residual DMA'd with x, row-block path only. **F3** Qwen3.5 conv block (CONCAT/CPY around SSM_CONV + TOKEN/halo axis): planned. Pre-norm ADD→RMS_NORM dropped: residual ADDs are already in MUL_MAT_ADD | no | `GGML_HEXAGON_OPFUSION`: 8191 = old fusions only, 16383 = +F1, 1 = all | GLU ops 7–11% of 4c graph; post-norm adds on Gemma | **PROTOTYPE**: F1 `63c13c211`, F2 `542f3d387` (not compiled) — needs build + test-ops + A/B |
+| M5 | **MoE**: token-count-balanced experts (LPT), cost = W + tiles, big experts split over all NSPs | **probably** | `GGML_HEXAGON_MMID_SPLIT` 0/1/3 | — | **DEFERRED.** v2 run `20261025-134128` pp1024 4c (0/1/3): Qwen3.5-35B 1053/1068/1043, Gemma-26B 1437.6/1450/1441.6 → all ±1.5%, noise. Loss is summed-work inflation (memory stalls), not imbalance. Qwen 4c cookie GARBAGE also with mode 0 → pre-existing |
 | M6 | Barrier elision + REPL for tiny ops, on the post-fusion graph | no (sync only) | `GGML_HEXAGON_MDEV_SYNC` | ≤ 2–3% | later |
 | M7 | Automatic tuning of whatever knobs remain scenario-dependent | picks axes | `auto` | — | last |
 
@@ -120,6 +118,17 @@ ADB_SERIAL=<serial> CORES=4 UBATCH=1024 PP_TOKENS=2048 DEPTHS=0   AB_VAR=GGML_HE
 ```
 
 **M1 close criteria:** T1 shows no per-case failure with `=1`/`=2` that passes with `=0`. In T2/T4, `=2` 4c PP is ≥ `=0` in every row, TG is no worse, and IQ / needle / cookie are unchanged. In T3, `=2` is ≥ `=1` at ub1024 and in TG, and ≥ `=0` at ub2048. Then flip the default to 2, write the PR, and close.
+
+**Fusion ticket F** (ebateni `ebateni/fusions`; first run builds):
+
+```bash
+# F-T1  correctness: new fusions off vs on (MUL_MAT_VEC_FUSION covers dense/MoE NX + GLU, MMID_GATE_UP_GLU the merged gate_up, RMS_NORM_MUL_ADD F2)
+ADB_SERIAL=<serial> CORES=1,4 AB_VAR=GGML_HEXAGON_OPFUSION AB=8191,1   ./logs/llama.cpp-build-and-test.sh --test-ops MUL_MAT_VEC_FUSION,MMID_GATE_UP_GLU,RMS_NORM_MUL_ADD --push-results
+
+# F-T2  perf + quality: old fusions / +F1 / all
+ADB_SERIAL=<serial> CORES=1,4 UBATCH=1024 PP_TOKENS=2048 DEPTHS=0   AB_VAR=GGML_HEXAGON_OPFUSION AB=8191,16383,1   MODELS="gemma-4-E4B_q4_0-it:4 llama-3.2-3b-instruct-q4_0:4 Qwen3.5-4B-Q4:4 gemma-4-26B_q4_0-it:4 Qwen3.5-35B-A3B-UD-Q4_K_M:4"   ./logs/llama.cpp-build-and-test.sh --no-build --split row --push-results
+```
+
 
 **Tracked separately:**
 
@@ -263,3 +272,13 @@ Gemma-4-12B is still GARBAGE (IQ 2/10) at 1c and 4c, independent of the knob.
 | owner `0694d6ae3` (ebateni `ebateni/moe-split`) | **M5 v1**: `GGML_HEXAGON_MMID_SPLIT` 0 = round-robin, 1 = LPT on 32-row tiles, 2 = token split. Run `20261023-183334` 4c pp1024: Gemma-4-26B +5.0%, Qwen3.5-35B-A3B +1.3%; 1c deltas -1.4/-2.2% are pure noise (same code path at 1c). Review: add per-expert weight cost to LPT, O(n) bucket sort, check bit-exactness (Qwen 4c ab1 iq/cookie changed); run the M5-0 profile before more tuning |
 | owner run `20261025-121720` (profile 3) | Gemma-26B: MoE matmuls 57% of 1c, 147 of 268 ms lost at 4c. LPT cuts MMID imbalance 42 -> 22 ms, but summed per-NSP work inflates 1.1-2.5x vs 1c (bimodal by layer, same layers every run, clock fixed 1709 MHz -> memory stalls); LPT raised down's summed exec 117 -> 133 ms. Qwen 4c PP killed under profile 3 (HTP_OP_MEMORY_OVERCLAIM) -> use profile 1 |
 | ebateni `48a0ed3f4` | **M5 v2**: `MMID_SPLIT=3` cost = W + tiles (`GGML_HEXAGON_MMID_W`, default 2), counting sort, experts above total/N split over all NSPs by tiles; TEMP per-op dbg counters [whole experts, tiles, max tiles, active] in the profile line. Decision rule: if 3 does not clearly beat 0 on both MoE models, M5 is dropped |
+
+
+### 2026-10-25
+
+| Commit | What |
+|---|---|
+| owner run `20261025-134128` | M5 v2 0/1/3: within noise on both MoE models → **M5 deferred** |
+| ebateni `63c13c211` (`ebateni/fusions`) | **F1** GLU epilogue, `OPFUSION 8192`; TEMP test cases (MUL_MAT_VEC_FUSION rows 2048/2080, MoE NX, MMID_GATE_UP_GLU) |
+| ebateni `542f3d387` | **F2** post-norm residual into RMS_NORM_MUL, `OPFUSION 16384`; TEMP RMS_NORM_MUL_ADD 2560x1024 / 2816x512 |
+| (this commit) | Plan: M2/M3/M4 → fusion ticket F; M5 deferred; F test commands |
