@@ -7926,6 +7926,54 @@ struct test_mul_mat_vec_fusion : public test_case {
     }
 };
 
+// TEMP (hexagon fusions): merged gate_up MUL_MAT_ID + GLU on its two halves
+struct test_mmid_gate_up_glu : public test_case {
+    const ggml_type type;
+    const ggml_glu_op glu_op;
+    const int64_t m;
+    const int64_t n;
+    const int64_t k;
+    const int n_mats;
+    const int n_used;
+
+    test_mmid_gate_up_glu(ggml_type type, ggml_glu_op op, int64_t m, int64_t n, int64_t k, int n_mats = 16, int n_used = 8)
+        : type(type), glu_op(op), m(m), n(n), k(k), n_mats(n_mats), n_used(n_used) {}
+
+    std::string vars() override {
+        return VARS_TO_STR7(type, glu_op, m, n, k, n_mats, n_used);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MMID_GATE_UP_GLU";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * gate_up = ggml_new_tensor_3d(ctx, type, k, 2 * n, n_mats);
+        ggml_tensor * ids     = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_mats, m);
+        ids = ggml_view_2d(ctx, ids, n_used, m, ids->nb[1], 0);
+        ggml_tensor * cur     = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, 1, m);
+
+        ggml_tensor * out = ggml_mul_mat_id(ctx, gate_up, cur, ids); // [2n, n_used, m]
+        ggml_tensor * g   = ggml_view_3d(ctx, out, n, out->ne[1], out->ne[2], out->nb[1], out->nb[2], 0);
+        ggml_tensor * u   = ggml_view_3d(ctx, out, n, out->ne[1], out->ne[2], out->nb[1], out->nb[2], n * out->nb[0]);
+        out = ggml_glu_split(ctx, g, u, glu_op);
+
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        init_mul_mat_id_tensors(ctx, n_mats);
+    }
+
+    double max_nmse_err() override {
+        return 5e-3;
+    }
+};
+
 // GGML_OP_SUM
 struct test_sum : public test_case {
     const ggml_type type;
@@ -12285,6 +12333,22 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (int64_t rows : {6271, 6272, 6273}) {
         test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 2, rows, 256,
             false, 16, 8, false, false, true, false, { 1, 1 }));
+    }
+
+    // TEMP (hexagon fusions): prefill-sized gate/up + GLU, dense and MoE
+    for (ggml_type type : {GGML_TYPE_Q4_0, GGML_TYPE_Q8_0}) {
+        for (ggml_glu_op glu_op : {GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU}) {
+            for (int64_t m_batch : {256, 1024}) {
+                for (int64_t rows : {2048, 2080}) {
+                    test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, m_batch, rows, 1024,
+                        false, 16, 8, false, false, true, false, { 1, 1 }));
+                }
+                test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, m_batch, 512, 1024,
+                    true, 16, 8, false, false, true, false, { 1, 1 }));
+                test_cases.emplace_back(new test_mmid_gate_up_glu(type, glu_op, m_batch, 512, 1024));
+                test_cases.emplace_back(new test_mmid_gate_up_glu(type, glu_op, m_batch, 704, 1024, 128, 8));
+            }
+        }
     }
 
     for (auto gate : {GATING_FUNC_SOFTMAX, GATING_FUNC_SIGMOID, GATING_FUNC_SOFTMAX_WEIGHT, GATING_FUNC_SQRT_SOFTPLUS}) {
