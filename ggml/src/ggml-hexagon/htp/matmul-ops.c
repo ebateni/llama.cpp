@@ -3834,6 +3834,33 @@ int op_matmul(struct htp_ops_context * octx) {
     return op_matmul_impl(octx);
 }
 
+// LPT: heaviest expert (32-row tiles) to least-loaded core; same table on every core
+static void hmx_mmid_lpt_owner(const uint32_t * counts, uint32_t n_as, uint32_t n_dev, uint8_t * owner) {
+    uint16_t order[n_as];
+    uint32_t n = 0;
+    for (uint32_t a = 0; a < n_as; ++a) {
+        owner[a] = 0xff;
+        if (!counts[a]) continue;
+        uint32_t i = n++;
+        const uint32_t c = hex_align_up(counts[a], 32);
+        while (i > 0 && hex_align_up(counts[order[i - 1]], 32) < c) {
+            order[i] = order[i - 1];
+            --i;
+        }
+        order[i] = (uint16_t) a;
+    }
+    uint32_t load[n_dev];
+    for (uint32_t d = 0; d < n_dev; ++d) load[d] = 0;
+    for (uint32_t i = 0; i < n; ++i) {
+        uint32_t best = 0;
+        for (uint32_t d = 1; d < n_dev; ++d) {
+            if (load[d] < load[best]) best = d;
+        }
+        owner[order[i]] = (uint8_t) best;
+        load[best] += hex_align_up(counts[order[i]], 32);
+    }
+}
+
 static int hmx_mm_op_matmul_id(
     struct htp_ops_context * octx,
     struct htp_mm_context * mmctx
@@ -3855,7 +3882,11 @@ static int hmx_mm_op_matmul_id(
             if (matrix_row_counts[a] > 0) n_active++;
         }
     }
-    const bool expert_split = mdev_split && (n_active >= octx->ctx->mdev.count);
+    const bool expert_split = mdev_split && (n_active >= octx->ctx->mdev.count) && kparams->mmid_split != 2;
+    uint8_t owner[(expert_split && kparams->mmid_split == 1) ? n_as : 1];
+    if (expert_split && kparams->mmid_split == 1) {
+        hmx_mmid_lpt_owner(matrix_row_counts, n_as, octx->ctx->mdev.count, owner);
+    }
 
     uint32_t target_dev = 0;
     for (uint32_t cur_a = 0; cur_a < (uint32_t) n_as; ++cur_a) {
@@ -3865,7 +3896,7 @@ static int hmx_mm_op_matmul_id(
         const int m_padded = hex_align_up(cne1, 32);
         int m_start = 0, m_end = m_padded;
         if (expert_split) {
-            const bool my_expert = (target_dev == octx->ctx->mdev.idx);
+            const bool my_expert = (kparams->mmid_split == 1) ? (owner[cur_a] == octx->ctx->mdev.idx) : (target_dev == octx->ctx->mdev.idx);
             if (++target_dev == octx->ctx->mdev.count) {
                 target_dev = 0;
             }
@@ -4014,7 +4045,11 @@ static int hmx_mm_op_matmul_id_nx(
             if (matrix_row_counts[a] > 0) n_active++;
         }
     }
-    const bool expert_split = mdev_split && (n_active >= octx->ctx->mdev.count);
+    const bool expert_split = mdev_split && (n_active >= octx->ctx->mdev.count) && kparams->mmid_split != 2;
+    uint8_t owner[(expert_split && kparams->mmid_split == 1) ? n_as : 1];
+    if (expert_split && kparams->mmid_split == 1) {
+        hmx_mmid_lpt_owner(matrix_row_counts, n_as, octx->ctx->mdev.count, owner);
+    }
 
     uint32_t target_dev = 0;
     for (uint32_t cur_a = 0; cur_a < (uint32_t) n_as; ++cur_a) {
@@ -4024,7 +4059,7 @@ static int hmx_mm_op_matmul_id_nx(
         const int m_padded = hex_align_up(cne1, 32);
         int m_start = 0, m_end = m_padded;
         if (expert_split) {
-            const bool my_expert = (target_dev == octx->ctx->mdev.idx);
+            const bool my_expert = (kparams->mmid_split == 1) ? (owner[cur_a] == octx->ctx->mdev.idx) : (target_dev == octx->ctx->mdev.idx);
             if (++target_dev == octx->ctx->mdev.count) {
                 target_dev = 0;
             }

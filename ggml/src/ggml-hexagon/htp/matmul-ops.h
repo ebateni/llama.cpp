@@ -68,6 +68,7 @@ struct htp_mm_kernel_params {
     uint8_t  n_act_threads;      // Number of threads for activation preparation
     uint8_t  n_prefetch;         // Prefetch lookahead buffers/rows in VTCM
     uint8_t  n_weights;          // Number of weights for fused NX
+    uint8_t  mmid_split;         // MUL_MAT_ID multicore: 0 = round-robin experts, 1 = LPT experts, 2 = token split
 
     int32_t  m_chunk;            // Row chunk size (M chunk)
     int32_t  n_chunk;            // Col chunk size (N chunk)
