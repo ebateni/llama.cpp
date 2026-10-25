@@ -235,7 +235,7 @@ static inline bool swiglu_out_rows_ok(int64_t rows) {
 // prefetch, 2 = cross-weight prefetch only, 3 = half-width edges only. Scheduling only (bit-identical); htp/htp-ops.h.
 static uint32_t opt_mm_prologue_flags = 0;
 static uint32_t opt_ar_dma_clean_flags = 0;   // GGML_HEXAGON_AR_DMA_CLEAN=1: HTP_OPFLAGS_AR_DMA_CLEAN on ALLREDUCE ops of DMA_CLEAN graphs (DMA-only reader/writer)
-static uint32_t opt_mm_a8w8_ops = 0;   // GGML_HEXAGON_MM_A8W8 bitmask: 1 = SWIGLU gate/up, 2 = ffn_down (plain MUL_MAT, K >= 3072), 4 = ssm_out/attn_output (plain MUL_MAT, K < 3072), 8 = plain MUL_MAT_NX (qkv)
+static uint32_t opt_mm_a8w8_ops = 0;   // GGML_HEXAGON_MM_A8W8 bitmask; only bit 1 is implemented here: 1 = SWIGLU gate/up (u8 x s8 HMX jobs). Plain MUL_MAT / MUL_MAT_NX (bits 2/4/8) live in the standalone u8 x s8 PR
 static uint32_t opt_a8w8_pre = 0;      // GGML_HEXAGON_A8W8_PRE bitmask: pre-expanded int8 weight blob appended to the tiled Q4_0 weight (1 = ffn_gate/ffn_up, 2 = ffn_down, 4 = all other Q4_0 matmul weights except lm_head)
 static uint32_t opt_mm_a8w8_flags = 0; // GGML_HEXAGON_MM_A8W8=1: SWIGLU gate/up through u8 x int8 HMX jobs (htp/hmx-a8w8.h)
 static uint32_t opt_mm_c1small_flags = 0;     // GGML_HEXAGON_MM_C1SMALL=1: HTP_OPFLAGS_MM_C1SMALL on prefill MUL_MAT (not NX)
@@ -3683,17 +3683,6 @@ struct ggml_hexagon_opbatch {
                    (ar_clean ? opt_ar_dma_clean_flags : 0) |
                    ggml_hexagon_lane_flag(node.opcode);
         o.flags |= node.extra_flags;
-        if (node.opcode == HTP_OP_MUL_MAT && mm_prefill && node.src0() != nullptr && opt_mm_a8w8_ops != 0) {
-            // plain MUL_MAT (also the seed of a later MUL_MAT_NX fusion, which inherits these flags), selected by weight name:
-            //   2 = ffn_down, 4 = ssm_out / attn_output, 8 = everything else except the lm_head (qkv, attn_q/k/v, ...)
-            const char * wn = node.src0()->name;
-            uint32_t want = 8u;
-            if (strstr(wn, "ffn_down")) want = 2u;
-            else if (strstr(wn, "ssm_out") || strstr(wn, "attn_output")) want = 4u;
-            else if (strstr(wn, "output.weight")) want = 16u;      // lm_head (opt-in)
-            else if (strstr(wn, "token_embd")) want = 0u;
-            if ((opt_mm_a8w8_ops & want) != 0) { o.flags |= opt_mm_a8w8_flags; static const int dbg = getenv("GGML_HEXAGON_A8W8_DBG") ? atoi(getenv("GGML_HEXAGON_A8W8_DBG")) : 0; o.params[3] = dbg; static const float clip = getenv("GGML_HEXAGON_A8W8_CLIP") ? (float) atof(getenv("GGML_HEXAGON_A8W8_CLIP")) : 1.0f; memcpy(&o.params[2], &clip, sizeof(clip)); }
-        }
         if (opt_rope_fast && (node.opcode == HTP_OP_ROPE || node.opcode == HTP_OP_ROPE_NX)) {
             o.flags |= HTP_OPFLAGS_ROPE_FAST;
         }

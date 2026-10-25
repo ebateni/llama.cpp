@@ -2735,8 +2735,6 @@ typedef struct {
     uint32_t       n_dot_tiles;
 } hmx_matmul_job_t;
 
-static int g_a8w8_pe_op = 1;   // plain MUL_MAT consumes pre-expanded blobs (bit 29 of A8W8_DBG clears it)
-static dma_addr_t g_a8w8_pe_weight;   // plain MUL_MAT: address of the pre-expanded blob of src0 (0: none), set by hmx_mm_op_matmul
 static int g_a8w8_dbg;
 static inline float a8w8_clip_from_params(const struct htp_ops_context * octx) {
     float c; memcpy(&c, &octx->op_params[2], sizeof(c));
@@ -3612,10 +3610,8 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
             .wgt = { (__fp16 *) vtcm_scratch0, (__fp16 *) vtcm_scratch1 },
             .out = { vtcm_output, (__fp16 *) vtcm_scratch2 },
         };
-        const bool pe_ok = g_a8w8_pe_weight != 0 && g_a8w8_pe_op && (op_flags & HTP_OPFLAGS_MM_A8W8) != 0 && weight_type == HTP_TYPE_Q4_0 &&
-                           hmx_mm_a8w8_fits((uint32_t) k, (size_t) m_chunk_n_rows, (size_t) (n_chunk_n_cols / HTP_MM_HMX_TILE_N_COLS), true);
         const hmx_mm_pipe_w_t W = {
-            .pe = pe_ok,
+            .pe = false,
             .weight = weight, .weight_stride = (size_t) weight_stride, .n = (size_t) n, .dst = dst,
             .dst_stride = (size_t) dst_stride, .dst_cols = dst_cols, .src2 = vtcm_src2, .src2_stride = src2_stride,
         };
@@ -3642,21 +3638,6 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
             P.n_rows = (int) n_rows;
             P.out_f16 = (op_flags & HTP_OPFLAGS_MM_OUT_F16) != 0;
             P.mr     = mr;
-            P.a8w8   = (op_flags & HTP_OPFLAGS_MM_A8W8) != 0 && weight_type == HTP_TYPE_Q4_0 && !is_hmx_int && n_rows >= 128 &&
-                       hmx_mm_a8w8_fits((uint32_t) k, (size_t) m_chunk_n_rows, (size_t) (n_chunk_n_cols / HTP_MM_HMX_TILE_N_COLS), pe_ok);
-            if (P.a8w8) {
-                if (act_tiled) {
-                    const size_t n_rows_padded = hex_align_up(n_rows, HTP_MM_HMX_TILE_N_ROWS);
-                    const size_t tile_off      = (mr / HTP_MM_HMX_TILE_N_ROWS) * n_k_tiles * HTP_MM_HMX_TILE_SIZE;
-                    hmx_mm_pipe_w_t Wb = W; if (Wb.pe) { Wb.weight = g_a8w8_pe_weight; }
-                    hmx_mm_pipe_run_a8w8(&P, &Wb, 1, act_dma_addr + tile_off, (n_rows_padded / HTP_MM_HMX_TILE_N_ROWS) * n_k_tiles * HTP_MM_HMX_TILE_SIZE, false);
-                } else {
-                    transfer_activation_chunk_threaded(&act_params);
-                    hmx_mm_pipe_w_t Wb = W; if (Wb.pe) { Wb.weight = g_a8w8_pe_weight; }
-                    hmx_mm_pipe_run_a8w8(&P, &Wb, 1, 0, 0, false);
-                }
-                continue;
-            }
             int ov_rows[HMX_ACT_OVERLAP_MAX_GROUPS];
             const int ov_n = (act_tiled && (op_flags & HTP_OPFLAGS_MM_ACT_OVERLAP) != 0) ? hmx_act_overlap_plan(n_rows, ov_rows) : 0;
             if (ov_n > 1) {
@@ -3929,8 +3910,6 @@ static int hmx_mm_nx_2d_f32(struct htp_ops_context * octx, const struct htp_mm_k
 
     const bool is_quant       = (weight_type != HTP_TYPE_F16 && weight_type != HTP_TYPE_F32);
     const size_t vtcm_budget  = ctx->vtcm_size;
-    g_a8w8_dbg = (octx->flags & HTP_OPFLAGS_MM_A8W8) != 0 ? octx->op_params[3] : 0;
-    g_a8w8_clip = a8w8_clip_from_params(octx);
 
     const int m_chunk_n_rows  = kparams->m_chunk;
     const int n_chunk_n_cols  = kparams->n_chunk;
@@ -4027,7 +4006,7 @@ static int hmx_mm_nx_2d_f32(struct htp_ops_context * octx, const struct htp_mm_k
             const size_t n = src_w->ne[1];
             if (n == 0) continue;
             W[n_w++] = (hmx_mm_pipe_w_t) {
-                .pe = (src_w->flags & HTP_TENSOR_A8W8) != 0 && (octx->flags & HTP_OPFLAGS_MM_A8W8) != 0,
+                .pe = false,
                 .weight = src_w->data, .weight_stride = src_w->nb[1], .n = n,
                 .dst = (float *) dst->data, .dst_stride = dst->nb[1] / sizeof(float), .dst_cols = (int) dst->ne[0],
                 .src2 = (has_bias && p + 1 == n_weights) ? vtcm_src2 : NULL, .src2_stride = 0,
@@ -4054,36 +4033,6 @@ static int hmx_mm_nx_2d_f32(struct htp_ops_context * octx, const struct htp_mm_k
             };
             P.n_rows = (int) n_rows;
             P.mr     = mr;
-            bool any_pe = false, all_pe = true;
-            for (int w = 0; w < n_w; ++w) { any_pe = any_pe || W[w].pe; all_pe = all_pe && W[w].pe; }
-            P.a8w8   = (octx->flags & HTP_OPFLAGS_MM_A8W8) != 0 && weight_type == HTP_TYPE_Q4_0 && n_rows >= 128 && (all_pe || !any_pe) &&
-                       hmx_mm_a8w8_fits((uint32_t) k, (size_t) m_chunk_n_rows, (size_t) (n_chunk_n_cols / HTP_MM_HMX_TILE_N_COLS), all_pe);
-            if (P.a8w8) {
-                // NX weights run as one chunk sequence (cross-weight prefetch) when CROSS_WEIGHT is set, else one weight at a time
-                dma_addr_t asrc = 0; size_t abytes = 0;
-                if (act_tiled) {
-                    const size_t n_rows_padded = hex_align_up(n_rows, HTP_MM_HMX_TILE_N_ROWS);
-                    asrc   = act_dma_addr + (mr / HTP_MM_HMX_TILE_N_ROWS) * (k / HTP_MM_HMX_TILE_N_COLS) * HTP_MM_HMX_TILE_SIZE;
-                    abytes = (n_rows_padded / HTP_MM_HMX_TILE_N_ROWS) * (k / HTP_MM_HMX_TILE_N_COLS) * HTP_MM_HMX_TILE_SIZE;
-                } else {
-                    transfer_activation_chunk_threaded(&act_params);
-                }
-                // pre-expanded weights live behind the tiled Q4_0 data of their tensor: point the descriptors at the blob for this path only
-                hmx_mm_pipe_w_t Wb[HMX_MM_PIPE_MAX_W];
-                for (int w = 0; w < n_w; w++) {
-                    Wb[w] = W[w];
-                    if (Wb[w].pe) { Wb[w].weight += hex_align_up((size_t) octx->src[w]->nb[3] * octx->src[w]->ne[3], 128); }
-                }
-                if (cross) {
-                    hmx_mm_pipe_run_a8w8(&P, Wb, n_w, asrc, abytes, false);
-                } else {
-                    hmx_mm_pipe_run_a8w8(&P, &Wb[0], 1, asrc, abytes, false);
-                    for (int w = 1; w < n_w; w++) {
-                        hmx_mm_pipe_run_a8w8(&P, &Wb[w], 1, 0, 0, true);
-                    }
-                }
-                continue;
-            }
             int ov_rows[HMX_ACT_OVERLAP_MAX_GROUPS];
             const int ov_n = (act_tiled && (octx->flags & HTP_OPFLAGS_MM_ACT_OVERLAP) != 0) ? hmx_act_overlap_plan(n_rows, ov_rows) : 0;
             if (ov_n > 1) {
@@ -5183,10 +5132,6 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
     const dma_addr_t act_addr = src1->data + m_start * act_stride * sizeof(float);
 
     int ret = -1;
-    g_a8w8_dbg = (octx->flags & HTP_OPFLAGS_MM_A8W8) != 0 ? octx->op_params[3] : 0;
-    g_a8w8_clip = a8w8_clip_from_params(octx);
-    g_a8w8_pe_weight = ((octx->flags & HTP_OPFLAGS_MM_A8W8) != 0 && (src0->flags & HTP_TENSOR_A8W8) != 0) ?
-                       src0->data + hex_align_up((size_t) src0->nb[3] * src0->ne[3], 128) : 0;
     const int n_threads = kparams->n_threads;
     if (kparams->kernel_type == HTP_MM_KERNEL_HMX_F16_BATCHED) {
         hmx_mm_f16_f32_batched_params_t batch_params = {
