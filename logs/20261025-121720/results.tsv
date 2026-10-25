@@ -1,0 +1,9 @@
+model	cores	split	ab	ubatch	pp_tokens	pp_ts	tg_ts	iq	needle	cookie_ok	depth
+Qwen3.5-35B-A3B-UD-Q4_K_M	1	single	0	1024	1024	153.30	16.69	-	-	-	0
+Qwen3.5-35B-A3B-UD-Q4_K_M	1	single	1	1024	1024	162.53	16.41	-	-	-	0
+Qwen3.5-35B-A3B-UD-Q4_K_M	4	row	0	512*	1024	NA	28.95	-	-	-	0
+Qwen3.5-35B-A3B-UD-Q4_K_M	4	row	1	512*	1024	NA	28.19	-	-	-	0
+gemma-4-26B_q4_0-it	1	single	0	1024	1024	235.65	17.10	-	-	-	0
+gemma-4-26B_q4_0-it	1	single	1	1024	1024	248.01	17.10	-	-	-	0
+gemma-4-26B_q4_0-it	4	row	0	1024	1024	280.18	26.95	-	-	-	0
+gemma-4-26B_q4_0-it	4	row	1	1024	1024	297.98	27.04	-	-	-	0
