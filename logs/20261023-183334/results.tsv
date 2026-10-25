@@ -1,0 +1,9 @@
+model	cores	split	ab	ubatch	pp_tokens	pp_ts	tg_ts	iq	needle	cookie_ok	depth
+Qwen3.5-35B-A3B-UD-Q4_K_M	1	single	0	1024	1024	458.54	16.54	6/10	PASS	OK	0
+Qwen3.5-35B-A3B-UD-Q4_K_M	1	single	1	1024	1024	448.52	16.54	6/10	PASS	OK	0
+Qwen3.5-35B-A3B-UD-Q4_K_M	4	row	0	1024	1024	1146.22	27.96	7/10	PASS	OK	0
+Qwen3.5-35B-A3B-UD-Q4_K_M	4	row	1	1024	1024	1161.48	27.97	10/10	PASS	GARBAGE(<think>)	0
+gemma-4-26B_q4_0-it	1	single	0	1024	1024	635.08	16.95	10/10	PASS	OK	0
+gemma-4-26B_q4_0-it	1	single	1	1024	1024	626.32	16.96	10/10	PASS	OK	0
+gemma-4-26B_q4_0-it	4	row	0	1024	1024	1521.91	26.53	9/10	PASS	OK	0
+gemma-4-26B_q4_0-it	4	row	1	1024	1024	1598.10	26.63	9/10	PASS	OK	0
