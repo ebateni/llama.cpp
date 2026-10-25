@@ -1,0 +1,31 @@
+HARNESS_ENV testops cores=1 ab=8191 op=MMID_GATE_UP_GLU GGML_HEXAGON_DEVICES=HTP0
+ggml-hex: Loading driver libcdsprpc.so
+ggml-hex: FASTRPC_GET_DOMAINS[0]: type 1 id 16 name 'fastrpc_0010' status 1 instance-id 0
+ggml-hex: using CDSP domain: instance-id 0 id 16 name 'fastrpc_0010'
+ggml-hex: FASTRPC_GET_DOMAINS[1]: type 1 id 17 name 'fastrpc_0011' status 1 instance-id 1
+ggml-hex: using CDSP domain: instance-id 1 id 17 name 'fastrpc_0011'
+ggml-hex: FASTRPC_GET_DOMAINS[2]: type 1 id 18 name 'fastrpc_0012' status 1 instance-id 2
+ggml-hex: using CDSP domain: instance-id 2 id 18 name 'fastrpc_0012'
+ggml-hex: FASTRPC_GET_DOMAINS[3]: type 1 id 19 name 'fastrpc_0013' status 1 instance-id 3
+ggml-hex: using CDSP domain: instance-id 3 id 19 name 'fastrpc_0013'
+ggml-hex: Hexagon backend (experimental) : allocating new registry : ndev 1
+ggml-hex: Hexagon Arch version v81, DMA64 enabled
+ggml-hex: device 0: HTP0 (phys=0, virt=0, domain=fastrpc_0010:16)
+ggml-hex: HTP0 allocating new session : domain 16 phys-idx 0 virt-idx 0
+ggml-hex: HTP0 hwinfo: threads 8, hvx 8, hmx 1, vtcm 16 MB
+ggml-hex: HTP0 new session : session-id 0 domain-id 16 uri file:///libggml-htp-v81.so?htp_iface_skel_handle_invoke&_modver=1.0&_dom=fastrpc_0010&_session=0 handle 0x10002c0760
+ggml-hex: HTP0 op batching: n-bufs 64 n-tensors 8206 n-ops 2048 vmem 3347161088
+ggml-hex: HTP0 power mode: burst
+Testing 2 devices
+
+Backend 1/2: HTP0
+  Device description: Hexagon
+  Device memory: 0 MB (0 MB free)
+
+  0/0 tests passed
+  Backend HTP0: [1;32mOK[0m
+Backend 2/2: CPU
+  Skipping
+2/2 backends passed
+[1;32mOK[0m
+TESTOPS_RC=0

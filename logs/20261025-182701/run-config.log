@@ -1,0 +1,80 @@
+===== RUN IDENTITY =====
+timestamp=2026-10-25T18:28:34,694219801-04:00
+host=ebateni-linux
+user=ebateni
+working_directory=/local/mnt2/workspace2/llama.cpp.ebateni/moe-split
+
+===== EXACT SCRIPT INVOCATION =====
+command=./logs/llama.cpp-build-and-test.sh --test-ops MUL_MAT_VEC_FUSION\,MMID_GATE_UP_GLU\,RMS_NORM_MUL_ADD --push-results 
+
+===== GIT =====
+branch=origin/ebateni/fusions
+commit=1ef46d769d5f1f7e1797d82040ff784f2482716f
+commit_short=1ef46d769
+describe=v0.7.0-182-g1ef46d769
+
+===== RESOLVED MATRIX CONFIGURATION =====
+ADB_SERIAL=1b531bdd
+ADB_SERVER_SOCKET=''
+PLATFORM=linux
+PDU_OFFLINE_WAIT=240
+CORES=1\,4
+SPLITS=tensor
+UBATCH=1024
+BATCH=''
+MODELS=llama-3.2-3b-instruct-q4_0:4\ Qwen3.5-4B-Q4:4\ gemma-4-E4B_q4_0-it:2
+REPS=3
+HEX_PROFILE=0
+PP_DEPTH=0
+TG_DEPTH=1024
+PP_TOKENS=1024
+CTX=4096
+AB_VAR=GGML_HEXAGON_OPFUSION
+AB=8191\,1
+DO_BUILD=1
+DO_DEPLOY=1
+REBOOT_BEFORE_TEST=0
+DO_CLEAN=0
+DO_BENCH=1
+DO_IQ=1
+DO_COOKIE=1
+DO_NEEDLE=1
+DO_PP=1
+DO_TG=1
+COLLECT_MEMORY=0
+MEMORY_INTERVAL=1
+MEMORY_PROCESS_MAP=1
+PKG_HOST=/local/mnt2/workspace2/llama.cpp.ebateni/moe-split/pkg-snapdragon
+PKG_DEV=/data/local/tmp/pkg-bat
+MODELS_DEV=/data/local/tmp/models
+PROMPT_DEV=/data/local/tmp/prompt_1k.txt
+OUTDIR=/local/mnt2/workspace2/llama.cpp.ebateni/moe-split/logs/20261025-182701
+
+===== EFFECTIVE TEST ENVIRONMENT =====
+AB=8191,1
+AB_VAR=GGML_HEXAGON_OPFUSION
+ADB_SERIAL=1b531bdd
+CORES=1,4
+
+===== ADB COMMAND =====
+ADB=adb\ -s\ 1b531bdd 
+
+===== DEVICE IDENTITY =====
+hostname=gen5
+serial=
+kernel=Linux gen5 6.6.136-rt74-debug #1 SMP PREEMPT_RT Thu Aug 13 10:34:39 UTC 2026 aarch64 GNU/Linux
+uptime=251991.90 4398853.22
+
+===== INSTALLED DEVICE DRIVER ENVIRONMENT =====
+44:LD_LIBRARY_PATH=$LIB
+51:GGML_HEXAGON_ARCH=81
+52:GGML_HEXAGON_USE_HMX=1
+53:GGML_HEXAGON_MBUF=2048
+54:GGML_HEXAGON_NHMX=1
+55:GGML_META_COMM_ISOLATION=1
+56:GGML_META_COMM_SEPARATE=1
+57:LLAMA_KV_ALLOC_AFFINITY=1
+58:CDSP_LIBRARY_PATH="$LIB${CDSP_PATH_SEP}/vendor/dsp/cdsp0"
+59:CDSP1_LIBRARY_PATH="$LIB${CDSP_PATH_SEP}/vendor/dsp/cdsp1"
+60:CDSP2_LIBRARY_PATH="$LIB${CDSP_PATH_SEP}/vendor/dsp/cdsp2"
+61:CDSP3_LIBRARY_PATH="$LIB${CDSP_PATH_SEP}/vendor/dsp/cdsp3"
