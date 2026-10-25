@@ -1323,6 +1323,7 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
 
         profile_start(ctx->profiler, &prof);
 
+        memset(ctx->dbg, 0, sizeof(ctx->dbg));
         op_status = proc_op_req(octx, bufs, n_bufs, tens, i, &ops[i]);
 
         profile_stop(ctx->profiler, &prof);
@@ -1336,6 +1337,11 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
             pds[i].cycles_stop = prof.cycles_stop;
             for (int j = 0; j < HEX_NUM_PMU_COUNTERS; j++) {
                 pds[i].pmu[j] = prof.pmu_counters[j];
+            }
+            if (ctx->profiler != HTP_PROF_PMU) {
+                for (int j = 0; j < HTP_PROF_PMU_NCNT; j++) {
+                    pds[i].pmu[j] = j < 4 ? ctx->dbg[j] : 0;
+                }
             }
         }
     }

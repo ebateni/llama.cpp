@@ -101,6 +101,7 @@ struct htp_context {
     bool                   hmx_enabled;
     bool                   etm;
     uint32_t               profiler;
+    uint32_t               dbg[4]; // TEMP: per-op debug counters, reported in the profile pmu slots
 
     uint8_t *              vtcm_base;
     size_t                 vtcm_size;

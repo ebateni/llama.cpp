@@ -3861,6 +3861,109 @@ static void hmx_mmid_lpt_owner(const uint32_t * counts, uint32_t n_as, uint32_t 
     }
 }
 
+#define MMID_OWNER_NONE 0xff
+#define MMID_OWNER_ALL  0xfe
+
+// cost = w + tiles per expert, heaviest first (counting sort); an expert above total/N is
+// split over all cores by tiles, the rest go to the least-loaded core
+static void hmx_mmid_assign(const uint32_t * counts, uint32_t n_as, uint32_t n_dev, uint32_t w, uint8_t * owner) {
+    enum { MAX_T = 256 };
+    uint32_t hist[MAX_T + 1];
+    memset(hist, 0, sizeof(hist));
+    uint32_t total = 0, n = 0;
+    for (uint32_t a = 0; a < n_as; ++a) {
+        owner[a] = MMID_OWNER_NONE;
+        if (!counts[a]) continue;
+        const uint32_t t = MIN((counts[a] + 31) / 32, MAX_T);
+        hist[t]++;
+        total += w + t;
+        n++;
+    }
+    uint32_t pos[MAX_T + 1];
+    for (uint32_t t = MAX_T, s = 0; t >= 1; --t) {
+        pos[t] = s;
+        s += hist[t];
+    }
+    uint16_t order[n ? n : 1];
+    for (uint32_t a = 0; a < n_as; ++a) {
+        if (counts[a]) order[pos[MIN((counts[a] + 31) / 32, MAX_T)]++] = (uint16_t) a;
+    }
+    const uint32_t cap = total / n_dev;
+    uint32_t load[n_dev];
+    for (uint32_t d = 0; d < n_dev; ++d) load[d] = 0;
+    for (uint32_t i = 0; i < n; ++i) {
+        const uint32_t a = order[i];
+        const uint32_t t = (counts[a] + 31) / 32;
+        if (t >= n_dev && w + t > cap) {
+            owner[a] = MMID_OWNER_ALL;
+            for (uint32_t d = 0; d < n_dev; ++d) load[d] += w + (t + n_dev - 1) / n_dev;
+            continue;
+        }
+        uint32_t best = 0;
+        for (uint32_t d = 1; d < n_dev; ++d) {
+            if (load[d] < load[best]) best = d;
+        }
+        owner[a] = (uint8_t) best;
+        load[best] += w + t;
+    }
+}
+
+// owner[] per expert for this op; false = no expert split
+static bool hmx_mmid_plan(struct htp_ops_context * octx, const struct htp_mm_kernel_params * kparams,
+                          const uint32_t * counts, uint32_t n_as, bool mdev_split, uint8_t * owner) {
+    struct htp_context * ctx = octx->ctx;
+    uint32_t n_active = 0, max_t = 0;
+    for (uint32_t a = 0; a < n_as; ++a) {
+        if (!counts[a]) continue;
+        n_active++;
+        max_t = MAX(max_t, (counts[a] + 31) / 32);
+    }
+    ctx->dbg[2] = max_t;
+    ctx->dbg[3] = n_active;
+
+    if (!mdev_split || n_active < ctx->mdev.count || kparams->mmid_split == 2) {
+        return false;
+    }
+    if (kparams->mmid_split == 1) {
+        hmx_mmid_lpt_owner(counts, n_as, ctx->mdev.count, owner);
+    } else if (kparams->mmid_split == 3) {
+        hmx_mmid_assign(counts, n_as, ctx->mdev.count, kparams->mmid_w, owner);
+    } else {
+        for (uint32_t a = 0, d = 0; a < n_as; ++a) {
+            owner[a] = MMID_OWNER_NONE;
+            if (!counts[a]) continue;
+            owner[a] = (uint8_t) d;
+            if (++d == ctx->mdev.count) d = 0;
+        }
+    }
+    return true;
+}
+
+// rows [m_start, m_end) of expert a for this core; false = nothing to do
+static bool hmx_mmid_range(struct htp_ops_context * octx, const uint8_t * owner, bool expert_split, bool mdev_split,
+                           uint32_t a, uint32_t cne1, int * m_start, int * m_end) {
+    struct htp_context * ctx = octx->ctx;
+    const int m_padded = hex_align_up(cne1, 32);
+    *m_start = 0;
+    *m_end   = m_padded;
+    if (expert_split && owner[a] != MMID_OWNER_ALL) {
+        if (owner[a] != ctx->mdev.idx) return false;
+    } else if (expert_split) {
+        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition((uint32_t) m_padded, 32, ctx->mdev.idx, ctx->mdev.count, &ctx->mdev.count_div);
+        *m_start = (int) range.start;
+        *m_end   = (int) (range.start + range.count);
+    } else if (mdev_split) {
+        const bool can_split = cne1 >= ctx->mdev.count;
+        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition((uint32_t) m_padded, can_split ? 1 : 0, ctx->mdev.idx, ctx->mdev.count, &ctx->mdev.count_div);
+        *m_start = (int) range.start;
+        *m_end   = (int) (range.start + range.count);
+    }
+    if (*m_start >= *m_end) return false;
+    ctx->dbg[0] += (*m_end - *m_start) == m_padded;
+    ctx->dbg[1] += (*m_end - *m_start + 31) / 32;
+    return true;
+}
+
 static int hmx_mm_op_matmul_id(
     struct htp_ops_context * octx,
     struct htp_mm_context * mmctx
@@ -3876,38 +3979,15 @@ static int hmx_mm_op_matmul_id(
     if (octx->ctx->mdev.count > 1 && !mdev_split && octx->ctx->mdev.idx > 0) {
         return HTP_STATUS_OK;
     }
-    uint32_t n_active = 0;
-    if (mdev_split) {
-        for (uint32_t a = 0; a < (uint32_t) n_as; ++a) {
-            if (matrix_row_counts[a] > 0) n_active++;
-        }
-    }
-    const bool expert_split = mdev_split && (n_active >= octx->ctx->mdev.count) && kparams->mmid_split != 2;
-    uint8_t owner[(expert_split && kparams->mmid_split == 1) ? n_as : 1];
-    if (expert_split && kparams->mmid_split == 1) {
-        hmx_mmid_lpt_owner(matrix_row_counts, n_as, octx->ctx->mdev.count, owner);
-    }
+    uint8_t owner[n_as];
+    const bool expert_split = hmx_mmid_plan(octx, kparams, matrix_row_counts, n_as, mdev_split, owner);
 
-    uint32_t target_dev = 0;
     for (uint32_t cur_a = 0; cur_a < (uint32_t) n_as; ++cur_a) {
         const int32_t cne1 = matrix_row_counts[cur_a];
         if (cne1 == 0) continue;
 
-        const int m_padded = hex_align_up(cne1, 32);
-        int m_start = 0, m_end = m_padded;
-        if (expert_split) {
-            const bool my_expert = (kparams->mmid_split == 1) ? (owner[cur_a] == octx->ctx->mdev.idx) : (target_dev == octx->ctx->mdev.idx);
-            if (++target_dev == octx->ctx->mdev.count) {
-                target_dev = 0;
-            }
-            if (!my_expert) continue;
-        } else if (mdev_split) {
-            const bool can_split = (uint32_t) cne1 >= octx->ctx->mdev.count;
-            const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition((uint32_t) m_padded, can_split ? 1 : 0, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
-            m_start = (int) range.start;
-            m_end   = (int) (range.start + range.count);
-        }
-        if (m_start >= m_end) continue;
+        int m_start, m_end;
+        if (!hmx_mmid_range(octx, owner, expert_split, mdev_split, cur_a, cne1, &m_start, &m_end)) continue;
 
         int ret = hmx_mm_id_2d_f32(octx->ctx, octx->ctx->dma[0], (float*) dst->data, (float*) act->data,
                                    src0->data + cur_a * nb02,
@@ -4039,38 +4119,15 @@ static int hmx_mm_op_matmul_id_nx(
     if (octx->ctx->mdev.count > 1 && !mdev_split && octx->ctx->mdev.idx > 0) {
         return HTP_STATUS_OK;
     }
-    uint32_t n_active = 0;
-    if (mdev_split) {
-        for (uint32_t a = 0; a < (uint32_t) n_as; ++a) {
-            if (matrix_row_counts[a] > 0) n_active++;
-        }
-    }
-    const bool expert_split = mdev_split && (n_active >= octx->ctx->mdev.count) && kparams->mmid_split != 2;
-    uint8_t owner[(expert_split && kparams->mmid_split == 1) ? n_as : 1];
-    if (expert_split && kparams->mmid_split == 1) {
-        hmx_mmid_lpt_owner(matrix_row_counts, n_as, octx->ctx->mdev.count, owner);
-    }
+    uint8_t owner[n_as];
+    const bool expert_split = hmx_mmid_plan(octx, kparams, matrix_row_counts, n_as, mdev_split, owner);
 
-    uint32_t target_dev = 0;
     for (uint32_t cur_a = 0; cur_a < (uint32_t) n_as; ++cur_a) {
         const int32_t cne1 = matrix_row_counts[cur_a];
         if (cne1 == 0) continue;
 
-        const int m_padded = hex_align_up(cne1, 32);
-        int m_start = 0, m_end = m_padded;
-        if (expert_split) {
-            const bool my_expert = (kparams->mmid_split == 1) ? (owner[cur_a] == octx->ctx->mdev.idx) : (target_dev == octx->ctx->mdev.idx);
-            if (++target_dev == octx->ctx->mdev.count) {
-                target_dev = 0;
-            }
-            if (!my_expert) continue;
-        } else if (mdev_split) {
-            const bool can_split = (uint32_t) cne1 >= octx->ctx->mdev.count;
-            const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition((uint32_t) m_padded, can_split ? 1 : 0, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
-            m_start = (int) range.start;
-            m_end   = (int) (range.start + range.count);
-        }
-        if (m_start >= m_end) continue;
+        int m_start, m_end;
+        if (!hmx_mmid_range(octx, owner, expert_split, mdev_split, cur_a, cne1, &m_start, &m_end)) continue;
 
         for (uint32_t p = 0; p < n_weights; ++p) {
             const struct htp_tensor * restrict src_w = octx->src[p];

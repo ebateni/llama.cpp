@@ -869,6 +869,7 @@ static bool htp_kparams_solve_matmul_impl(
 ) {
     memset(kparams, 0, sizeof(*kparams));
     kparams->mmid_split = (uint8_t) opt_mmid_split;
+    kparams->mmid_w     = (uint8_t) opt_mmid_w;
 
     const int ne00 = src0->ne[0];
     const int ne01 = src0->ne[1];
@@ -1090,6 +1091,7 @@ bool htp_kparams_solve_mmnx(
     memset(kparams, 0, sizeof(*kparams));
     kparams->n_threads = n_threads;
     kparams->mmid_split = (uint8_t) opt_mmid_split;
+    kparams->mmid_w     = (uint8_t) opt_mmid_w;
 
     const int ne00 = src0->ne[0];
     const int ne01 = src0->ne[1];
