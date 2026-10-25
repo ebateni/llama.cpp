@@ -260,3 +260,4 @@ Gemma-4-12B is still GARBAGE (IQ 2/10) at 1c and 4c, independent of the knob.
 | owner run | `20261021-213738` (M1b 1 vs 2, stopped before 26B 4c): no change, within noise -> **M1b dropped** |
 | ebateni `bf0558252` | M1b retry: zig-zag forces >= 2 Q-blocks per member (debug showed qblk == team -> no-op) |
 | owner runs | `20261022-000438` (E4B), `20261022-001604` (E2B): zig-zag retry no gain -> **M1b closed** |
+| owner `0694d6ae3` (ebateni `ebateni/moe-split`) | **M5 v1**: `GGML_HEXAGON_MMID_SPLIT` 0 = round-robin, 1 = LPT on 32-row tiles, 2 = token split. Run `20261023-183334` 4c pp1024: Gemma-4-26B +5.0%, Qwen3.5-35B-A3B +1.3%; 1c deltas -1.4/-2.2% are pure noise (same code path at 1c). Review: add per-expert weight cost to LPT, O(n) bucket sort, check bit-exactness (Qwen 4c ab1 iq/cookie changed); run the M5-0 profile before more tuning |
