@@ -1,0 +1,3290 @@
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:18:23,251482731-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 8191 
+device_args=iq llama-3.2-3b-instruct-q4_0 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:18:57,977189260-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 8191 
+device_args=needle llama-3.2-3b-instruct-q4_0 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:19:04,266520891-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 8191 
+device_args=cookie llama-3.2-3b-instruct-q4_0 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:19:09,096750946-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 8191\ 1024\ 0\ 2048\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 1 tensor 8191 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:19:54,040794336-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 8191\ 2048\ 0\ 2048\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 1 tensor 8191 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:20:39,316263543-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 16383 
+device_args=iq llama-3.2-3b-instruct-q4_0 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:21:13,074320646-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 16383 
+device_args=needle llama-3.2-3b-instruct-q4_0 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:21:19,435282019-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 16383 
+device_args=cookie llama-3.2-3b-instruct-q4_0 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:21:24,253627910-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 16383\ 1024\ 0\ 2048\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 1 tensor 16383 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:22:08,469093271-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 16383\ 2048\ 0\ 2048\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 1 tensor 16383 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:22:53,065739066-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 24575 
+device_args=iq llama-3.2-3b-instruct-q4_0 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:23:26,766267156-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 24575 
+device_args=needle llama-3.2-3b-instruct-q4_0 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:23:32,677137019-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 24575 
+device_args=cookie llama-3.2-3b-instruct-q4_0 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:23:37,452164584-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 24575\ 1024\ 0\ 2048\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 1 tensor 24575 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:24:21,783975268-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 24575\ 2048\ 0\ 2048\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 1 tensor 24575 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:25:07,079661323-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 1 
+device_args=iq llama-3.2-3b-instruct-q4_0 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:25:41,115897130-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 1 
+device_args=needle llama-3.2-3b-instruct-q4_0 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:25:47,200880909-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 1 
+device_args=cookie llama-3.2-3b-instruct-q4_0 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:25:52,054047062-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 1\ 1024\ 0\ 2048\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 1 tensor 1 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:26:36,959457395-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 1\ 2048\ 0\ 2048\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 1 tensor 1 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:27:22,254082843-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 8191 
+device_args=iq llama-3.2-3b-instruct-q4_0 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:27:56,353889684-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 8191 
+device_args=needle llama-3.2-3b-instruct-q4_0 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:28:03,332081970-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 8191 
+device_args=cookie llama-3.2-3b-instruct-q4_0 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:28:08,196513953-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 8191\ 1024\ 16384\ 18432\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 1 tensor 8191 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:30:28,340097244-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 8191\ 2048\ 16384\ 18432\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 1 tensor 8191 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:32:47,273556323-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 16383 
+device_args=iq llama-3.2-3b-instruct-q4_0 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:33:21,312969931-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 16383 
+device_args=needle llama-3.2-3b-instruct-q4_0 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:33:27,771954061-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 16383 
+device_args=cookie llama-3.2-3b-instruct-q4_0 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:33:32,652108065-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 16383\ 1024\ 16384\ 18432\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 1 tensor 16383 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:35:52,261406632-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 16383\ 2048\ 16384\ 18432\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 1 tensor 16383 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:38:10,729492143-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 24575 
+device_args=iq llama-3.2-3b-instruct-q4_0 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:38:44,834635459-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 24575 
+device_args=needle llama-3.2-3b-instruct-q4_0 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:38:50,655581554-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 24575 
+device_args=cookie llama-3.2-3b-instruct-q4_0 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:38:55,558725954-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 24575\ 1024\ 16384\ 18432\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 1 tensor 24575 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:41:15,735951926-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 24575\ 2048\ 16384\ 18432\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 1 tensor 24575 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:43:34,542940220-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 1 
+device_args=iq llama-3.2-3b-instruct-q4_0 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:44:08,719792132-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 1 
+device_args=needle llama-3.2-3b-instruct-q4_0 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:44:16,988006718-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 1 
+device_args=cookie llama-3.2-3b-instruct-q4_0 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:44:21,840436159-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 1\ 1024\ 16384\ 18432\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 1 tensor 1 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:46:40,534988210-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 1\ tensor\ 1\ 2048\ 16384\ 18432\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 1 tensor 1 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:48:58,149390400-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 8191 
+device_args=iq llama-3.2-3b-instruct-q4_0 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:49:49,809549408-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 8191 
+device_args=needle llama-3.2-3b-instruct-q4_0 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:49:57,313425558-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 8191 
+device_args=cookie llama-3.2-3b-instruct-q4_0 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:50:03,172756781-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 8191\ 1024\ 0\ 2048\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 4 row 8191 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:50:31,267944365-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 8191\ 2048\ 0\ 2048\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 4 row 8191 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:50:59,413701118-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 16383 
+device_args=iq llama-3.2-3b-instruct-q4_0 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:51:50,497718767-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 16383 
+device_args=needle llama-3.2-3b-instruct-q4_0 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:51:56,875956268-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 16383 
+device_args=cookie llama-3.2-3b-instruct-q4_0 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:52:02,681547803-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 16383\ 1024\ 0\ 2048\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 4 row 16383 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:52:30,298605048-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 16383\ 2048\ 0\ 2048\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 4 row 16383 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:52:57,891455334-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 24575 
+device_args=iq llama-3.2-3b-instruct-q4_0 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:53:48,598424916-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 24575 
+device_args=needle llama-3.2-3b-instruct-q4_0 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:53:54,906714799-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 24575 
+device_args=cookie llama-3.2-3b-instruct-q4_0 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:54:00,608051947-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 24575\ 1024\ 0\ 2048\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 4 row 24575 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:54:28,241446624-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 24575\ 2048\ 0\ 2048\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 4 row 24575 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:54:55,887322964-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 1 
+device_args=iq llama-3.2-3b-instruct-q4_0 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:55:46,752467850-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 1 
+device_args=needle llama-3.2-3b-instruct-q4_0 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:55:53,210368527-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 1 
+device_args=cookie llama-3.2-3b-instruct-q4_0 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:55:58,944872727-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 1\ 1024\ 0\ 2048\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 4 row 1 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:56:26,518928405-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 1\ 2048\ 0\ 2048\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 4 row 1 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:56:54,050859360-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 8191 
+device_args=iq llama-3.2-3b-instruct-q4_0 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:57:44,545262165-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 8191 
+device_args=needle llama-3.2-3b-instruct-q4_0 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:57:51,485854384-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 8191 
+device_args=cookie llama-3.2-3b-instruct-q4_0 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:57:57,208841386-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 8191\ 1024\ 16384\ 18432\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 4 row 8191 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T21:59:02,465752369-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 8191\ 2048\ 16384\ 18432\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 4 row 8191 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:00:07,553492299-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 16383 
+device_args=iq llama-3.2-3b-instruct-q4_0 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:00:58,408421151-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 16383 
+device_args=needle llama-3.2-3b-instruct-q4_0 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:01:04,665972204-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 16383 
+device_args=cookie llama-3.2-3b-instruct-q4_0 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:01:10,745634440-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 16383\ 1024\ 16384\ 18432\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 4 row 16383 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:02:15,866333725-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 16383\ 2048\ 16384\ 18432\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 4 row 16383 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:03:20,469629359-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 24575 
+device_args=iq llama-3.2-3b-instruct-q4_0 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:04:11,030327367-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 24575 
+device_args=needle llama-3.2-3b-instruct-q4_0 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:04:18,497493630-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 24575 
+device_args=cookie llama-3.2-3b-instruct-q4_0 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:04:24,224251225-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 24575\ 1024\ 16384\ 18432\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 4 row 24575 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:05:29,513325971-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 24575\ 2048\ 16384\ 18432\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 4 row 24575 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:06:34,493469156-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 1 
+device_args=iq llama-3.2-3b-instruct-q4_0 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:07:25,603750896-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 1 
+device_args=needle llama-3.2-3b-instruct-q4_0 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:07:31,706926260-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 1 
+device_args=cookie llama-3.2-3b-instruct-q4_0 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:07:37,415946455-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 1\ 1024\ 16384\ 18432\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 4 row 1 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:08:42,570981892-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ llama-3.2-3b-instruct-q4_0\ 4\ row\ 1\ 2048\ 16384\ 18432\ 2048 
+device_args=bench llama-3.2-3b-instruct-q4_0 4 row 1 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:09:47,261386083-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 8191 
+device_args=iq gemma-4-E4B_q4_0-it 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:11:09,750511565-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 8191 
+device_args=needle gemma-4-E4B_q4_0-it 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:11:22,423958938-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 8191 
+device_args=cookie gemma-4-E4B_q4_0-it 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:11:32,527328561-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 8191\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 1 tensor 8191 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:12:37,073142158-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 8191\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 1 tensor 8191 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:13:42,817974262-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 16383 
+device_args=iq gemma-4-E4B_q4_0-it 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:15:03,218583605-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 16383 
+device_args=needle gemma-4-E4B_q4_0-it 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:15:15,629483059-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 16383 
+device_args=cookie gemma-4-E4B_q4_0-it 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:15:25,773863847-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 16383\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 1 tensor 16383 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:16:30,148472206-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 16383\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 1 tensor 16383 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:17:35,837470176-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 24575 
+device_args=iq gemma-4-E4B_q4_0-it 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:18:56,531444267-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 24575 
+device_args=needle gemma-4-E4B_q4_0-it 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:19:07,634587338-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 24575 
+device_args=cookie gemma-4-E4B_q4_0-it 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:19:17,571406007-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 24575\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 1 tensor 24575 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:20:21,077438273-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 24575\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 1 tensor 24575 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:21:25,962026935-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 1 
+device_args=iq gemma-4-E4B_q4_0-it 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:22:46,216824961-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 1 
+device_args=needle gemma-4-E4B_q4_0-it 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:22:56,347727933-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 1 
+device_args=cookie gemma-4-E4B_q4_0-it 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:23:06,309107578-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 1\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 1 tensor 1 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:24:10,173283298-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 1\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 1 tensor 1 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:25:15,301287667-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 8191 
+device_args=iq gemma-4-E4B_q4_0-it 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:26:35,723843137-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 8191 
+device_args=needle gemma-4-E4B_q4_0-it 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:26:46,204014032-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 8191 
+device_args=cookie gemma-4-E4B_q4_0-it 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:26:56,221139089-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 8191\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 1 tensor 8191 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:28:39,703286449-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 8191\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 1 tensor 8191 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:30:25,088757139-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 16383 
+device_args=iq gemma-4-E4B_q4_0-it 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:31:46,113009136-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 16383 
+device_args=needle gemma-4-E4B_q4_0-it 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:31:56,100417553-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 16383 
+device_args=cookie gemma-4-E4B_q4_0-it 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:32:06,265573147-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 16383\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 1 tensor 16383 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:33:50,568015306-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 16383\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 1 tensor 16383 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:35:36,563593772-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 24575 
+device_args=iq gemma-4-E4B_q4_0-it 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:36:57,417958401-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 24575 
+device_args=needle gemma-4-E4B_q4_0-it 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:37:09,522246676-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 24575 
+device_args=cookie gemma-4-E4B_q4_0-it 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:37:19,722425845-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 24575\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 1 tensor 24575 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:39:01,875466640-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 24575\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 1 tensor 24575 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:40:47,761975893-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 1 
+device_args=iq gemma-4-E4B_q4_0-it 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:42:09,516557905-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 1 
+device_args=needle gemma-4-E4B_q4_0-it 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:42:23,766619707-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 1 
+device_args=cookie gemma-4-E4B_q4_0-it 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:42:33,966072919-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 1\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 1 tensor 1 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:44:16,959503174-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 1\ tensor\ 1\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 1 tensor 1 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:46:01,913985443-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E4B_q4_0-it\ 4\ row\ 8191 
+device_args=iq gemma-4-E4B_q4_0-it 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:47:47,254605902-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E4B_q4_0-it\ 4\ row\ 8191 
+device_args=needle gemma-4-E4B_q4_0-it 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:47:58,992183504-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E4B_q4_0-it\ 4\ row\ 8191 
+device_args=cookie gemma-4-E4B_q4_0-it 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:48:10,613196798-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 4\ row\ 8191\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 4 row 8191 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:48:56,047214507-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 4\ row\ 8191\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 4 row 8191 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:49:42,885544504-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E4B_q4_0-it\ 4\ row\ 16383 
+device_args=iq gemma-4-E4B_q4_0-it 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:51:28,695828255-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E4B_q4_0-it\ 4\ row\ 16383 
+device_args=needle gemma-4-E4B_q4_0-it 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:51:39,171834833-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E4B_q4_0-it\ 4\ row\ 16383 
+device_args=cookie gemma-4-E4B_q4_0-it 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:51:50,837913153-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 4\ row\ 16383\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 4 row 16383 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:52:35,983368668-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 4\ row\ 16383\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 4 row 16383 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:53:22,890810159-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E4B_q4_0-it\ 4\ row\ 24575 
+device_args=iq gemma-4-E4B_q4_0-it 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:55:08,560856112-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E4B_q4_0-it\ 4\ row\ 24575 
+device_args=needle gemma-4-E4B_q4_0-it 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:55:19,684419613-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E4B_q4_0-it\ 4\ row\ 24575 
+device_args=cookie gemma-4-E4B_q4_0-it 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:55:31,200787293-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 4\ row\ 24575\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 4 row 24575 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:56:15,745631080-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 4\ row\ 24575\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 4 row 24575 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:57:01,905267878-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E4B_q4_0-it\ 4\ row\ 1 
+device_args=iq gemma-4-E4B_q4_0-it 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:58:47,524887133-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E4B_q4_0-it\ 4\ row\ 1 
+device_args=needle gemma-4-E4B_q4_0-it 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:58:59,164207420-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E4B_q4_0-it\ 4\ row\ 1 
+device_args=cookie gemma-4-E4B_q4_0-it 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:59:10,673030361-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 4\ row\ 1\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 4 row 1 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T22:59:55,270117438-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 4\ row\ 1\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 4 row 1 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:00:41,503973233-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E4B_q4_0-it\ 4\ row\ 8191 
+device_args=iq gemma-4-E4B_q4_0-it 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:02:26,842280347-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E4B_q4_0-it\ 4\ row\ 8191 
+device_args=needle gemma-4-E4B_q4_0-it 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:02:38,886239875-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E4B_q4_0-it\ 4\ row\ 8191 
+device_args=cookie gemma-4-E4B_q4_0-it 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:02:50,443693464-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 4\ row\ 8191\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 4 row 8191 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:03:56,848303803-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 4\ row\ 8191\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 4 row 8191 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:05:03,343450640-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E4B_q4_0-it\ 4\ row\ 16383 
+device_args=iq gemma-4-E4B_q4_0-it 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:06:49,731096187-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E4B_q4_0-it\ 4\ row\ 16383 
+device_args=needle gemma-4-E4B_q4_0-it 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:07:01,452827994-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E4B_q4_0-it\ 4\ row\ 16383 
+device_args=cookie gemma-4-E4B_q4_0-it 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:07:13,537276558-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 4\ row\ 16383\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 4 row 16383 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:08:21,336224435-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 4\ row\ 16383\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 4 row 16383 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:09:28,437364861-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E4B_q4_0-it\ 4\ row\ 24575 
+device_args=iq gemma-4-E4B_q4_0-it 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:11:14,245249327-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E4B_q4_0-it\ 4\ row\ 24575 
+device_args=needle gemma-4-E4B_q4_0-it 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:11:25,801916624-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E4B_q4_0-it\ 4\ row\ 24575 
+device_args=cookie gemma-4-E4B_q4_0-it 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:11:37,526628774-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 4\ row\ 24575\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 4 row 24575 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:12:44,114719961-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 4\ row\ 24575\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 4 row 24575 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:13:50,422662248-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E4B_q4_0-it\ 4\ row\ 1 
+device_args=iq gemma-4-E4B_q4_0-it 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:15:37,823820301-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E4B_q4_0-it\ 4\ row\ 1 
+device_args=needle gemma-4-E4B_q4_0-it 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:15:50,014637593-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E4B_q4_0-it\ 4\ row\ 1 
+device_args=cookie gemma-4-E4B_q4_0-it 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:16:01,661952713-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 4\ row\ 1\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 4 row 1 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:17:07,109749553-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E4B_q4_0-it\ 4\ row\ 1\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E4B_q4_0-it 4 row 1 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:18:11,857205737-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 8191 
+device_args=iq gemma-4-E2B_q4_0-it 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:19:12,662624704-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 8191 
+device_args=needle gemma-4-E2B_q4_0-it 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:19:19,736791862-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 8191 
+device_args=cookie gemma-4-E2B_q4_0-it 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:19:25,778942782-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 8191\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 1 tensor 8191 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:20:05,016777965-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 8191\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 1 tensor 8191 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:20:44,840501922-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 16383 
+device_args=iq gemma-4-E2B_q4_0-it 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:21:43,678483772-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 16383 
+device_args=needle gemma-4-E2B_q4_0-it 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:21:50,945597953-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 16383 
+device_args=cookie gemma-4-E2B_q4_0-it 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:21:56,979929586-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 16383\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 1 tensor 16383 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:22:36,495686215-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 16383\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 1 tensor 16383 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:23:16,773211147-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 24575 
+device_args=iq gemma-4-E2B_q4_0-it 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:24:16,072603605-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 24575 
+device_args=needle gemma-4-E2B_q4_0-it 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:24:23,316009228-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 24575 
+device_args=cookie gemma-4-E2B_q4_0-it 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:24:29,336624139-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 24575\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 1 tensor 24575 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:25:08,192603399-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 24575\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 1 tensor 24575 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:25:47,423512363-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 1 
+device_args=iq gemma-4-E2B_q4_0-it 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:26:46,678392186-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 1 
+device_args=needle gemma-4-E2B_q4_0-it 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:26:54,693705848-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 1 
+device_args=cookie gemma-4-E2B_q4_0-it 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:27:00,830445344-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 1\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 1 tensor 1 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:27:39,829350485-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 1\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 1 tensor 1 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:28:19,376212040-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 8191 
+device_args=iq gemma-4-E2B_q4_0-it 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:29:18,633675607-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 8191 
+device_args=needle gemma-4-E2B_q4_0-it 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:29:25,763467997-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 8191 
+device_args=cookie gemma-4-E2B_q4_0-it 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:29:31,921142381-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 8191\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 1 tensor 8191 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:30:36,358504677-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 8191\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 1 tensor 8191 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:31:41,991212242-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 16383 
+device_args=iq gemma-4-E2B_q4_0-it 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:32:42,047509555-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 16383 
+device_args=needle gemma-4-E2B_q4_0-it 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:32:49,317631685-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 16383 
+device_args=cookie gemma-4-E2B_q4_0-it 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:32:55,500587999-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 16383\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 1 tensor 16383 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:34:01,792945733-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 16383\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 1 tensor 16383 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:35:08,989843179-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 24575 
+device_args=iq gemma-4-E2B_q4_0-it 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:36:08,839436157-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 24575 
+device_args=needle gemma-4-E2B_q4_0-it 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:36:16,770201772-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 24575 
+device_args=cookie gemma-4-E2B_q4_0-it 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:36:22,986280958-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 24575\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 1 tensor 24575 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:37:26,872700054-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 24575\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 1 tensor 24575 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:38:31,722558000-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 1 
+device_args=iq gemma-4-E2B_q4_0-it 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:39:30,946913235-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 1 
+device_args=needle gemma-4-E2B_q4_0-it 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:39:38,127464357-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 1 
+device_args=cookie gemma-4-E2B_q4_0-it 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:39:44,218643294-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 1\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 1 tensor 1 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:40:49,349610937-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 1\ tensor\ 1\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 1 tensor 1 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:41:55,416574073-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E2B_q4_0-it\ 4\ row\ 8191 
+device_args=iq gemma-4-E2B_q4_0-it 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:43:19,283542282-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E2B_q4_0-it\ 4\ row\ 8191 
+device_args=needle gemma-4-E2B_q4_0-it 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:43:28,903287066-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E2B_q4_0-it\ 4\ row\ 8191 
+device_args=cookie gemma-4-E2B_q4_0-it 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:43:37,355030889-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 4\ row\ 8191\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 4 row 8191 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:44:08,917801726-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 4\ row\ 8191\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 4 row 8191 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:44:41,854471039-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E2B_q4_0-it\ 4\ row\ 16383 
+device_args=iq gemma-4-E2B_q4_0-it 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:46:06,206483943-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E2B_q4_0-it\ 4\ row\ 16383 
+device_args=needle gemma-4-E2B_q4_0-it 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:46:15,340134771-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E2B_q4_0-it\ 4\ row\ 16383 
+device_args=cookie gemma-4-E2B_q4_0-it 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:46:24,044022102-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 4\ row\ 16383\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 4 row 16383 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:46:55,651518423-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 4\ row\ 16383\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 4 row 16383 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:47:28,482906926-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E2B_q4_0-it\ 4\ row\ 24575 
+device_args=iq gemma-4-E2B_q4_0-it 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:48:51,981438095-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E2B_q4_0-it\ 4\ row\ 24575 
+device_args=needle gemma-4-E2B_q4_0-it 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:49:01,186943427-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E2B_q4_0-it\ 4\ row\ 24575 
+device_args=cookie gemma-4-E2B_q4_0-it 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:49:09,864939409-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 4\ row\ 24575\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 4 row 24575 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:49:41,114219759-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 4\ row\ 24575\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 4 row 24575 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:50:13,665780208-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E2B_q4_0-it\ 4\ row\ 1 
+device_args=iq gemma-4-E2B_q4_0-it 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:51:37,343368541-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E2B_q4_0-it\ 4\ row\ 1 
+device_args=needle gemma-4-E2B_q4_0-it 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:51:47,516525956-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E2B_q4_0-it\ 4\ row\ 1 
+device_args=cookie gemma-4-E2B_q4_0-it 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:51:56,183042168-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 4\ row\ 1\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 4 row 1 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:52:27,276876508-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 4\ row\ 1\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 4 row 1 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:52:59,728428967-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E2B_q4_0-it\ 4\ row\ 8191 
+device_args=iq gemma-4-E2B_q4_0-it 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:54:23,760616801-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E2B_q4_0-it\ 4\ row\ 8191 
+device_args=needle gemma-4-E2B_q4_0-it 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:54:33,576029696-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E2B_q4_0-it\ 4\ row\ 8191 
+device_args=cookie gemma-4-E2B_q4_0-it 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:54:42,263294532-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 4\ row\ 8191\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 4 row 8191 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:55:26,412613839-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 4\ row\ 8191\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 4 row 8191 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:56:12,353020146-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E2B_q4_0-it\ 4\ row\ 16383 
+device_args=iq gemma-4-E2B_q4_0-it 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:57:36,310840727-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E2B_q4_0-it\ 4\ row\ 16383 
+device_args=needle gemma-4-E2B_q4_0-it 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:57:45,688838437-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E2B_q4_0-it\ 4\ row\ 16383 
+device_args=cookie gemma-4-E2B_q4_0-it 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:57:54,182811154-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 4\ row\ 16383\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 4 row 16383 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:58:38,181980494-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 4\ row\ 16383\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 4 row 16383 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T23:59:24,164858511-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E2B_q4_0-it\ 4\ row\ 24575 
+device_args=iq gemma-4-E2B_q4_0-it 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:00:48,691298315-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E2B_q4_0-it\ 4\ row\ 24575 
+device_args=needle gemma-4-E2B_q4_0-it 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:00:57,893090458-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E2B_q4_0-it\ 4\ row\ 24575 
+device_args=cookie gemma-4-E2B_q4_0-it 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:01:06,571593298-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 4\ row\ 24575\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 4 row 24575 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:01:50,337158770-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 4\ row\ 24575\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 4 row 24575 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:02:35,515042698-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-E2B_q4_0-it\ 4\ row\ 1 
+device_args=iq gemma-4-E2B_q4_0-it 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:03:59,566475908-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-E2B_q4_0-it\ 4\ row\ 1 
+device_args=needle gemma-4-E2B_q4_0-it 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:04:08,630398557-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-E2B_q4_0-it\ 4\ row\ 1 
+device_args=cookie gemma-4-E2B_q4_0-it 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:04:17,098055345-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 4\ row\ 1\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 4 row 1 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:05:00,353778241-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-E2B_q4_0-it\ 4\ row\ 1\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-E2B_q4_0-it 4 row 1 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:05:44,642005259-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-2-2b_Q4_0\ 1\ tensor\ 8191 
+device_args=iq gemma-2-2b_Q4_0 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:06:23,876965075-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-2-2b_Q4_0\ 1\ tensor\ 8191 
+device_args=needle gemma-2-2b_Q4_0 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:06:32,144642842-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-2-2b_Q4_0\ 1\ tensor\ 8191 
+device_args=cookie gemma-2-2b_Q4_0 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:06:39,199638646-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 1\ tensor\ 8191\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-2-2b_Q4_0 1 tensor 8191 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:07:21,549031189-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 1\ tensor\ 8191\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-2-2b_Q4_0 1 tensor 8191 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:08:03,664864262-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-2-2b_Q4_0\ 1\ tensor\ 16383 
+device_args=iq gemma-2-2b_Q4_0 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:08:42,084205460-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-2-2b_Q4_0\ 1\ tensor\ 16383 
+device_args=needle gemma-2-2b_Q4_0 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:08:50,316316897-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-2-2b_Q4_0\ 1\ tensor\ 16383 
+device_args=cookie gemma-2-2b_Q4_0 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:08:57,307868855-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 1\ tensor\ 16383\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-2-2b_Q4_0 1 tensor 16383 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:09:38,880802444-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 1\ tensor\ 16383\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-2-2b_Q4_0 1 tensor 16383 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:10:21,151089684-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-2-2b_Q4_0\ 1\ tensor\ 24575 
+device_args=iq gemma-2-2b_Q4_0 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:10:59,499463502-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-2-2b_Q4_0\ 1\ tensor\ 24575 
+device_args=needle gemma-2-2b_Q4_0 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:11:07,767793808-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-2-2b_Q4_0\ 1\ tensor\ 24575 
+device_args=cookie gemma-2-2b_Q4_0 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:11:14,787774722-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 1\ tensor\ 24575\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-2-2b_Q4_0 1 tensor 24575 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:11:56,730449418-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 1\ tensor\ 24575\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-2-2b_Q4_0 1 tensor 24575 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:12:39,242378423-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-2-2b_Q4_0\ 1\ tensor\ 1 
+device_args=iq gemma-2-2b_Q4_0 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:13:17,555584686-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-2-2b_Q4_0\ 1\ tensor\ 1 
+device_args=needle gemma-2-2b_Q4_0 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:13:25,759430977-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-2-2b_Q4_0\ 1\ tensor\ 1 
+device_args=cookie gemma-2-2b_Q4_0 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:13:32,666621540-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 1\ tensor\ 1\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-2-2b_Q4_0 1 tensor 1 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:14:14,663455904-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 1\ tensor\ 1\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-2-2b_Q4_0 1 tensor 1 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:14:56,529740211-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-2-2b_Q4_0\ 1\ tensor\ 8191 
+device_args=iq gemma-2-2b_Q4_0 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:15:34,844237845-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-2-2b_Q4_0\ 1\ tensor\ 8191 
+device_args=needle gemma-2-2b_Q4_0 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:15:43,140339519-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-2-2b_Q4_0\ 1\ tensor\ 8191 
+device_args=cookie gemma-2-2b_Q4_0 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:15:50,131761132-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 1\ tensor\ 8191\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-2-2b_Q4_0 1 tensor 8191 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:17:21,113995939-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 1\ tensor\ 8191\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-2-2b_Q4_0 1 tensor 8191 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:18:52,010734253-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-2-2b_Q4_0\ 1\ tensor\ 16383 
+device_args=iq gemma-2-2b_Q4_0 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:19:31,939023728-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-2-2b_Q4_0\ 1\ tensor\ 16383 
+device_args=needle gemma-2-2b_Q4_0 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:19:37,336127960-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-2-2b_Q4_0\ 1\ tensor\ 16383 
+device_args=cookie gemma-2-2b_Q4_0 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:19:44,459833441-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 1\ tensor\ 16383\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-2-2b_Q4_0 1 tensor 16383 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:21:16,290076119-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 1\ tensor\ 16383\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-2-2b_Q4_0 1 tensor 16383 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:22:47,561662421-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-2-2b_Q4_0\ 1\ tensor\ 24575 
+device_args=iq gemma-2-2b_Q4_0 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:23:27,435868269-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-2-2b_Q4_0\ 1\ tensor\ 24575 
+device_args=needle gemma-2-2b_Q4_0 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:23:32,841842595-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-2-2b_Q4_0\ 1\ tensor\ 24575 
+device_args=cookie gemma-2-2b_Q4_0 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:23:39,921866641-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 1\ tensor\ 24575\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-2-2b_Q4_0 1 tensor 24575 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:25:10,436069999-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 1\ tensor\ 24575\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-2-2b_Q4_0 1 tensor 24575 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:26:44,315413205-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-2-2b_Q4_0\ 1\ tensor\ 1 
+device_args=iq gemma-2-2b_Q4_0 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:27:24,261074257-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-2-2b_Q4_0\ 1\ tensor\ 1 
+device_args=needle gemma-2-2b_Q4_0 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:27:32,513501739-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-2-2b_Q4_0\ 1\ tensor\ 1 
+device_args=cookie gemma-2-2b_Q4_0 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:27:39,609968943-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 1\ tensor\ 1\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-2-2b_Q4_0 1 tensor 1 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:29:06,766188507-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 1\ tensor\ 1\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-2-2b_Q4_0 1 tensor 1 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:30:37,324547983-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-2-2b_Q4_0\ 4\ row\ 8191 
+device_args=iq gemma-2-2b_Q4_0 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:31:38,418384038-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-2-2b_Q4_0\ 4\ row\ 8191 
+device_args=needle gemma-2-2b_Q4_0 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:31:46,939232630-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-2-2b_Q4_0\ 4\ row\ 8191 
+device_args=cookie gemma-2-2b_Q4_0 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:31:54,583543478-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 4\ row\ 8191\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-2-2b_Q4_0 4 row 8191 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:32:23,957059065-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 4\ row\ 8191\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-2-2b_Q4_0 4 row 8191 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:32:53,782527475-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-2-2b_Q4_0\ 4\ row\ 16383 
+device_args=iq gemma-2-2b_Q4_0 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:33:54,825530604-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-2-2b_Q4_0\ 4\ row\ 16383 
+device_args=needle gemma-2-2b_Q4_0 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:34:03,245152392-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-2-2b_Q4_0\ 4\ row\ 16383 
+device_args=cookie gemma-2-2b_Q4_0 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:34:10,936802013-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 4\ row\ 16383\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-2-2b_Q4_0 4 row 16383 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:34:39,412419464-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 4\ row\ 16383\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-2-2b_Q4_0 4 row 16383 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:35:09,373590174-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-2-2b_Q4_0\ 4\ row\ 24575 
+device_args=iq gemma-2-2b_Q4_0 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:36:10,800663566-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-2-2b_Q4_0\ 4\ row\ 24575 
+device_args=needle gemma-2-2b_Q4_0 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:36:19,284581084-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-2-2b_Q4_0\ 4\ row\ 24575 
+device_args=cookie gemma-2-2b_Q4_0 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:36:26,894319342-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 4\ row\ 24575\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-2-2b_Q4_0 4 row 24575 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:36:55,844513502-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 4\ row\ 24575\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-2-2b_Q4_0 4 row 24575 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:37:26,052702223-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-2-2b_Q4_0\ 4\ row\ 1 
+device_args=iq gemma-2-2b_Q4_0 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:38:27,604383298-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-2-2b_Q4_0\ 4\ row\ 1 
+device_args=needle gemma-2-2b_Q4_0 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:38:35,958005722-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-2-2b_Q4_0\ 4\ row\ 1 
+device_args=cookie gemma-2-2b_Q4_0 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:38:43,581532049-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 4\ row\ 1\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-2-2b_Q4_0 4 row 1 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:39:12,482984800-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 4\ row\ 1\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-2-2b_Q4_0 4 row 1 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:39:42,719686393-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-2-2b_Q4_0\ 4\ row\ 8191 
+device_args=iq gemma-2-2b_Q4_0 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:40:44,343662034-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-2-2b_Q4_0\ 4\ row\ 8191 
+device_args=needle gemma-2-2b_Q4_0 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:40:52,872031372-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-2-2b_Q4_0\ 4\ row\ 8191 
+device_args=cookie gemma-2-2b_Q4_0 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:41:00,615992870-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 4\ row\ 8191\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-2-2b_Q4_0 4 row 8191 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:41:44,597860609-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 4\ row\ 8191\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-2-2b_Q4_0 4 row 8191 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:42:35,837670534-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-2-2b_Q4_0\ 4\ row\ 16383 
+device_args=iq gemma-2-2b_Q4_0 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:43:37,055922581-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-2-2b_Q4_0\ 4\ row\ 16383 
+device_args=needle gemma-2-2b_Q4_0 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:43:45,506653161-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-2-2b_Q4_0\ 4\ row\ 16383 
+device_args=cookie gemma-2-2b_Q4_0 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:43:53,163957583-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 4\ row\ 16383\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-2-2b_Q4_0 4 row 16383 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:44:36,978663935-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 4\ row\ 16383\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-2-2b_Q4_0 4 row 16383 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:45:23,010006941-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-2-2b_Q4_0\ 4\ row\ 24575 
+device_args=iq gemma-2-2b_Q4_0 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:46:24,301587375-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-2-2b_Q4_0\ 4\ row\ 24575 
+device_args=needle gemma-2-2b_Q4_0 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:46:32,647270128-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-2-2b_Q4_0\ 4\ row\ 24575 
+device_args=cookie gemma-2-2b_Q4_0 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:46:40,246018341-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 4\ row\ 24575\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-2-2b_Q4_0 4 row 24575 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:47:23,438865991-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 4\ row\ 24575\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-2-2b_Q4_0 4 row 24575 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:48:08,991014968-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-2-2b_Q4_0\ 4\ row\ 1 
+device_args=iq gemma-2-2b_Q4_0 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:49:09,929561081-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-2-2b_Q4_0\ 4\ row\ 1 
+device_args=needle gemma-2-2b_Q4_0 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:49:18,415729663-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-2-2b_Q4_0\ 4\ row\ 1 
+device_args=cookie gemma-2-2b_Q4_0 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:49:26,040813282-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 4\ row\ 1\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-2-2b_Q4_0 4 row 1 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:50:13,705358215-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-2-2b_Q4_0\ 4\ row\ 1\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-2-2b_Q4_0 4 row 1 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:51:03,909534718-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-4B-Q4\ 1\ tensor\ 8191 
+device_args=iq Qwen3.5-4B-Q4 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:51:53,432004929-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-4B-Q4\ 1\ tensor\ 8191 
+device_args=needle Qwen3.5-4B-Q4 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:52:04,563412862-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-4B-Q4\ 1\ tensor\ 8191 
+device_args=cookie Qwen3.5-4B-Q4 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:52:14,741217496-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 1\ tensor\ 8191\ 1024\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-4B-Q4 1 tensor 8191 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:53:10,241115928-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 1\ tensor\ 8191\ 2048\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-4B-Q4 1 tensor 8191 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:54:05,752861026-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-4B-Q4\ 1\ tensor\ 16383 
+device_args=iq Qwen3.5-4B-Q4 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:54:55,177200286-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-4B-Q4\ 1\ tensor\ 16383 
+device_args=needle Qwen3.5-4B-Q4 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:55:06,478576276-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-4B-Q4\ 1\ tensor\ 16383 
+device_args=cookie Qwen3.5-4B-Q4 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:55:16,820197594-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 1\ tensor\ 16383\ 1024\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-4B-Q4 1 tensor 16383 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:56:12,645808185-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 1\ tensor\ 16383\ 2048\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-4B-Q4 1 tensor 16383 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:57:08,235561138-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-4B-Q4\ 1\ tensor\ 24575 
+device_args=iq Qwen3.5-4B-Q4 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:57:57,527159232-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-4B-Q4\ 1\ tensor\ 24575 
+device_args=needle Qwen3.5-4B-Q4 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:58:08,695045221-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-4B-Q4\ 1\ tensor\ 24575 
+device_args=cookie Qwen3.5-4B-Q4 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:58:18,910141367-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 1\ tensor\ 24575\ 1024\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-4B-Q4 1 tensor 24575 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T00:59:14,558499242-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 1\ tensor\ 24575\ 2048\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-4B-Q4 1 tensor 24575 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:00:10,177512000-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-4B-Q4\ 1\ tensor\ 1 
+device_args=iq Qwen3.5-4B-Q4 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:00:59,904552843-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-4B-Q4\ 1\ tensor\ 1 
+device_args=needle Qwen3.5-4B-Q4 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:01:11,099577694-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-4B-Q4\ 1\ tensor\ 1 
+device_args=cookie Qwen3.5-4B-Q4 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:01:21,461246710-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 1\ tensor\ 1\ 1024\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-4B-Q4 1 tensor 1 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:02:17,201731312-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 1\ tensor\ 1\ 2048\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-4B-Q4 1 tensor 1 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:03:12,906029865-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-4B-Q4\ 1\ tensor\ 8191 
+device_args=iq Qwen3.5-4B-Q4 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:04:02,648203931-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-4B-Q4\ 1\ tensor\ 8191 
+device_args=needle Qwen3.5-4B-Q4 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:04:13,978444318-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-4B-Q4\ 1\ tensor\ 8191 
+device_args=cookie Qwen3.5-4B-Q4 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:04:24,301743086-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 1\ tensor\ 8191\ 1024\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-4B-Q4 1 tensor 8191 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:06:05,613535389-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 1\ tensor\ 8191\ 2048\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-4B-Q4 1 tensor 8191 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:07:44,309696469-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-4B-Q4\ 1\ tensor\ 16383 
+device_args=iq Qwen3.5-4B-Q4 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:08:34,340767316-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-4B-Q4\ 1\ tensor\ 16383 
+device_args=needle Qwen3.5-4B-Q4 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:08:45,734614015-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-4B-Q4\ 1\ tensor\ 16383 
+device_args=cookie Qwen3.5-4B-Q4 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:08:56,185178157-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 1\ tensor\ 16383\ 1024\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-4B-Q4 1 tensor 16383 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:10:35,756607173-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 1\ tensor\ 16383\ 2048\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-4B-Q4 1 tensor 16383 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:12:15,595330920-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-4B-Q4\ 1\ tensor\ 24575 
+device_args=iq Qwen3.5-4B-Q4 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:13:05,942617108-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-4B-Q4\ 1\ tensor\ 24575 
+device_args=needle Qwen3.5-4B-Q4 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:13:17,340236762-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-4B-Q4\ 1\ tensor\ 24575 
+device_args=cookie Qwen3.5-4B-Q4 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:13:27,803362164-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 1\ tensor\ 24575\ 1024\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-4B-Q4 1 tensor 24575 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:15:09,782177912-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 1\ tensor\ 24575\ 2048\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-4B-Q4 1 tensor 24575 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:16:49,310472488-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-4B-Q4\ 1\ tensor\ 1 
+device_args=iq Qwen3.5-4B-Q4 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:17:40,142477437-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-4B-Q4\ 1\ tensor\ 1 
+device_args=needle Qwen3.5-4B-Q4 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:17:51,418046809-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-4B-Q4\ 1\ tensor\ 1 
+device_args=cookie Qwen3.5-4B-Q4 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:18:01,799177809-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 1\ tensor\ 1\ 1024\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-4B-Q4 1 tensor 1 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:19:44,237386421-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 1\ tensor\ 1\ 2048\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-4B-Q4 1 tensor 1 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:21:24,311936909-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-4B-Q4\ 4\ row\ 8191 
+device_args=iq Qwen3.5-4B-Q4 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:22:39,987994087-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-4B-Q4\ 4\ row\ 8191 
+device_args=needle Qwen3.5-4B-Q4 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:22:50,636849386-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-4B-Q4\ 4\ row\ 8191 
+device_args=cookie Qwen3.5-4B-Q4 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:23:00,827545155-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 4\ row\ 8191\ 1024\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-4B-Q4 4 row 8191 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:23:36,946041776-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 4\ row\ 8191\ 2048\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-4B-Q4 4 row 8191 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:24:13,808604518-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-4B-Q4\ 4\ row\ 16383 
+device_args=iq Qwen3.5-4B-Q4 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:25:30,118007014-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-4B-Q4\ 4\ row\ 16383 
+device_args=needle Qwen3.5-4B-Q4 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:25:40,691924496-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-4B-Q4\ 4\ row\ 16383 
+device_args=cookie Qwen3.5-4B-Q4 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:25:50,877141696-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 4\ row\ 16383\ 1024\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-4B-Q4 4 row 16383 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:26:26,866577618-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 4\ row\ 16383\ 2048\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-4B-Q4 4 row 16383 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:27:02,772885074-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-4B-Q4\ 4\ row\ 24575 
+device_args=iq Qwen3.5-4B-Q4 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:28:19,215755645-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-4B-Q4\ 4\ row\ 24575 
+device_args=needle Qwen3.5-4B-Q4 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:28:29,862312976-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-4B-Q4\ 4\ row\ 24575 
+device_args=cookie Qwen3.5-4B-Q4 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:28:40,081129345-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 4\ row\ 24575\ 1024\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-4B-Q4 4 row 24575 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:29:16,217300623-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 4\ row\ 24575\ 2048\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-4B-Q4 4 row 24575 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:29:53,187499475-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-4B-Q4\ 4\ row\ 1 
+device_args=iq Qwen3.5-4B-Q4 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:31:08,979989589-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-4B-Q4\ 4\ row\ 1 
+device_args=needle Qwen3.5-4B-Q4 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:31:19,545614251-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-4B-Q4\ 4\ row\ 1 
+device_args=cookie Qwen3.5-4B-Q4 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:31:29,758392328-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 4\ row\ 1\ 1024\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-4B-Q4 4 row 1 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:32:05,922339786-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 4\ row\ 1\ 2048\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-4B-Q4 4 row 1 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:32:41,921310511-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-4B-Q4\ 4\ row\ 8191 
+device_args=iq Qwen3.5-4B-Q4 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:33:58,140933939-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-4B-Q4\ 4\ row\ 8191 
+device_args=needle Qwen3.5-4B-Q4 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:34:08,780685959-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-4B-Q4\ 4\ row\ 8191 
+device_args=cookie Qwen3.5-4B-Q4 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:34:18,939968399-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 4\ row\ 8191\ 1024\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-4B-Q4 4 row 8191 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:35:12,163884897-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 4\ row\ 8191\ 2048\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-4B-Q4 4 row 8191 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:36:03,929396733-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-4B-Q4\ 4\ row\ 16383 
+device_args=iq Qwen3.5-4B-Q4 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:37:19,967236102-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-4B-Q4\ 4\ row\ 16383 
+device_args=needle Qwen3.5-4B-Q4 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:37:30,769618711-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-4B-Q4\ 4\ row\ 16383 
+device_args=cookie Qwen3.5-4B-Q4 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:37:41,120536924-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 4\ row\ 16383\ 1024\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-4B-Q4 4 row 16383 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:38:31,597174050-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 4\ row\ 16383\ 2048\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-4B-Q4 4 row 16383 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:39:23,384889099-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-4B-Q4\ 4\ row\ 24575 
+device_args=iq Qwen3.5-4B-Q4 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:40:39,928659013-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-4B-Q4\ 4\ row\ 24575 
+device_args=needle Qwen3.5-4B-Q4 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:40:50,531125180-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-4B-Q4\ 4\ row\ 24575 
+device_args=cookie Qwen3.5-4B-Q4 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:41:00,692596725-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 4\ row\ 24575\ 1024\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-4B-Q4 4 row 24575 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:41:51,228628112-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 4\ row\ 24575\ 2048\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-4B-Q4 4 row 24575 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:42:42,940827262-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-4B-Q4\ 4\ row\ 1 
+device_args=iq Qwen3.5-4B-Q4 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:43:59,424891745-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-4B-Q4\ 4\ row\ 1 
+device_args=needle Qwen3.5-4B-Q4 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:44:10,057288888-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-4B-Q4\ 4\ row\ 1 
+device_args=cookie Qwen3.5-4B-Q4 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:44:20,284824434-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 4\ row\ 1\ 1024\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-4B-Q4 4 row 1 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:45:10,677560388-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-4B-Q4\ 4\ row\ 1\ 2048\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-4B-Q4 4 row 1 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:46:02,026942392-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 8191 
+device_args=iq gemma-4-12b-it-qat-q4_0 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:47:58,426160943-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 8191 
+device_args=needle gemma-4-12b-it-qat-q4_0 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:48:23,119760584-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 8191 
+device_args=cookie gemma-4-12b-it-qat-q4_0 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:48:45,300058437-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 8191\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 1 tensor 8191 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:50:58,798956428-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 8191\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 1 tensor 8191 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:53:14,245286013-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 16383 
+device_args=iq gemma-4-12b-it-qat-q4_0 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:55:01,695581715-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 16383 
+device_args=needle gemma-4-12b-it-qat-q4_0 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:55:18,612551690-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 16383 
+device_args=cookie gemma-4-12b-it-qat-q4_0 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:55:40,797706100-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 16383\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 1 tensor 16383 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T01:57:51,813874626-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 16383\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 1 tensor 16383 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:00:04,422984498-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 24575 
+device_args=iq gemma-4-12b-it-qat-q4_0 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:01:52,038553539-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 24575 
+device_args=needle gemma-4-12b-it-qat-q4_0 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:02:17,035746905-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 24575 
+device_args=cookie gemma-4-12b-it-qat-q4_0 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:02:39,729584461-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 24575\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 1 tensor 24575 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:04:52,820802235-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 24575\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 1 tensor 24575 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:07:07,312057750-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 1 
+device_args=iq gemma-4-12b-it-qat-q4_0 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:08:54,492470388-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 1 
+device_args=needle gemma-4-12b-it-qat-q4_0 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:09:13,453750299-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 1 
+device_args=cookie gemma-4-12b-it-qat-q4_0 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:09:36,058226406-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 1\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 1 tensor 1 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:11:46,294457925-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 1\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 1 tensor 1 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:13:58,135769062-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 8191 
+device_args=iq gemma-4-12b-it-qat-q4_0 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:15:46,939232051-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 8191 
+device_args=needle gemma-4-12b-it-qat-q4_0 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:16:04,110727824-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 8191 
+device_args=cookie gemma-4-12b-it-qat-q4_0 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:16:26,903858639-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 8191\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 1 tensor 8191 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:19:55,037537624-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 8191\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 1 tensor 8191 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:23:27,272486062-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 16383 
+device_args=iq gemma-4-12b-it-qat-q4_0 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:25:15,221415778-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 16383 
+device_args=needle gemma-4-12b-it-qat-q4_0 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:25:40,730378971-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 16383 
+device_args=cookie gemma-4-12b-it-qat-q4_0 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:26:03,422912217-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 16383\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 1 tensor 16383 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:29:28,362809449-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 16383\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 1 tensor 16383 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:32:59,995840509-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 24575 
+device_args=iq gemma-4-12b-it-qat-q4_0 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:34:47,123890686-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 24575 
+device_args=needle gemma-4-12b-it-qat-q4_0 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:35:01,065794302-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 24575 
+device_args=cookie gemma-4-12b-it-qat-q4_0 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:35:23,282812871-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 24575\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 1 tensor 24575 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:38:46,409129717-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 24575\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 1 tensor 24575 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:42:19,409630892-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 1 
+device_args=iq gemma-4-12b-it-qat-q4_0 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:44:06,758110297-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 1 
+device_args=needle gemma-4-12b-it-qat-q4_0 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:44:21,755588322-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 1 
+device_args=cookie gemma-4-12b-it-qat-q4_0 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:44:44,460381617-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 1\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 1 tensor 1 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:48:10,867656956-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 1\ tensor\ 1\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 1 tensor 1 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:51:41,155718710-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 8191 
+device_args=iq gemma-4-12b-it-qat-q4_0 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:53:58,280209107-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 8191 
+device_args=needle gemma-4-12b-it-qat-q4_0 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:54:18,261216273-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 8191 
+device_args=cookie gemma-4-12b-it-qat-q4_0 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:54:36,955395151-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 8191\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 4 row 8191 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:55:52,524915723-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 8191\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 4 row 8191 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:57:15,141140407-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 16383 
+device_args=iq gemma-4-12b-it-qat-q4_0 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:59:31,757902897-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 16383 
+device_args=needle gemma-4-12b-it-qat-q4_0 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T02:59:47,243009094-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 16383 
+device_args=cookie gemma-4-12b-it-qat-q4_0 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:00:05,724372943-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 16383\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 4 row 16383 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:01:25,723096649-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 16383\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 4 row 16383 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:02:43,516887604-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 24575 
+device_args=iq gemma-4-12b-it-qat-q4_0 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:04:59,829353693-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 24575 
+device_args=needle gemma-4-12b-it-qat-q4_0 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:05:15,117815964-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 24575 
+device_args=cookie gemma-4-12b-it-qat-q4_0 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:05:33,482852774-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 24575\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 4 row 24575 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:06:48,671481576-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 24575\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 4 row 24575 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:08:05,710993596-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 1 
+device_args=iq gemma-4-12b-it-qat-q4_0 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:10:22,509515330-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 1 
+device_args=needle gemma-4-12b-it-qat-q4_0 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:10:42,490770746-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 1 
+device_args=cookie gemma-4-12b-it-qat-q4_0 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:11:01,037752453-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 1\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 4 row 1 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:12:19,986740075-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 1\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 4 row 1 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:13:41,571679199-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 8191 
+device_args=iq gemma-4-12b-it-qat-q4_0 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:15:57,659503345-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 8191 
+device_args=needle gemma-4-12b-it-qat-q4_0 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:16:12,979681188-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 8191 
+device_args=cookie gemma-4-12b-it-qat-q4_0 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:16:31,905442333-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 8191\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 4 row 8191 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:18:15,473693272-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 8191\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 4 row 8191 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:20:07,916239383-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 16383 
+device_args=iq gemma-4-12b-it-qat-q4_0 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:22:25,175874459-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 16383 
+device_args=needle gemma-4-12b-it-qat-q4_0 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:22:45,248563219-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 16383 
+device_args=cookie gemma-4-12b-it-qat-q4_0 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:23:03,776937078-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 16383\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 4 row 16383 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:24:47,319277526-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 16383\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 4 row 16383 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:26:38,565655873-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 24575 
+device_args=iq gemma-4-12b-it-qat-q4_0 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:28:57,115800399-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 24575 
+device_args=needle gemma-4-12b-it-qat-q4_0 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:29:12,535310796-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 24575 
+device_args=cookie gemma-4-12b-it-qat-q4_0 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:29:31,058998758-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 24575\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 4 row 24575 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:31:17,851139934-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 24575\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 4 row 24575 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:33:09,345551188-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 1 
+device_args=iq gemma-4-12b-it-qat-q4_0 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:35:26,499441267-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 1 
+device_args=needle gemma-4-12b-it-qat-q4_0 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:35:42,887651596-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 1 
+device_args=cookie gemma-4-12b-it-qat-q4_0 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:36:01,305899795-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 1\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 4 row 1 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:37:48,091001317-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-12b-it-qat-q4_0\ 4\ row\ 1\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-12b-it-qat-q4_0 4 row 1 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:39:37,219547601-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-26B_q4_0-it\ 1\ tensor\ 8191 
+device_args=iq gemma-4-26B_q4_0-it 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:44:08,147535263-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-26B_q4_0-it\ 1\ tensor\ 8191 
+device_args=needle gemma-4-26B_q4_0-it 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:44:43,377565747-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-26B_q4_0-it\ 1\ tensor\ 8191 
+device_args=cookie gemma-4-26B_q4_0-it 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:45:13,059376327-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 1\ tensor\ 8191\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 1 tensor 8191 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:46:58,866546492-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 1\ tensor\ 8191\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 1 tensor 8191 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:48:43,870803855-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-26B_q4_0-it\ 1\ tensor\ 16383 
+device_args=iq gemma-4-26B_q4_0-it 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:52:51,807291595-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-26B_q4_0-it\ 1\ tensor\ 16383 
+device_args=needle gemma-4-26B_q4_0-it 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:53:21,425349532-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-26B_q4_0-it\ 1\ tensor\ 16383 
+device_args=cookie gemma-4-26B_q4_0-it 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:53:51,055696885-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 1\ tensor\ 16383\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 1 tensor 16383 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:55:34,980530813-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 1\ tensor\ 16383\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 1 tensor 16383 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T03:57:20,957321938-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-26B_q4_0-it\ 1\ tensor\ 24575 
+device_args=iq gemma-4-26B_q4_0-it 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:01:35,008679571-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-26B_q4_0-it\ 1\ tensor\ 24575 
+device_args=needle gemma-4-26B_q4_0-it 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:02:01,750553664-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-26B_q4_0-it\ 1\ tensor\ 24575 
+device_args=cookie gemma-4-26B_q4_0-it 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:02:29,029976841-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 1\ tensor\ 24575\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 1 tensor 24575 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:04:13,626137929-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 1\ tensor\ 24575\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 1 tensor 24575 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:05:59,959318441-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-26B_q4_0-it\ 1\ tensor\ 1 
+device_args=iq gemma-4-26B_q4_0-it 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:10:12,314868593-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-26B_q4_0-it\ 1\ tensor\ 1 
+device_args=needle gemma-4-26B_q4_0-it 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:10:39,026405062-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-26B_q4_0-it\ 1\ tensor\ 1 
+device_args=cookie gemma-4-26B_q4_0-it 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:11:07,910995132-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 1\ tensor\ 1\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 1 tensor 1 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:12:55,022462140-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 1\ tensor\ 1\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 1 tensor 1 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:14:41,018038117-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-26B_q4_0-it\ 1\ tensor\ 8191 
+device_args=iq gemma-4-26B_q4_0-it 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:19:03,193313155-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-26B_q4_0-it\ 1\ tensor\ 8191 
+device_args=needle gemma-4-26B_q4_0-it 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:19:34,668926547-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-26B_q4_0-it\ 1\ tensor\ 8191 
+device_args=cookie gemma-4-26B_q4_0-it 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:20:03,117138913-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 1\ tensor\ 8191\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 1 tensor 8191 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:22:55,545935155-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 1\ tensor\ 8191\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 1 tensor 8191 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:25:47,333686100-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-26B_q4_0-it\ 1\ tensor\ 16383 
+device_args=iq gemma-4-26B_q4_0-it 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:30:02,969611146-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-26B_q4_0-it\ 1\ tensor\ 16383 
+device_args=needle gemma-4-26B_q4_0-it 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:30:32,858705681-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-26B_q4_0-it\ 1\ tensor\ 16383 
+device_args=cookie gemma-4-26B_q4_0-it 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:31:00,678057249-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 1\ tensor\ 16383\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 1 tensor 16383 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:33:54,033552902-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 1\ tensor\ 16383\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 1 tensor 16383 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:36:44,685313425-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-26B_q4_0-it\ 1\ tensor\ 24575 
+device_args=iq gemma-4-26B_q4_0-it 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:41:02,078896207-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-26B_q4_0-it\ 1\ tensor\ 24575 
+device_args=needle gemma-4-26B_q4_0-it 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:41:29,073141424-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-26B_q4_0-it\ 1\ tensor\ 24575 
+device_args=cookie gemma-4-26B_q4_0-it 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:41:54,977388340-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 1\ tensor\ 24575\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 1 tensor 24575 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:44:47,518238316-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 1\ tensor\ 24575\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 1 tensor 24575 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:47:37,760814235-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-26B_q4_0-it\ 1\ tensor\ 1 
+device_args=iq gemma-4-26B_q4_0-it 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:51:51,848135925-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-26B_q4_0-it\ 1\ tensor\ 1 
+device_args=needle gemma-4-26B_q4_0-it 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:52:19,962891437-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-26B_q4_0-it\ 1\ tensor\ 1 
+device_args=cookie gemma-4-26B_q4_0-it 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:52:48,984023095-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 1\ tensor\ 1\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 1 tensor 1 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:55:40,316033673-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 1\ tensor\ 1\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 1 tensor 1 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T04:58:29,928626364-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-26B_q4_0-it\ 4\ row\ 8191 
+device_args=iq gemma-4-26B_q4_0-it 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:04:16,411487277-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-26B_q4_0-it\ 4\ row\ 8191 
+device_args=needle gemma-4-26B_q4_0-it 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:04:54,349814540-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-26B_q4_0-it\ 4\ row\ 8191 
+device_args=cookie gemma-4-26B_q4_0-it 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:05:28,676069549-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 4\ row\ 8191\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 4 row 8191 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:07:09,354379347-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 4\ row\ 8191\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 4 row 8191 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:08:51,481027516-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-26B_q4_0-it\ 4\ row\ 16383 
+device_args=iq gemma-4-26B_q4_0-it 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:14:37,997302466-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-26B_q4_0-it\ 4\ row\ 16383 
+device_args=needle gemma-4-26B_q4_0-it 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:15:12,875471632-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-26B_q4_0-it\ 4\ row\ 16383 
+device_args=cookie gemma-4-26B_q4_0-it 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:15:47,654336685-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 4\ row\ 16383\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 4 row 16383 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:17:29,798954834-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 4\ row\ 16383\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 4 row 16383 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:19:13,809281992-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-26B_q4_0-it\ 4\ row\ 24575 
+device_args=iq gemma-4-26B_q4_0-it 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:24:57,364786100-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-26B_q4_0-it\ 4\ row\ 24575 
+device_args=needle gemma-4-26B_q4_0-it 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:25:35,277856019-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-26B_q4_0-it\ 4\ row\ 24575 
+device_args=cookie gemma-4-26B_q4_0-it 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:26:11,546276842-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 4\ row\ 24575\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 4 row 24575 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:27:53,778312518-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 4\ row\ 24575\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 4 row 24575 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:29:36,218766710-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-26B_q4_0-it\ 4\ row\ 1 
+device_args=iq gemma-4-26B_q4_0-it 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:35:16,341934968-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-26B_q4_0-it\ 4\ row\ 1 
+device_args=needle gemma-4-26B_q4_0-it 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:35:50,918902664-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-26B_q4_0-it\ 4\ row\ 1 
+device_args=cookie gemma-4-26B_q4_0-it 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:36:26,980025884-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 4\ row\ 1\ 1024\ 0\ 2048\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 4 row 1 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:38:09,512391947-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 4\ row\ 1\ 2048\ 0\ 2048\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 4 row 1 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:39:51,469761195-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-26B_q4_0-it\ 4\ row\ 8191 
+device_args=iq gemma-4-26B_q4_0-it 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:45:42,412350830-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-26B_q4_0-it\ 4\ row\ 8191 
+device_args=needle gemma-4-26B_q4_0-it 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:46:19,871813869-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-26B_q4_0-it\ 4\ row\ 8191 
+device_args=cookie gemma-4-26B_q4_0-it 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:46:56,621894984-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 4\ row\ 8191\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 4 row 8191 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:49:10,145781343-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 4\ row\ 8191\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 4 row 8191 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:51:25,508904182-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-26B_q4_0-it\ 4\ row\ 16383 
+device_args=iq gemma-4-26B_q4_0-it 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:57:17,507253807-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-26B_q4_0-it\ 4\ row\ 16383 
+device_args=needle gemma-4-26B_q4_0-it 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:57:54,377672047-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-26B_q4_0-it\ 4\ row\ 16383 
+device_args=cookie gemma-4-26B_q4_0-it 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T05:58:28,177073641-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 4\ row\ 16383\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 4 row 16383 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:00:41,053608838-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 4\ row\ 16383\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 4 row 16383 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:02:55,651777467-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-26B_q4_0-it\ 4\ row\ 24575 
+device_args=iq gemma-4-26B_q4_0-it 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:08:36,185993189-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-26B_q4_0-it\ 4\ row\ 24575 
+device_args=needle gemma-4-26B_q4_0-it 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:09:11,151173082-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-26B_q4_0-it\ 4\ row\ 24575 
+device_args=cookie gemma-4-26B_q4_0-it 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:09:48,792010663-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 4\ row\ 24575\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 4 row 24575 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:12:02,328326929-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 4\ row\ 24575\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 4 row 24575 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:14:14,256546268-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ gemma-4-26B_q4_0-it\ 4\ row\ 1 
+device_args=iq gemma-4-26B_q4_0-it 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:20:00,146607588-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ gemma-4-26B_q4_0-it\ 4\ row\ 1 
+device_args=needle gemma-4-26B_q4_0-it 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:20:34,201657225-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ gemma-4-26B_q4_0-it\ 4\ row\ 1 
+device_args=cookie gemma-4-26B_q4_0-it 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:21:07,805186944-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 4\ row\ 1\ 1024\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 4 row 1 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:23:22,351820195-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ gemma-4-26B_q4_0-it\ 4\ row\ 1\ 2048\ 16384\ 18432\ 2048 
+device_args=bench gemma-4-26B_q4_0-it 4 row 1 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:25:36,417593106-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 8191 
+device_args=iq Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:33:22,798370724-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 8191 
+device_args=needle Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:34:14,974571985-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 8191 
+device_args=cookie Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:35:01,639436952-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 8191\ 1024\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 8191 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:37:44,429485485-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 8191\ 2048\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 8191 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:39:08,186689356-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 8191\ 512\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 8191 512 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:42:27,123722080-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 16383 
+device_args=iq Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:49:58,333580836-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 16383 
+device_args=needle Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:50:54,071819558-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 16383 
+device_args=cookie Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:51:36,932118479-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 16383\ 1024\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 16383 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:54:12,768060805-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 16383\ 2048\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 16383 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:55:37,088461901-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 16383\ 512\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 16383 512 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T06:58:55,345390882-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 24575 
+device_args=iq Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T07:06:51,613768266-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 24575 
+device_args=needle Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T07:07:48,846359754-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 24575 
+device_args=cookie Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T07:08:44,598885887-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 24575\ 1024\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 24575 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T07:11:30,715486512-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 24575\ 2048\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 24575 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T07:13:02,837666601-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 24575\ 512\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 24575 512 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T07:16:39,818292812-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 1 
+device_args=iq Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T07:23:31,654774144-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 1 
+device_args=needle Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T07:24:18,338041737-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 1 
+device_args=cookie Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T07:25:02,265876663-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 1\ 1024\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 1 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T07:27:33,419922787-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 1\ 2048\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 1 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T07:28:45,338576405-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 1\ 512\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 1 512 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T07:32:04,796970228-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 8191 
+device_args=iq Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T07:39:07,007622051-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 8191 
+device_args=needle Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T07:39:55,180550199-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 8191 
+device_args=cookie Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T07:40:38,797888915-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 8191\ 1024\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 8191 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T07:44:45,629999979-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 8191\ 2048\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 8191 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T07:46:03,348307540-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 8191\ 512\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 8191 512 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T07:51:25,705918718-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 16383 
+device_args=iq Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T07:58:51,811939639-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 16383 
+device_args=needle Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T07:59:46,655726559-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 16383 
+device_args=cookie Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T08:00:34,940256039-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 16383\ 1024\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 16383 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T08:04:34,562079579-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 16383\ 2048\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 16383 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T08:05:54,583077554-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 16383\ 512\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 16383 512 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T08:11:07,376156295-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 24575 
+device_args=iq Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T08:18:14,749186776-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 24575 
+device_args=needle Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T08:19:06,830937949-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 24575 
+device_args=cookie Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T08:19:47,315534700-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 24575\ 1024\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 24575 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T08:23:54,870936368-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 24575\ 2048\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 24575 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T08:25:10,326964546-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 24575\ 512\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 24575 512 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T08:30:26,224950174-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 1 
+device_args=iq Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T08:38:02,635293908-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 1 
+device_args=needle Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T08:38:53,184205973-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 1 
+device_args=cookie Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T08:39:36,792442530-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 1\ 1024\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 1 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T08:43:34,967917668-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 1\ 2048\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 1 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T08:44:53,568184465-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 1\ tensor\ 1\ 512\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 1 tensor 1 512 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T08:50:05,884091141-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 8191 
+device_args=iq Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T08:59:28,653413185-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 8191 
+device_args=needle Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T09:00:27,896218833-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 8191 
+device_args=cookie Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T09:01:26,969172844-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 8191\ 1024\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 8191 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T09:04:00,509887409-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 8191\ 2048\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 8191 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T09:05:17,784014191-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 8191\ 512\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 8191 512 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T09:08:36,048441770-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 16383 
+device_args=iq Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T09:17:55,504376494-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 16383 
+device_args=needle Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T09:18:56,643046719-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 16383 
+device_args=cookie Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T09:19:54,732225088-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 16383\ 1024\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 16383 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T09:22:21,222085636-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 16383\ 2048\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 16383 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T09:23:34,012439960-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 16383\ 512\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 16383 512 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T09:26:46,436251260-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 24575 
+device_args=iq Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T09:35:51,862912006-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 24575 
+device_args=needle Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T09:36:52,983931201-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 24575 
+device_args=cookie Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T09:37:51,218046445-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 24575\ 1024\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 24575 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T09:40:17,464970560-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 24575\ 2048\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 24575 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T09:41:28,830902794-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 24575\ 512\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 24575 512 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T09:44:37,456080238-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 1 
+device_args=iq Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T09:54:01,662235018-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 1 
+device_args=needle Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T09:55:05,460929139-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 1 
+device_args=cookie Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T09:56:03,989932907-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 1\ 1024\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 1 1024 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T09:58:34,033486656-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 1\ 2048\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 1 2048 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T09:59:50,967160345-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 1\ 512\ 0\ 2048\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 1 512 0 2048 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T10:03:05,714280240-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 8191 
+device_args=iq Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T10:12:22,541698806-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 8191 
+device_args=needle Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T10:13:25,049741058-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 8191 
+device_args=cookie Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 8191 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T10:14:26,175442766-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 8191\ 1024\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 8191 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T10:16:16,801467569-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 8191\ 512\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 8191 512 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T10:20:21,071542084-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 8191\ 2048\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 8191 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T10:21:37,514751982-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 8191\ 512\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 8191 512 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T10:25:47,041031390-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 16383 
+device_args=iq Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T10:36:06,523012235-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 16383 
+device_args=needle Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T10:37:16,756770827-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 16383 
+device_args=cookie Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 16383 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T10:38:20,596438051-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 16383\ 1024\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 16383 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T10:40:50,154403789-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 16383\ 2048\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 16383 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T10:41:42,396264086-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 16383\ 512\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 16383 512 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T10:45:24,607242241-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 24575 
+device_args=iq Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T10:56:03,451830090-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 24575 
+device_args=needle Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T10:57:10,608428170-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 24575 
+device_args=cookie Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 24575 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T10:58:16,584022714-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 24575\ 1024\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 24575 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T11:00:49,162435449-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 24575\ 2048\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 24575 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T11:01:30,748761516-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 24575\ 512\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 24575 512 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T11:05:25,750014832-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ iq\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 1 
+device_args=iq Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T11:15:33,431865000-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ needle\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 1 
+device_args=needle Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T11:16:36,651838026-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ cookie\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 1 
+device_args=cookie Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 1 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T11:17:43,923283120-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 1\ 1024\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 1 1024 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T11:19:57,888498687-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 1\ 512\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 1 512 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T11:24:25,003797769-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 1\ 2048\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 1 2048 16384 18432 2048 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-26T11:25:31,124698483-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ bench\ Qwen3.5-35B-A3B-UD-Q4_K_M\ 4\ row\ 1\ 512\ 16384\ 18432\ 2048 
+device_args=bench Qwen3.5-35B-A3B-UD-Q4_K_M 4 row 1 512 16384 18432 2048 
+

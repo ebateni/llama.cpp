@@ -1,0 +1,13 @@
+Q#	EXPECTED	GOT	MATCH	PROMPT
+1	43	What is 17 + 26? Answer with just the number.  <think> Thinking Process:  1.  **Analyze the Request:** The user is asking for the sum of 17 and 26.  	NO	What is 17 + 26? Answer with just the number.
+2	56	What is 8 multiplied by 7? Answer with just the number.  <think> Thinking Process:  1.  **Analyze the Request:** The user is asking for the product of 8 and 7. The constraint  	NO	What is 8 multiplied by 7? Answer with just the number.
+3	63	What is 100 minus 37? Answer with just the number.  <think> Thinking Process:  1.  **Analyze the Request:** The user is asking for the result of the subtraction "100 minus   	NO	What is 100 minus 37? Answer with just the number.
+4	Tokyo	The capital of Italy is Rome. The capital of Japan is Tokyo. The capital of France is Paris. The capital of Germany is Berlin. The capital of the United Kingdom is London. The capital of  	YES	The capital of Italy is Rome. The capital of Japan is
+5	Au	The chemical symbol for oxygen is O. The chemical symbol for gold is Au. The chemical symbol for silver is Ag. The chemical symbol for iron is Fe. The chemical symbol for copper is Cu. The chemical  	YES	The chemical symbol for oxygen is O. The chemical symbol for gold is
+6	10	Complete the sequence: 2, 4, 6, 8, 10, ...  The sequence is an arithmetic progression where each term increases by 2. Therefore, the next term is 12.  Complete  	YES	Complete the sequence: 2, 4, 6, 8,
+7	blue	Roses are red, violets are blue, I'm a big fat liar, and so are you. I'm a big fat liar, and so are you. I'm a  	YES	Roses are red, violets are
+8	Jupiter	The largest planet in our solar system is Jupiter. It is a gas giant with a diameter of about 86,881 miles (139,822 kilometers), making it  	YES	The largest planet in our solar system is
+9	7	How many days are in a week? Answer with just the number.  <think>  </think>  7 [end of text]   	YES	How many days are in a week? Answer with just the number.
+10	cold	The opposite of "big" is small. The opposite of "hot" is cold. The opposite of "fast" is slow. The opposite of "happy" is sad. The opposite of "light" is dark.  	YES	The opposite of "big" is small. The opposite of "hot" is
+
+SCORE: 7/10

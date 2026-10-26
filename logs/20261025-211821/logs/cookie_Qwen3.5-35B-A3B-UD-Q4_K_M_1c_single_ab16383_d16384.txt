@@ -1,0 +1,1 @@
+You are a helpful assistant. Answer concisely.  What is the best cookie in the world?  <think>  </think>  The best cookie is subjective, but **chocolate chip** is widely considered the most popular globally. [end of text]   

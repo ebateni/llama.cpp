@@ -1,0 +1,2 @@
+HARNESS_ENV split=row ab=1 GGML_HEXAGON_AR_SCATTER=0 GGML_META_COMM_ISOLATION=1 LLAMA_KV_ALLOC_AFFINITY=1 GGML_HEXAGON_DEVICES=HTP0[0-3]
+PP=NA TG=NA PP_RC=137 TG_RC=137 PP_REASON=HOST_OOM_KILL PP_ERROR=May_29_18:49:26.903206_gen5_kernel:_Out_of_memory:_Killed_process_5178_(llama-bench)_total-vm:27191592kB,_anon-rss:728752kB,_file-rss:288kB,_shmem-rss:576kB,_UID:0_pgtables:48496kB_oom_score_adj:0_

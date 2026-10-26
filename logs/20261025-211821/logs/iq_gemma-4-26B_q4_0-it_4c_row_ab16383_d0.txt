@@ -1,0 +1,13 @@
+Q#	EXPECTED	GOT	MATCH	PROMPT
+1	43	What is 17 + 26? Answer with just the number. 43 [end of text]   	YES	What is 17 + 26? Answer with just the number.
+2	56	What is 8 multiplied by 7? Answer with just the number. 56 [end of text]   	YES	What is 8 multiplied by 7? Answer with just the number.
+3	63	What is 100 minus 37? Answer with just the number.  63 [end of text]   	YES	What is 100 minus 37? Answer with just the number.
+4	Tokyo	The capital of Italy is Rome. The capital of Japan is Tokyo. Thethought <channel	>The capital of France is Paris. [end of text]   	MATCH=YES
+5	Au	The chemical symbol for oxygen is O. The chemical symbol for gold is gold.     The chemical symbol for gold is Au.     Thethought <channel	>The chemical symbol for gold is Au. [end of text]   	MATCH=YES
+6	10	Complete the sequence: 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24,  	YES	Complete the sequence: 2, 4, 6, 8,
+7	blue	Roses are red, violets are blue, but I'm so happy to be with you.  <	channel>thought <channel	>That is a lovely sentiment! You’ve taken a classic poetic structure  
+8	Jupiter	The largest planet in our solar system is the1.5.5.5.5.5.5.5.5.5.5.5.5.5.5.5  	NO	The largest planet in our solar system is
+9	7	How many days are in a week? Answer with just the number.thought <channel	>7 [end of text]   	MATCH=YES
+10	cold	The opposite of "big" is small. The opposite of "hot" is cold. Thethought <channel	>The opposite of "fast" is slow. The opposite of "happy" is sad. The opposite of "hard  	MATCH=YES
+
+SCORE: 9/10
