@@ -1,0 +1,60 @@
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T20:00:35,872095181-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ testops\ 1\ 8191\ MUL_MAT_VEC_FUSION 
+device_args=testops 1 8191 MUL_MAT_VEC_FUSION 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T20:03:18,770127260-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ testops\ 1\ 1\ MUL_MAT_VEC_FUSION 
+device_args=testops 1 1 MUL_MAT_VEC_FUSION 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T20:06:01,113313997-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ testops\ 4\ 8191\ MUL_MAT_VEC_FUSION 
+device_args=testops 4 8191 MUL_MAT_VEC_FUSION 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T20:16:18,109675706-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ testops\ 4\ 1\ MUL_MAT_VEC_FUSION 
+device_args=testops 4 1 MUL_MAT_VEC_FUSION 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T20:26:34,156524549-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ testops\ 1\ 8191\ MMID_GATE_UP_GLU 
+device_args=testops 1 8191 MMID_GATE_UP_GLU 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T20:26:57,130765369-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ testops\ 1\ 1\ MMID_GATE_UP_GLU 
+device_args=testops 1 1 MMID_GATE_UP_GLU 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T20:27:19,436894801-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ testops\ 4\ 8191\ MMID_GATE_UP_GLU 
+device_args=testops 4 8191 MMID_GATE_UP_GLU 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T20:27:50,068098182-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ testops\ 4\ 1\ MMID_GATE_UP_GLU 
+device_args=testops 4 1 MMID_GATE_UP_GLU 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T20:28:19,954030458-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ testops\ 1\ 8191\ RMS_NORM_MUL_ADD 
+device_args=testops 1 8191 RMS_NORM_MUL_ADD 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T20:28:28,846756230-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ testops\ 1\ 1\ RMS_NORM_MUL_ADD 
+device_args=testops 1 1 RMS_NORM_MUL_ADD 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T20:28:38,036777259-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ testops\ 4\ 8191\ RMS_NORM_MUL_ADD 
+device_args=testops 4 8191 RMS_NORM_MUL_ADD 
+
+===== DEVICE INVOCATION =====
+timestamp=2026-10-25T20:29:06,240042465-04:00
+host_command=adb\ -s\ 1b531bdd shell sh\ /data/local/tmp/llama.cpp-build-and-test-dev.sh\ testops\ 4\ 1\ RMS_NORM_MUL_ADD 
+device_args=testops 4 1 RMS_NORM_MUL_ADD 
+
