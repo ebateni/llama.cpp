@@ -567,11 +567,11 @@ clidevslash() {
 devarg() { local d=\$(clidev "\$1" "\$2"); [ -n "\$d" ] && echo "-dev \$d" || echo ""; }
 # devargslash <n> <split> -> "--device X" or "" (llama-bench)
 devargslash() { local d=\$(clidevslash "\$1" "\$2"); [ -n "\$d" ] && echo "--device \$d" || echo ""; }
-# set_scatter <split> — set AR_SCATTER=1 for tensor-scatter, 0 otherwise
+# set_scatter <split> — set AR_SCATTER=1 for tensor-scatter, unset (backend default) otherwise
 # (plain variable; picked up by hexenv() below, not exported)
 set_scatter() {
   if [ "\${1%%-scatter}" != "\$1" ]; then GGML_HEXAGON_AR_SCATTER=1
-  else GGML_HEXAGON_AR_SCATTER=0; fi
+  else GGML_HEXAGON_AR_SCATTER=; fi
 }
 # set_ab <value> — record the swept env var's value, if one is configured
 # (plain variable; hexenv() emits "\$AB_VAR=\$AB_VAL" inline, not exported)
@@ -587,14 +587,13 @@ hexenv() {
   printf '%s=%s ' \
     LD_LIBRARY_PATH "\$LIB" \
     GGML_HEXAGON_ARCH "\$GGML_HEXAGON_ARCH" \
-    GGML_HEXAGON_VERBOSE "\$GGML_HEXAGON_VERBOSE" \
     CDSP_LIBRARY_PATH "\$CDSP_LIBRARY_PATH" \
     CDSP1_LIBRARY_PATH "\$CDSP1_LIBRARY_PATH"
+  [ "\$GGML_HEXAGON_VERBOSE" = 1 ] && printf '%s=%s ' GGML_HEXAGON_VERBOSE 1
   [ -n "\${CDSP2_LIBRARY_PATH:-}" ] && printf '%s=%s ' CDSP2_LIBRARY_PATH "\$CDSP2_LIBRARY_PATH"
   [ -n "\${CDSP3_LIBRARY_PATH:-}" ] && printf '%s=%s ' CDSP3_LIBRARY_PATH "\$CDSP3_LIBRARY_PATH"
-  printf '%s=%s ' \
-    GGML_HEXAGON_DEVICES "\${GGML_HEXAGON_DEVICES:-}" \
-    GGML_HEXAGON_AR_SCATTER "\${GGML_HEXAGON_AR_SCATTER:-0}"
+  printf '%s=%s ' GGML_HEXAGON_DEVICES "\${GGML_HEXAGON_DEVICES:-}"
+  [ -n "\${GGML_HEXAGON_AR_SCATTER:-}" ] && printf '%s=%s ' GGML_HEXAGON_AR_SCATTER "\$GGML_HEXAGON_AR_SCATTER"
   [ -n "\${GGML_HEXAGON_NHVX:-}" ] && printf '%s=%s ' GGML_HEXAGON_NHVX "\$GGML_HEXAGON_NHVX"
   [ -n "\${GGML_HEXAGON_VTCM_SIZE:-}" ] && printf '%s=%s ' GGML_HEXAGON_VTCM_SIZE "\$GGML_HEXAGON_VTCM_SIZE"
   [ "$PLATFORM" = "android" ] && printf '%s=%s ' ADSP_LIBRARY_PATH "\$LIB"
