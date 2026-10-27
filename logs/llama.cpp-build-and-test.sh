@@ -180,23 +180,10 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # Accept the actual runtime environment-variable names. The shorter aliases
 # remain supported for backward compatibility.
 #
-# Precedence:
-#   GGML_META_COMM_ISOLATION > COMM_ISOLATION > default 1
-#   GGML_META_COMM_SEPARATE > COMM_SEPARATE > default 1
-#   LLAMA_KV_ALLOC_AFFINITY > KV_AFFINITY > default 1
+# Precedence: GGML_META_COMM_ISOLATION > COMM_ISOLATION > default 1.
+# Kept for reference/A-B only; not passed to the binaries unless swept via AB_VAR.
 : "${COMM_ISOLATION:=${GGML_META_COMM_ISOLATION:-1}}"
-: "${COMM_SEPARATE:=${GGML_META_COMM_SEPARATE:-1}}"
-: "${KV_AFFINITY:=${LLAMA_KV_ALLOC_AFFINITY:-1}}"
-
-# Normalize both names so run-config.log and child tooling see the effective
-# values consistently.
 GGML_META_COMM_ISOLATION="$COMM_ISOLATION"
-GGML_META_COMM_SEPARATE="$COMM_SEPARATE"
-LLAMA_KV_ALLOC_AFFINITY="$KV_AFFINITY"
-
-export GGML_META_COMM_ISOLATION
-export GGML_META_COMM_SEPARATE
-export LLAMA_KV_ALLOC_AFFINITY
 if [ -n "$ADB_SERVER_SOCKET" ]; then
   export ADB_SERVER_SOCKET
 fi
@@ -515,9 +502,6 @@ prof_on() {
 # --- Hexagon runtime environment -------------------------------------------
 # LD_LIBRARY_PATH        : host-side .so (libggml-hexagon, libllama, ...)
 # GGML_HEXAGON_ARCH=81   : v81 HTP; selects libggml-htp-v81.so
-# GGML_HEXAGON_USE_HMX=1 : enable the matrix engine
-# GGML_HEXAGON_MBUF=2048 : op-batch buffer sizing
-# GGML_HEXAGON_NHMX=1    : 1 HMX unit per core
 # CDSPn_LIBRARY_PATH     : per-core FastRPC search path. Entry separator is
 #                          platform-dependent: ';' on OE Linux, ':' on
 #                          Android. CDSP_LIBRARY_PATH for core 0, then
@@ -538,14 +522,9 @@ else
 fi
 GGML_HEXAGON_ARCH=${HTP_ARCH#v}
 GGML_HEXAGON_VERBOSE=${HEXAGON_VERBOSE:-0}
-GGML_HEXAGON_USE_HMX=1
-GGML_HEXAGON_MBUF=2048
-GGML_HEXAGON_NHMX=1
 GGML_HEXAGON_NHVX=${GGML_HEXAGON_NHVX:-}
 GGML_HEXAGON_VTCM_SIZE=${GGML_HEXAGON_VTCM_SIZE:-}
 GGML_META_COMM_ISOLATION=$COMM_ISOLATION
-GGML_META_COMM_SEPARATE=$COMM_SEPARATE
-LLAMA_KV_ALLOC_AFFINITY=$KV_AFFINITY
 CDSP_LIBRARY_PATH="\$LIB\${CDSP_PATH_SEP}/vendor/dsp/cdsp0"
 CDSP1_LIBRARY_PATH="\$LIB\${CDSP_PATH_SEP}/vendor/dsp/cdsp1"
 ${CDSP23_LINES}
@@ -609,10 +588,6 @@ hexenv() {
     LD_LIBRARY_PATH "\$LIB" \
     GGML_HEXAGON_ARCH "\$GGML_HEXAGON_ARCH" \
     GGML_HEXAGON_VERBOSE "\$GGML_HEXAGON_VERBOSE" \
-    GGML_HEXAGON_USE_HMX "\$GGML_HEXAGON_USE_HMX" \
-    GGML_HEXAGON_MBUF "\$GGML_HEXAGON_MBUF" \
-    GGML_HEXAGON_NHMX "\$GGML_HEXAGON_NHMX" \
-    LLAMA_KV_ALLOC_AFFINITY "\$LLAMA_KV_ALLOC_AFFINITY" \
     CDSP_LIBRARY_PATH "\$CDSP_LIBRARY_PATH" \
     CDSP1_LIBRARY_PATH "\$CDSP1_LIBRARY_PATH"
   [ -n "\${CDSP2_LIBRARY_PATH:-}" ] && printf '%s=%s ' CDSP2_LIBRARY_PATH "\$CDSP2_LIBRARY_PATH"
@@ -620,12 +595,6 @@ hexenv() {
   printf '%s=%s ' \
     GGML_HEXAGON_DEVICES "\${GGML_HEXAGON_DEVICES:-}" \
     GGML_HEXAGON_AR_SCATTER "\${GGML_HEXAGON_AR_SCATTER:-0}"
-  # GGML_META_COMM_ISOLATION is emitted here unless it is itself the swept
-  # A/B variable, in which case the AB_VAR/AB_VAL pair below is the single
-  # source of truth (avoids emitting the same VAR=value twice with two
-  # different values, which only "worked" because the later one wins).
-  [ "\$AB_VAR" = "GGML_META_COMM_ISOLATION" ] || \
-    printf '%s=%s ' GGML_META_COMM_ISOLATION "\$GGML_META_COMM_ISOLATION"
   [ -n "\${GGML_HEXAGON_NHVX:-}" ] && printf '%s=%s ' GGML_HEXAGON_NHVX "\$GGML_HEXAGON_NHVX"
   [ -n "\${GGML_HEXAGON_VTCM_SIZE:-}" ] && printf '%s=%s ' GGML_HEXAGON_VTCM_SIZE "\$GGML_HEXAGON_VTCM_SIZE"
   [ "$PLATFORM" = "android" ] && printf '%s=%s ' ADSP_LIBRARY_PATH "\$LIB"
@@ -659,7 +628,6 @@ case "\$CMD" in
     echo "HARNESS_ENV split=\$sp ab=\$ab" \
          "GGML_HEXAGON_AR_SCATTER=\${GGML_HEXAGON_AR_SCATTER:-unset}" \
          "GGML_META_COMM_ISOLATION=\${GGML_META_COMM_ISOLATION:-unset}" \
-         "LLAMA_KV_ALLOC_AFFINITY=\${LLAMA_KV_ALLOC_AFFINITY:-unset}" \
          "GGML_HEXAGON_DEVICES=\${GGML_HEXAGON_DEVICES:-unset}"
 
 
