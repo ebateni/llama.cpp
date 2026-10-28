@@ -9212,6 +9212,7 @@ static htp_op_code op_remap_to_htp(const ggml_tensor * t) {
         case GGML_OP_GATED_DELTA_NET: return HTP_OP_GATED_DELTA_NET;
         case GGML_OP_ROPE:            return HTP_OP_ROPE;
         case GGML_OP_REPEAT:          return HTP_OP_REPEAT;
+        case GGML_OP_UPSCALE:         return HTP_OP_UPSCALE;
         case GGML_OP_CUMSUM:          return HTP_OP_CUMSUM;
         case GGML_OP_FILL:            return HTP_OP_FILL;
         case GGML_OP_DIAG:            return HTP_OP_DIAG;
@@ -10336,6 +10337,30 @@ static bool ggml_hexagon_supported_repeat(const struct ggml_hexagon_session * se
     return true;
 }
 
+static bool ggml_hexagon_supported_upscale(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    GGML_UNUSED(sess);
+    const struct ggml_tensor * src0 = op->src[0];
+
+    if (src0->type != GGML_TYPE_F32 || op->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    const int32_t mode_flags = ggml_get_op_params_i32(op, 0);
+    const int32_t mode       = mode_flags & 0xFF;
+
+    if (mode != GGML_SCALE_MODE_BILINEAR) {
+        return false;
+    }
+    if (mode_flags & GGML_SCALE_FLAG_ANTIALIAS) {
+        return false;
+    }
+    if (op->ne[3] != 1 || src0->ne[3] != 1) {
+        return false;
+    }
+
+    return true;
+}
+
 static bool ggml_hexagon_supported_concat(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
     struct htp_concat_kernel_params kparams;
     return ggml_hexagon_precompute_concat_params(sess, op, &kparams);
@@ -10519,6 +10544,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_REPEAT:
             supp = ggml_hexagon_supported_repeat(sess, op);
+            break;
+
+        case GGML_OP_UPSCALE:
+            supp = ggml_hexagon_supported_upscale(sess, op);
             break;
 
         case GGML_OP_ARGSORT:

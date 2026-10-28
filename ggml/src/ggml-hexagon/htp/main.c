@@ -909,6 +909,9 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_REPEAT:
             return op_repeat(octx);
 
+        case HTP_OP_UPSCALE:
+            return op_upscale(octx);
+
         case HTP_OP_ARGSORT:
             return op_argsort(octx);
 

@@ -34,6 +34,7 @@ add_library(${HTP_LIB} SHARED
     get-rows-ops.c
     cpy-ops.c
     repeat-ops.c
+    upscale-ops.c
     ssm-conv.c
     cumsum-ops.c
     fill-ops.c
